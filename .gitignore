@@ -1,0 +1,6 @@
+node_modules/
+app/
+generated/
+.env
+.wrangler/
+*.sqlite*
