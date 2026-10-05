@@ -162,7 +162,9 @@ async function target(req) {
   const match = req.url.match(/^\/tenant\/(t-[a-f0-9]{24})(\/.*)$/);
   if (!match) return null;
   const record = await load(match[1]);
-  if (!record || record.status !== 'ready' || req.headers['x-spartan-host'] !== `${record.id}.${cfg.BASE_DOMAIN}`) return null;
+  if (!record || record.status !== 'ready') return null;
+  const host = req.headers['x-spartan-host'];
+  if (host !== `${record.id}.${cfg.BASE_DOMAIN}` && (req.headers['x-spartan-custom-domain'] !== '1' || typeof host !== 'string' || host.length > 200 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) return null;
   if (record.role === 'primary') return {url: new URL(`http://127.0.0.1:${record.port}${match[2]}`), record, local: true};
   if (req.headers['x-spartan-hop']) return null;
   const origin = record.primary === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN;
@@ -171,12 +173,13 @@ async function target(req) {
 function proxyHeaders(req, info) {
   const headers = {...req.headers};
   if (info.local) {
-    headers.host = `${info.record.id}.${cfg.BASE_DOMAIN}`;
+    headers.host = req.headers['x-spartan-host'];
     headers['x-forwarded-host'] = headers.host;
     headers['x-forwarded-proto'] = 'https';
     delete headers['x-spartan-origin'];
     delete headers['x-spartan-host'];
     delete headers['x-spartan-hop'];
+    delete headers['x-spartan-custom-domain'];
   } else {
     headers.host = info.url.host;
     headers['x-spartan-hop'] = '1';

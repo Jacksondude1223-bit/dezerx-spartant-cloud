@@ -59,15 +59,33 @@ for (const location of ['us', 'de']) {
   await write(`${location}.env`, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
 }
 await dns(`*.${cfg.BASE_DOMAIN}`, `${state.tunnels.us.id}.cfargotunnel.com`);
+const customDomains = cfg.ENABLE_CUSTOM_DOMAINS === 'true';
+if (customDomains) {
+  if (cfg.BASE_DOMAIN === zone.name) throw new Error('saas_target_must_be_subdomain');
+  const records = await api('GET', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/dns_records?name=${encodeURIComponent(cfg.BASE_DOMAIN)}`);
+  if (records.length && (records.length !== 1 || records[0].type !== 'AAAA' || records[0].content !== '100::' || !records[0].proxied)) throw new Error('saas_target_dns_conflict');
+  if (!records.length) await api('POST', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/dns_records`, {type: 'AAAA', name: cfg.BASE_DOMAIN, content: '100::', proxied: true, ttl: 1});
+  const fallback = await api('GET', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/custom_hostnames/fallback_origin`);
+  if (fallback.origin && fallback.origin !== cfg.BASE_DOMAIN) throw new Error('saas_fallback_conflict');
+  if (!fallback.origin) await api('PUT', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/custom_hostnames/fallback_origin`, {origin: cfg.BASE_DOMAIN});
+  const existingRoutes = await api('GET', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/workers/routes`);
+  for (const pattern of [`${zone.name}/*`, `*.${zone.name}/*`]) {
+    if (!existingRoutes.some(route => route.pattern === pattern)) await api('POST', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/workers/routes`, {pattern, script: null});
+  }
+  const catchall = existingRoutes.find(route => route.pattern === '*/*');
+  if (catchall?.script && catchall.script !== 'spartan-routing') throw new Error('saas_worker_route_conflict');
+}
 const queues = await api('GET', `${account}/queues?per_page=100`);
 for (const queue_name of ['spartan-provision', 'spartan-provision-dead']) {
   if (!queues.some(queue => queue.queue_name === queue_name)) await api('POST', `${account}/queues`, {queue_name});
 }
-const vars = {BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`};
+const vars = {BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, CLOUDFLARE_ZONE_ID: cfg.CLOUDFLARE_ZONE_ID, SAAS_ZONE_DOMAIN: zone.name, SAAS_CNAME_TARGET: cfg.BASE_DOMAIN};
 const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026-10-01', vars, observability: {enabled: true}};
-await write('provisioning.json', JSON.stringify({...common, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
-await write('routing.json', JSON.stringify({...common, name: 'spartan-routing', main: '../workers/routing.js', workers_dev: false, routes: [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}], durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}]}}));
-await write('provisioning.secrets.json', JSON.stringify({BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET}));
+await write('provisioning.json', JSON.stringify({...common, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
+const routes = [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];
+if (customDomains) routes.push({pattern: '*/*', zone_id: cfg.CLOUDFLARE_ZONE_ID});
+await write('routing.json', JSON.stringify({...common, name: 'spartan-routing', main: '../workers/routing.js', workers_dev: false, routes, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}, {name: 'DOMAINS', class_name: 'Domains', script_name: 'spartan-provisioning'}]}}));
+await write('provisioning.secrets.json', JSON.stringify({BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
 await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET}));
 await write('billing.env', `BILLING_WEBHOOK_SECRET=${state.BILLING_WEBHOOK_SECRET}\nSPARTAN_PROVISION_URL=CHANGE_ME\n`);
 await write('state.json', JSON.stringify(state));

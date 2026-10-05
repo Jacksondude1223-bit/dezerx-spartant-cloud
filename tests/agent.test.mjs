@@ -69,6 +69,12 @@ if(args[0]==='run'){
     assert.deepEqual(requests.at(-1), {path: '/billing?invoice=1', host: `${id}.cloud.test`, credential: undefined});
     headers['x-spartan-host'] = `t-${'2'.repeat(24)}.cloud.test`;
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
+    headers['x-spartan-host'] = 'billing.customer.test';
+    assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
+    headers['x-spartan-custom-domain'] = '1';
+    const alias = await fetch(`${origin}/tenant/${id}/billing`, {headers});
+    assert.equal(await alias.text(), 'tenant-app');
+    assert.equal(requests.at(-1).host, 'billing.customer.test');
   } finally {
     agent.kill('SIGTERM');
     await new Promise(resolve => agent.once('exit', resolve));

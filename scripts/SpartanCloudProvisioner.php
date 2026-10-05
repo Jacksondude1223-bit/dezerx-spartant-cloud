@@ -26,6 +26,14 @@ final class SpartanCloudProvisioner
         return $this->request('GET', '/v1/instances/'.$id, '');
     }
 
+    public function domain(string $id, string $hostname, string $action = 'reserve'): array
+    {
+        if (!preg_match('/^t-[a-f0-9]{24}$/', $id) || !in_array($action, ['reserve', 'verify', 'status', 'delete'], true)) {
+            throw new InvalidArgumentException('invalid_domain_request');
+        }
+        return $this->request('POST', '/v1/instances/'.$id.'/domains/'.$action, json_encode(['hostname' => $hostname], JSON_THROW_ON_ERROR));
+    }
+
     private function request(string $method, string $path, string $body): array
     {
         $timestamp = (string) (int) floor(microtime(true) * 1000);

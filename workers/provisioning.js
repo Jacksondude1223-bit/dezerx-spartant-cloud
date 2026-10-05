@@ -1,4 +1,5 @@
 import {ID, REGIONS, json, digest, verify, nodeCall} from './shared.js';
+export {Domains} from './domains.js';
 
 export class Tenant {
   constructor(ctx, env) { this.ctx = ctx; this.env = env; }
@@ -60,6 +61,11 @@ export default {
       const body = await request.text();
       if (body.length > 16384) return json({error: 'too_large'}, 413);
       if (!await verify(request, body, env.BILLING_WEBHOOK_SECRET)) return json({error: 'unauthorized'}, 401);
+      const domain = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/domains\/(reserve|verify|status|delete)$/);
+      if (request.method === 'POST' && domain) {
+        const input = JSON.parse(body);
+        return env.DOMAINS.getByName('registry').fetch(`https://domains/${domain[2]}`, {method: 'POST', body: JSON.stringify({hostname: input.hostname, tenantId: domain[1]})});
+      }
       if (request.method === 'POST' && url.pathname === '/v1/instances') {
         const input = JSON.parse(body);
         if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.serviceId || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId || '') || !REGIONS.has(input.primary)) return json({error: 'invalid_input'}, 400);
