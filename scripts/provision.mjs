@@ -1,0 +1,10 @@
+import {signature} from '../workers/shared.js';
+const [serviceId, customerId, primary = 'us'] = process.argv.slice(2);
+if (!serviceId || !customerId || !['us', 'de'].includes(primary)) throw new Error('service_customer_region_required');
+if (!process.env.SPARTAN_PROVISION_URL || !process.env.BILLING_WEBHOOK_SECRET) throw new Error('billing_configuration_required');
+const path = '/v1/instances';
+const body = JSON.stringify({serviceId, customerId, primary});
+const timestamp = String(Date.now());
+const response = await fetch(new URL(path, process.env.SPARTAN_PROVISION_URL), {method: 'POST', body, headers: {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': await signature(process.env.BILLING_WEBHOOK_SECRET, timestamp, 'POST', path, body)}});
+console.log(await response.text());
+if (!response.ok) process.exitCode = 1;
