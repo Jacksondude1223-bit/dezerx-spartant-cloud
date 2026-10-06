@@ -42,11 +42,23 @@ export class Domains {
     this.tail = result.catch(() => {});
     return result;
   }
+  limit() {
+    const limit = Number(this.env.MAX_CUSTOM_HOSTNAMES || 30);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new Error('invalid_hostname_limit');
+    return limit;
+  }
+  async schedule() {
+    const records = await this.ctx.storage.list({prefix: 'domain:'});
+    const monitored = [...records.values()].filter(record => record.status !== 'deleting');
+    if (monitored.length) await this.ctx.storage.setAlarm(Math.max(Date.now() + 1000, Math.min(...monitored.map(record => record.nextCheckAt || 0))));
+    else if (this.ctx.storage.deleteAlarm) await this.ctx.storage.deleteAlarm();
+  }
   public(record) {
-    return {hostname: record.hostname, tenantId: record.tenantId, status: record.status, cname: {type: 'CNAME', name: record.hostname, target: this.env.SAAS_CNAME_TARGET, proxied: false}, ownership: {type: 'TXT', name: `_spartan-verification.${record.hostname}`, value: record.token}, certificateStatus: record.certificateStatus, cloudflareOwnership: record.cloudflareOwnership, certificateValidation: record.certificateValidation};
+    return {hostname: record.hostname, tenantId: record.tenantId, status: record.status, cname: {type: 'CNAME', name: record.hostname, target: this.env.SAAS_CNAME_TARGET, proxied: false}, ownership: {type: 'TXT', name: `_spartan-verification.${record.hostname}`, value: record.token}, certificateStatus: record.certificateStatus, cloudflareOwnership: record.cloudflareOwnership, certificateValidation: record.certificateValidation, ssl: {provider: 'cloudflare', managed: true, automaticRenewal: true, method: record.certificateMethod || 'http', status: record.certificateStatus || 'pending', checkedAt: record.checkedAt, nextCheckAt: record.nextCheckAt, lastError: record.lastError}};
   }
   async handle(request) {
     const input = await request.json();
+    if (new URL(request.url).pathname === '/monitor') { await this.schedule(); return json({ok: true}); }
     const name = hostname(input.hostname, this.env);
     const key = `domain:${name}`;
     const record = await this.ctx.storage.get(key);
@@ -62,9 +74,10 @@ export class Domains {
     if (action === '/reserve') {
       if (record) return json(this.public(record));
       const reservations = await this.ctx.storage.list({prefix: 'domain:'});
-      if (reservations.size >= 100) return json({error: 'free_hostname_limit'}, 409);
-      const value = {hostname: name, tenantId: input.tenantId, token: crypto.randomUUID(), status: 'pending_ownership'};
+      if (reservations.size >= this.limit()) return json({error: 'custom_hostname_limit'}, 409);
+      const value = {hostname: name, tenantId: input.tenantId, token: crypto.randomUUID(), status: 'pending_ownership', nextCheckAt: Date.now() + 60000};
       await this.ctx.storage.put(key, value);
+      await this.schedule();
       return json(this.public(value), 201);
     }
     if (!record) return json({error: 'not_found'}, 404);
@@ -73,13 +86,16 @@ export class Domains {
       await this.ctx.storage.put(key, {...record, status: 'deleting'});
       if (record.cloudflareId) await api(this.env, 'DELETE', `/${record.cloudflareId}`);
       await this.ctx.storage.delete(key);
+      await this.schedule();
       return json({deleted: true});
     }
     if (action !== '/verify') return json({error: 'not_found'}, 404);
     const proof = await dns(`_spartan-verification.${name}`, 'TXT');
     if (!proof.some(answer => answer.type === 16 && answer.name.toLowerCase().replace(/\.$/, '') === `_spartan-verification.${name}` && txt(answer.data) === record.token)) {
-      await this.ctx.storage.put(key, {...record, status: 'pending_ownership'});
-      return json({error: 'ownership_not_verified', ...this.public({...record, status: 'pending_ownership'})}, 409);
+      const pending = {...record, status: 'pending_ownership', checkedAt: new Date().toISOString(), nextCheckAt: Date.now() + 300000};
+      await this.ctx.storage.put(key, pending);
+      await this.schedule();
+      return json({error: 'ownership_not_verified', ...this.public(pending)}, 409);
     }
     if (!record.cloudflareId) {
       const existing = await api(this.env, 'GET', `?hostname=${encodeURIComponent(name)}`);
@@ -97,7 +113,7 @@ export class Domains {
         } else if (quota.used >= 100) return json({error: 'free_hostname_limit'}, 409);
         record.createAttempted = true;
         await this.ctx.storage.put(key, record);
-        const created = await api(this.env, 'POST', '', {hostname: name, ssl: {method: 'txt', type: 'dv', settings: {min_tls_version: '1.2'}}});
+        const created = await api(this.env, 'POST', '', {hostname: name, ssl: {method: 'http', type: 'dv', settings: {min_tls_version: '1.2'}}});
         record.cloudflareId = created.id;
       }
       await this.ctx.storage.put(key, record);
@@ -106,18 +122,31 @@ export class Domains {
     const cnames = await dns(name, 'CNAME');
     const pointed = cnames.some(answer => answer.type === 5 && answer.name.toLowerCase().replace(/\.$/, '') === name && answer.data.toLowerCase().replace(/\.$/, '') === this.env.SAAS_CNAME_TARGET);
     const active = remote.hostname === name && remote.status === 'active' && remote.ssl?.status === 'active' && pointed;
-    const value = {...record, certificateStatus: remote.ssl?.status, cloudflareOwnership: remote.ownership_verification, certificateValidation: remote.ssl?.validation_records, status: active ? 'active' : 'pending_certificate'};
+    const value = {...record, checkedAt: new Date().toISOString(), nextCheckAt: Date.now() + (active ? 21600000 : 300000), lastError: undefined, certificateMethod: remote.ssl?.method || 'http', certificateStatus: remote.ssl?.status, cloudflareOwnership: remote.ownership_verification, certificateValidation: remote.ssl?.validation_records, status: active ? 'active' : 'pending_certificate'};
     await this.ctx.storage.put(key, value);
-    if (!active) await this.ctx.storage.setAlarm(Date.now() + 60000);
+    await this.schedule();
     return json(this.public(value));
   }
   async alarm() {
-    const records = await this.ctx.storage.list({prefix: 'domain:'});
-    for (const record of records.values()) {
-      if (record.status !== 'pending_certificate' || !record.cloudflareId) continue;
-      await this.fetch(new Request('https://domains/verify', {method: 'POST', body: JSON.stringify({hostname: record.hostname, tenantId: record.tenantId})}));
-    }
-    const remaining = await this.ctx.storage.list({prefix: 'domain:'});
-    if ([...remaining.values()].some(record => record.status === 'pending_certificate')) await this.ctx.storage.setAlarm(Date.now() + 300000);
+    const result = this.tail.then(async () => {
+      const records = await this.ctx.storage.list({prefix: 'domain:'});
+      const due = [...records.values()].filter(record => record.status !== 'deleting' && (record.nextCheckAt || 0) <= Date.now()).sort((left, right) => (left.nextCheckAt || 0) - (right.nextCheckAt || 0)).slice(0, 3);
+      for (const record of due) {
+        const key = `domain:${record.hostname}`;
+        try {
+          const response = await this.handle(new Request('https://domains/verify', {method: 'POST', body: JSON.stringify({hostname: record.hostname, tenantId: record.tenantId})}));
+          if (!response.ok) {
+            const current = await this.ctx.storage.get(key);
+            if (current) await this.ctx.storage.put(key, {...current, lastError: (await response.json()).error || 'certificate_check_failed', nextCheckAt: Date.now() + 300000});
+          }
+        } catch {
+          const current = await this.ctx.storage.get(key);
+          if (current) await this.ctx.storage.put(key, {...current, lastError: 'certificate_check_failed', nextCheckAt: Date.now() + 300000});
+        }
+      }
+      await this.schedule();
+    });
+    this.tail = result.catch(() => {});
+    return result;
   }
 }

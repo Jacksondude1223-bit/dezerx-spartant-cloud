@@ -27,6 +27,8 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     const worker = JSON.parse(await readFile(path.join(directory, 'generated/provisioning.json'), 'utf8'));
     const secrets = JSON.parse(await readFile(path.join(directory, 'generated/provisioning.secrets.json'), 'utf8'));
     assert.deepEqual(worker.ai, {binding: 'AI'});
+    assert.equal(worker.vars.MAX_CUSTOM_HOSTNAMES, '30');
+    assert.deepEqual(worker.triggers.crons, ['0 */6 * * *']);
     assert.ok(worker.durable_objects.bindings.some(binding => binding.name === 'RECOVERY' && binding.class_name === 'Recovery'));
     assert.deepEqual(worker.migrations.at(-1), {tag: 'v3', new_sqlite_classes: ['Recovery']});
     assert.equal(worker.vars.AI_MAX_CALLS_PER_DAY, '10');

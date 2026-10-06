@@ -12,7 +12,7 @@ function fixture() {
   const domains = new Domains({storage}, env);
   env.DOMAINS = {getByName() { return {fetch: (url, init) => domains.fetch(new Request(url, init))}; }};
   const call = (action, tenantId = first, name = 'billing.customer.test') => domains.fetch(new Request(`https://domains/${action}`, {method: 'POST', body: JSON.stringify({hostname: name, tenantId})}));
-  return {env, values, call};
+  return {env, values, call, domains};
 }
 function remote(f, {used = 0, certificate = 'active', proof = true, pointed = true} = {}) {
   const original = globalThis.fetch;
@@ -20,7 +20,7 @@ function remote(f, {used = 0, certificate = 'active', proof = true, pointed = tr
   let created = false;
   globalThis.fetch = async (input, options = {}) => {
     const url = new URL(typeof input === 'string' ? input : input.url);
-    calls.push({url: url.toString(), method: options.method || 'GET'});
+    calls.push({url: url.toString(), method: options.method || 'GET', body: options.body ? JSON.parse(options.body) : undefined});
     const record = f.values.get('domain:billing.customer.test');
     if (url.host === 'cloudflare-dns.com') {
       const type = url.searchParams.get('type');
@@ -120,4 +120,69 @@ test('custom domain requests retain their hostname and use the mapped tenant pat
     assert.equal(await response.text(), 'tenant');
     assert.equal((await routing.fetch(new Request('https://unknown.customer.test/'), f.env)).status, 404);
   } finally { globalThis.fetch = original; }
+});
+
+test('the 31st reservation is blocked by the configured default limit', async () => {
+  const f = fixture();
+  for (let i = 0; i < 30; i++) assert.equal((await f.call('reserve', first, `billing.customer${i}.test`)).status, 201);
+  assert.equal((await f.call('reserve', first, 'billing.customer30.test')).status, 409);
+  assert.equal((await f.call('reserve', first, 'billing.customer0.test')).status, 200);
+});
+test('ownership proof starts managed HTTP certificate issuance automatically', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  assert.ok(f.values.get('alarm'));
+  f.values.get('domain:billing.customer.test').nextCheckAt = 0;
+  const mock = remote(f);
+  try {
+    await f.domains.alarm();
+    const record = await (await f.call('status')).json();
+    assert.equal(record.status, 'active');
+    assert.equal(record.ssl.provider, 'cloudflare');
+    assert.equal(record.ssl.automaticRenewal, true);
+    assert.equal(mock.calls.find(call => call.method === 'POST').body.ssl.method, 'http');
+    assert.ok(record.ssl.checkedAt);
+    assert.ok(record.ssl.nextCheckAt > Date.now());
+    assert.ok(f.values.get('alarm') > Date.now());
+  } finally { mock.restore(); }
+});
+test('active certificates continue monitoring and loss of validation disables routing', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  const initial = remote(f);
+  try { await f.call('verify'); } finally { initial.restore(); }
+  f.values.get('domain:billing.customer.test').nextCheckAt = 0;
+  const mock = remote(f, {certificate: 'expired'});
+  try {
+    await f.domains.alarm();
+    const record = await (await f.call('status')).json();
+    assert.equal(record.certificateStatus, 'expired');
+    assert.equal(record.status, 'pending_certificate');
+    assert.equal((await f.call('resolve')).status, 404);
+    assert.equal(mock.calls.some(call => call.method === 'POST'), false);
+    assert.ok(f.values.get('alarm') > Date.now());
+  } finally { mock.restore(); }
+});
+test('temporary check failures preserve existing certificates and schedule another check', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  const initial = remote(f);
+  try { await f.call('verify'); } finally { initial.restore(); }
+  f.values.get('domain:billing.customer.test').nextCheckAt = 0;
+  const previous = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error('timeout'); };
+  try {
+    await f.domains.alarm();
+    const record = await (await f.call('status')).json();
+    assert.equal(record.status, 'active');
+    assert.equal(record.ssl.lastError, 'certificate_check_failed');
+    assert.ok(record.ssl.nextCheckAt > Date.now());
+  } finally { globalThis.fetch = previous; }
+});
+test('monitor wake-up resumes checks for records created before scheduling was added', async () => {
+  const f = fixture();
+  f.values.set('domain:billing.customer.test', {hostname: 'billing.customer.test', tenantId: first, status: 'active'});
+  const response = await f.domains.fetch(new Request('https://domains/monitor', {method: 'POST', body: '{}'}));
+  assert.equal(response.status, 200);
+  assert.ok(f.values.get('alarm') >= Date.now());
 });

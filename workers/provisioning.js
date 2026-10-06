@@ -89,6 +89,11 @@ export default {
       return json({error: error instanceof SyntaxError ? 'invalid_json' : 'internal_error'}, error instanceof SyntaxError ? 400 : 500);
     }
   },
+  async scheduled(event, env) {
+    if (!env.CF_SAAS_API_TOKEN) return;
+    const response = await env.DOMAINS.getByName('registry').fetch('https://domains/monitor', {method: 'POST', body: '{}'});
+    if (!response.ok) throw new Error('ssl_monitor_failed');
+  },
   async queue(batch, env) {
     for (const message of batch.messages) {
       const id = message.body.id;
