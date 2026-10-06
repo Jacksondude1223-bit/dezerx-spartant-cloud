@@ -1,6 +1,7 @@
 import {readFile, mkdir, writeFile, chmod} from 'node:fs/promises';
 import {randomBytes} from 'node:crypto';
 import path from 'node:path';
+import {wranglerToml} from './wrangler-toml.mjs';
 
 const cfg = {...process.env};
 try {
@@ -101,4 +102,10 @@ await write('provisioning.secrets.json', JSON.stringify({AI_RECOVERY_SECRET: sta
 await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET}));
 await write('billing.env', `BILLING_WEBHOOK_SECRET=${state.BILLING_WEBHOOK_SECRET}\nSPARTAN_PROVISION_URL=CHANGE_ME\n`);
 await write('state.json', JSON.stringify(state));
+await mkdir(path.resolve('workers'), {recursive: true});
+for (const [source, target] of [['provisioning.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
+  const config = JSON.parse(await readFile(path.join(directory, source), 'utf8'));
+  config.main = path.basename(config.main);
+  await writeFile(path.resolve('workers', target), wranglerToml(config), {mode: 0o644});
+}
 console.log('generated');

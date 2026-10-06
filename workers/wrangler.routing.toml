@@ -1,0 +1,37 @@
+account_id = "CHANGE_ME"
+compatibility_date = "2026-10-01"
+name = "spartan-routing"
+main = "routing.js"
+workers_dev = false
+
+[observability]
+enabled = true
+
+[vars]
+MAX_CUSTOM_HOSTNAMES = "30"
+BASE_DOMAIN = "cloud.example.com"
+US_ORIGIN = "https://node-us.example.com"
+DE_ORIGIN = "https://node-de.example.com"
+CLOUDFLARE_ZONE_ID = "CHANGE_ME"
+SAAS_ZONE_DOMAIN = "example.com"
+SAAS_CNAME_TARGET = "cloud.example.com"
+
+[[routes]]
+pattern = "*.cloud.example.com/*"
+zone_id = "CHANGE_ME"
+
+[[routes]]
+pattern = "*/*"
+zone_id = "CHANGE_ME"
+
+[durable_objects]
+
+[[durable_objects.bindings]]
+name = "TENANTS"
+class_name = "Tenant"
+script_name = "spartan-provisioning"
+
+[[durable_objects.bindings]]
+name = "DOMAINS"
+class_name = "Domains"
+script_name = "spartan-provisioning"
