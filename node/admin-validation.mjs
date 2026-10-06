@@ -1,0 +1,3 @@
+export function validInitialAdmin(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).sort().join(',') === 'displayName,email,password' && typeof value.displayName === 'string' && value.displayName.trim().length > 0 && value.displayName.length <= 100 && typeof value.email === 'string' && value.email.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.email) && typeof value.password === 'string' && value.password.length >= 8 && value.password.length <= 128 && [value.displayName, value.email, value.password].every(text => !/[\x00-\x1f\x7f]/.test(text));
+}

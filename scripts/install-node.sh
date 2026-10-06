@@ -15,6 +15,8 @@ install -m 600 "generated/$location.env" /etc/spartan-cloud/node.env
 install -m 600 "generated/$location.tunnel-token" /etc/spartan-cloud/tunnel-token
 test -f /etc/spartan-cloud/laravel-env.json || install -m 600 /dev/null /etc/spartan-cloud/laravel-env.json
 test -s /etc/spartan-cloud/laravel-env.json || printf '{}\n' > /etc/spartan-cloud/laravel-env.json
+install -m 644 node/admin-validation.mjs /opt/spartan-cloud/admin-validation.mjs
+install -m 644 node/initial-admin.mjs /opt/spartan-cloud/initial-admin.mjs
 install -m 644 node/agent.mjs /opt/spartan-cloud/agent.mjs
 install -m 644 node/recovery-policy.mjs /opt/spartan-cloud/recovery-policy.mjs
 install -m 644 node/recovery.mjs /opt/spartan-cloud/recovery.mjs

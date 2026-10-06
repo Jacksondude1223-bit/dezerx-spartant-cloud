@@ -8,6 +8,7 @@ import {createReadStream, createWriteStream} from 'node:fs';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import path from 'node:path';
+import {createInitialAdmin, validInitialAdmin} from './initial-admin.mjs';
 import {createRecovery} from './recovery.mjs';
 
 const run = promisify(execFile);
@@ -49,6 +50,8 @@ async function provisionOnce(input, progress) {
   progress.stage = 'prepare';
   const {id, primary, appKey, url, fingerprint} = input;
   if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || url !== `https://${id}.${cfg.BASE_DOMAIN}` || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
+  if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) throw new Error('invalid_initial_admin');
+  const {initialAdmin, ...persistedInput} = input;
   const existing = await load(id);
   if (existing && (existing.fingerprint !== fingerprint || existing.appKey !== appKey || existing.primary !== primary)) throw new Error('tenant_conflict');
   const directory = path.join(root, id);
@@ -68,7 +71,7 @@ async function provisionOnce(input, progress) {
   const envFile = path.join(directory, 'app.env');
   await writeFile(envFile, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {mode: 0o600});
   await chmod(envFile, 0o600);
-  await save({...input, role, status: 'provisioning'});
+  await save({...persistedInput, role, status: 'provisioning'});
   let inspect;
   try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; }
   catch { inspect = null; }
@@ -86,19 +89,23 @@ async function provisionOnce(input, progress) {
   inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
   const assignedPort = Number(inspect.NetworkSettings.Ports['8080/tcp']?.[0]?.HostPort);
   if (!assignedPort) throw new Error('missing_port');
-  await save({...input, role, port: assignedPort, status: 'provisioning'});
+  await save({...persistedInput, role, port: assignedPort, status: 'provisioning'});
   progress.stage = 'health';
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       const health = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
       if (health.ok) {
-        await save({...input, role, port: assignedPort, status: 'ready'});
+        if (role === 'primary' && initialAdmin && existing?.status !== 'ready') {
+          progress.stage = 'initial_admin';
+          await createInitialAdmin(id, initialAdmin);
+        }
+        await save({...persistedInput, role, port: assignedPort, status: 'ready'});
         await recovery.success(id).catch(() => {});
         progress.stage = 'replica';
         if (role === 'secondary') await synchronize(id);
         return {id, status: 'ready', role};
       }
-    } catch {}
+    } catch (error) { if (progress.stage === 'initial_admin') throw error; }
     await sleep(1000);
   }
   return {id, status: 'provisioning', role};
@@ -113,7 +120,7 @@ async function provision(input) {
       if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
       if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
     } catch (error) {
-      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env'].includes(error.message)) throw error;
+      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed'].includes(error.message)) throw error;
       if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
     }
   }

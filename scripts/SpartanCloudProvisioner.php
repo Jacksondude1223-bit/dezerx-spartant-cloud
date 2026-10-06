@@ -10,12 +10,12 @@ final class SpartanCloudProvisioner
         }
     }
 
-    public function provision(string $paidServiceId, string $customerId, string $primary = 'us'): array
+    public function provision(string $paidServiceId, string $customerId, string $primary = 'us', ?array $initialAdmin = null): array
     {
         if (!in_array($primary, ['us', 'de'], true)) {
             throw new InvalidArgumentException('invalid_region');
         }
-        return $this->request('POST', '/v1/instances', json_encode(['serviceId' => $paidServiceId, 'customerId' => $customerId, 'primary' => $primary], JSON_THROW_ON_ERROR));
+        return $this->request('POST', '/v1/instances', json_encode(['serviceId' => $paidServiceId, 'customerId' => $customerId, 'primary' => $primary, ...($initialAdmin === null ? [] : ['initialAdmin' => $initialAdmin])], JSON_THROW_ON_ERROR));
     }
 
     public function status(string $id): array

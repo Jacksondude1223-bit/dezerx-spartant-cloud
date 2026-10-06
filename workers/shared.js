@@ -29,3 +29,22 @@ export async function nodeCall(env, location, path, payload) {
   if (!response.ok) throw new Error(`node_${location}_${response.status}`);
   return response.json();
 }
+
+import {validInitialAdmin} from '../node/admin-validation.mjs';
+export {validInitialAdmin};
+
+export async function sealAdmin(admin, secret) {
+  if (!secret) throw new Error('admin_secret_missing');
+  const key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)), 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({name: 'AES-GCM', iv}, key, new TextEncoder().encode(JSON.stringify(admin))));
+  return btoa(String.fromCharCode(...iv, ...ciphertext));
+}
+export async function openAdmin(value, secret) {
+  const bytes = Uint8Array.from(atob(value), char => char.charCodeAt(0));
+  const key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)), 'AES-GCM', false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt({name: 'AES-GCM', iv: bytes.slice(0, 12)}, key, bytes.slice(12));
+  const admin = JSON.parse(new TextDecoder().decode(plaintext));
+  if (!validInitialAdmin(admin)) throw new Error('invalid_initial_admin');
+  return admin;
+}

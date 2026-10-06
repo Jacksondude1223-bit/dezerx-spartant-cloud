@@ -1,4 +1,4 @@
-import {ID, REGIONS, json, digest, verify, nodeCall} from './shared.js';
+import {ID, REGIONS, json, digest, verify, nodeCall, validInitialAdmin, sealAdmin, openAdmin} from './shared.js';
 export {Recovery} from './recovery.js';
 export {Domains} from './domains.js';
 
@@ -30,7 +30,8 @@ export class Tenant {
     if (!record) return json({error: 'not_found'}, 404);
     if (path === '/internal') return json(record);
     if (path === '/complete' && request.method === 'POST') {
-      await this.ctx.storage.put('record', {...record, status: 'ready', readyAt: new Date().toISOString()});
+      const {initialAdminEncrypted, ...completed} = record;
+      await this.ctx.storage.put('record', {...completed, status: 'ready', readyAt: new Date().toISOString()});
       await this.ctx.storage.deleteAlarm();
       return json({ok: true});
     }
@@ -75,9 +76,10 @@ export default {
       if (request.method === 'POST' && url.pathname === '/v1/instances') {
         const input = JSON.parse(body);
         if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.serviceId || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId || '') || !REGIONS.has(input.primary)) return json({error: 'invalid_input'}, 400);
+        if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) return json({error: 'invalid_initial_admin'}, 400);
         const id = `t-${(await digest(input.serviceId)).slice(0, 24)}`;
-        const fingerprint = await digest(JSON.stringify([input.serviceId, input.customerId, input.primary]));
-        const record = {id, fingerprint, serviceId: input.serviceId, customerId: input.customerId, primary: input.primary, url: `https://${id}.${env.BASE_DOMAIN}`};
+        const fingerprint = await digest(JSON.stringify([input.serviceId, input.customerId, input.primary, ...(input.initialAdmin ? [input.initialAdmin.displayName, input.initialAdmin.email, input.initialAdmin.password, env.BILLING_WEBHOOK_SECRET] : [])]));
+        const record = {id, fingerprint, ...(input.initialAdmin ? {initialAdminEncrypted: await sealAdmin(input.initialAdmin, env.NODE_CONTROL_SECRET)} : {}), serviceId: input.serviceId, customerId: input.customerId, primary: input.primary, url: `https://${id}.${env.BASE_DOMAIN}`};
         return env.TENANTS.getByName(id).fetch('https://tenant/reserve', {method: 'POST', body: JSON.stringify(record)});
       }
       const match = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})$/);
@@ -97,9 +99,11 @@ export default {
         if (!response.ok) { message.ack(); continue; }
         const record = await response.json();
         if (record.status === 'ready') { message.ack(); continue; }
-        const primary = await nodeCall(env, record.primary, '/control/provision', record);
+        const {initialAdminEncrypted, ...replicaRecord} = record;
+        const primaryRecord = {...replicaRecord, ...(initialAdminEncrypted ? {initialAdmin: await openAdmin(initialAdminEncrypted, env.NODE_CONTROL_SECRET)} : {})};
+        const primary = await nodeCall(env, record.primary, '/control/provision', primaryRecord);
         if (primary.status !== 'ready') throw new Error('primary_not_ready');
-        const secondary = await nodeCall(env, record.primary === 'us' ? 'de' : 'us', '/control/provision', record);
+        const secondary = await nodeCall(env, record.primary === 'us' ? 'de' : 'us', '/control/provision', replicaRecord);
         if (secondary.status !== 'ready') throw new Error('secondary_not_ready');
         await stub.fetch('https://tenant/complete', {method: 'POST'});
         message.ack();

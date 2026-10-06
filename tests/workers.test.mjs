@@ -134,3 +134,33 @@ test('European countries use Germany and US defaults use US', () => {
   for (const country of ['DE', 'FR', 'GB', 'PL', 'NL', 'TR']) assert.equal(region(country), 'de');
   for (const country of ['US', 'CA', 'MX', 'AU', undefined]) assert.equal(region(country), 'us');
 });
+
+test('initial admin is encrypted while pending, sent only to primary and erased on completion', async () => {
+  const {env, tenants} = fixture();
+  const initialAdmin = {displayName: 'Customer Owner', email: 'owner@example.test', password: 'Strong-password-123!'};
+  const record = await (await reserve(env, {initialAdmin})).json();
+  assert.equal(record.initialAdmin, undefined);
+  const stored = tenants.get(record.id).values.get('record');
+  assert.equal(JSON.stringify(stored).includes(initialAdmin.password), false);
+  assert.equal(JSON.stringify(stored).includes(initialAdmin.email), false);
+  assert.equal(typeof stored.initialAdminEncrypted, 'string');
+  assert.equal((await reserve(env, {initialAdmin})).status, 202);
+  assert.equal((await reserve(env, {initialAdmin: {...initialAdmin, password: 'Different-password!'}})).status, 409);
+  const previous = globalThis.fetch;
+  const payloads = [];
+  globalThis.fetch = async (url, init) => { payloads.push(JSON.parse(init.body)); return Response.json({status: 'ready'}); };
+  try {
+    await provisioning.queue({messages: [{body: {id: record.id}, ack() {}, retry() { assert.fail('unexpected_retry'); }}]}, env);
+    assert.deepEqual(payloads[0].initialAdmin, initialAdmin);
+    assert.equal(payloads[1].initialAdmin, undefined);
+    assert.equal(payloads[0].initialAdminEncrypted, undefined);
+    assert.equal(tenants.get(record.id).values.get('record').initialAdminEncrypted, undefined);
+    assert.equal((await reserve(env, {initialAdmin})).status, 200);
+  } finally { globalThis.fetch = previous; }
+});
+test('invalid initial admin details are rejected before reservation', async () => {
+  const {env, tenants} = fixture();
+  const good = {displayName: 'Owner', email: 'owner@example.test', password: 'Valid-password!'};
+  for (const initialAdmin of [{...good, role: 'user'}, {...good, displayName: 'Name\n2'}, {...good, password: 'short'}, {...good, email: 'invalid'}, null]) assert.equal((await reserve(env, {initialAdmin})).status, 400);
+  assert.equal(tenants.size, 0);
+});
