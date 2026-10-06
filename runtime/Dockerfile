@@ -1,10 +1,18 @@
 ARG ROADRUNNER_IMAGE=ghcr.io/roadrunner-server/roadrunner:2025.1.15
 FROM ${ROADRUNNER_IMAGE} AS roadrunner
-FROM php:8.3-cli-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends nginx supervisor sqlite3 python3 libzip-dev libicu-dev libonig-dev libsqlite3-dev unzip curl ca-certificates && docker-php-ext-install pdo_sqlite bcmath intl mbstring zip opcache pcntl sockets && rm -rf /var/lib/apt/lists/*
+FROM node:24-bookworm-slim AS assets
+WORKDIR /build
+COPY app/ ./
+RUN if [ -f package.json ]; then test -f package-lock.json && npm ci --no-audit --no-fund && npm run build; fi
+FROM php:8.4-cli-bookworm
+RUN apt-get update && apt-get install -y --no-install-recommends nginx supervisor sqlite3 python3 libzip-dev libicu-dev libonig-dev libsqlite3-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev libxml2-dev libcurl4-openssl-dev unzip curl ca-certificates && docker-php-ext-configure gd --with-freetype --with-jpeg && docker-php-ext-install gd curl pdo_mysql exif pdo_sqlite bcmath intl mbstring zip opcache pcntl sockets && rm -rf /var/lib/apt/lists/*
+COPY runtime/install-ioncube.sh /usr/local/bin/cloud-install-ioncube
+ARG IONCUBE_SHA256
+RUN IONCUBE_SHA256="$IONCUBE_SHA256" sh /usr/local/bin/cloud-install-ioncube && rm /usr/local/bin/cloud-install-ioncube
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 WORKDIR /var/www/html
 COPY app/ ./
+COPY --from=assets /build/public/ ./public/
 RUN test -f artisan && test -f composer.lock && test -f public/index.php && rm -f .env && composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --no-scripts && mkdir -p storage bootstrap/cache && chown -R www-data:www-data storage bootstrap/cache
 RUN php -r 'require "vendor/autoload.php"; if (!class_exists(Laravel\Octane\OctaneServiceProvider::class) || !class_exists(Spiral\RoadRunner\Http\PSR7Worker::class) || !is_file("vendor/bin/roadrunner-worker")) { fwrite(STDERR, "Octane and RoadRunner must be installed in composer.lock as production dependencies.\n"); exit(1); }'
 COPY --from=roadrunner /usr/bin/rr /var/www/html/rr
