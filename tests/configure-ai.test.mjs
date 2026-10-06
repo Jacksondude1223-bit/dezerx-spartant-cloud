@@ -28,6 +28,7 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     for (const [source, target] of [['provisioning.json', 'wrangler.provisioning.toml'], ['routing.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
       const expected = JSON.parse(await readFile(path.join(directory, 'generated', source), 'utf8'));
       expected.main = path.basename(expected.main);
+      if (expected.assets) expected.assets.directory = path.basename(expected.assets.directory);
       const {stdout} = await exec('python3', ['-c', 'import json,sys,tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))', path.join(directory, 'workers', target)]);
       assert.deepEqual(JSON.parse(stdout), expected);
       const toml = await readFile(path.join(directory, 'workers', target), 'utf8');
