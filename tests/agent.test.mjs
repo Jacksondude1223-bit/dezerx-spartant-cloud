@@ -52,6 +52,10 @@ if(args[0]==='run'){
       catch { await new Promise(resolve => setTimeout(resolve, 20)); }
     }
     assert.equal(connected, true, stderr);
+    assert.equal((await fetch(`${origin}/__cloud_node_health`)).status, 401);
+    const nodeHealth = await fetch(`${origin}/__cloud_node_health`, {headers: {'x-spartan-origin': secret}});
+    assert.equal(nodeHealth.status, 200);
+    assert.deepEqual(await nodeHealth.json(), {status: 'ready', region: 'us'});
     const input = {initialAdmin: {displayName: 'Owner', email: 'owner@example.test', password: 'Chosen-password!'}, id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64)};
     let body = JSON.stringify(input);
     assert.equal((await fetch(`${origin}/control/provision`, {method: 'POST', body})).status, 401);

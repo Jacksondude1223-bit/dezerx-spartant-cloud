@@ -216,6 +216,10 @@ async function target(req) {
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
+    if (url.pathname === '/__cloud_node_health' && req.method === 'GET') {
+      if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET)) return reply(res, 401, {error: 'unauthorized'});
+      return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION});
+    }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
     if (url.pathname.startsWith('/replica/')) return await snapshot(req, res, url.pathname.slice('/replica/'.length));
     const info = await target(req);

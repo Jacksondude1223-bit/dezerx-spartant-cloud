@@ -1,5 +1,6 @@
 import {ID, json, region, visitorIp} from './shared.js';
 import {routingControl} from './routing-registry.js';
+import {statusPage} from './status-page.js';
 export {RoutingTenant} from './routing-registry.js';
 export {Domains} from './domains.js';
 
@@ -12,6 +13,7 @@ export default {
     const url = new URL(request.url);
     try {
       const controlHost = url.hostname === env.BASE_DOMAIN || url.hostname === env.ROUTING_API_HOSTNAME || url.hostname.endsWith('.workers.dev');
+      if (controlHost && ['GET', 'HEAD'].includes(request.method) && ['/', '/__routing_status'].includes(url.pathname)) return await statusPage(request, env, url.pathname === '/__routing_status');
       if (controlHost && url.pathname.startsWith('/v1/routing/')) {
         if (url.protocol !== 'https:') return json({error: 'https_required'}, 400);
         return await routingControl(request, env);
