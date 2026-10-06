@@ -10,7 +10,7 @@ COPY runtime/entrypoint.sh /usr/local/bin/cloud-entrypoint
 COPY runtime/create-admin.py /usr/local/bin/cloud-create-admin
 COPY runtime/admin-state.php /usr/local/bin/cloud-admin-state.php
 COPY runtime/health.php /var/www/html/public/__cloud_health.php
-RUN chmod 755 /usr/local/bin/cloud-entrypoint
+RUN chmod 755 /usr/local/bin/cloud-entrypoint && printf 'if ($http_x_spartan_ingress_key != "build-test") { return 403; }\n' > /etc/nginx/spartan-origin-auth.conf && nginx -t && rm /etc/nginx/spartan-origin-auth.conf
 RUN printf '[www]\nclear_env = no\n' > /usr/local/etc/php-fpm.d/zz-cloud.conf
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/cloud-entrypoint"]

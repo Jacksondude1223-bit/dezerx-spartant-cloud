@@ -13,7 +13,7 @@ test('node agent authenticates control requests and proxies only the correct ten
   const secret = 'b'.repeat(64);
   const requests = [];
   const backend = http.createServer((req, res) => {
-    requests.push({path: req.url, host: req.headers.host, credential: req.headers['x-spartan-origin']});
+    requests.push({path: req.url, host: req.headers.host, credential: req.headers['x-spartan-origin'], clientIp: req.headers['x-spartan-client-ip'], forwarded: req.headers['x-forwarded-for'], ingress: req.headers['x-spartan-ingress-key']});
     res.setHeader('set-cookie', 'session=test; Secure; HttpOnly');
     res.end(req.url === '/__cloud_health' ? '{"status":"ready"}' : 'tenant-app');
   });
@@ -72,12 +72,13 @@ if(args[0]==='run'){
     const envFile = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
     for (const value of [state, envFile, stderr]) { assert.equal(value.includes('Chosen-password!'), false); assert.equal(value.includes('owner@example.test'), false); }
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`)).status, 404);
-    const headers = {'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
+    const headers = {'x-spartan-client-ip': '198.51.100.42', 'x-forwarded-for': 'attacker', 'cf-connecting-ip': 'attacker', 'x-real-ip': 'attacker', 'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
+    for (const clientIp of ['', '198.51.100.42, 203.0.113.9', 'invalid']) assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers: {...headers, 'x-spartan-client-ip': clientIp}})).status, 404);
     const proxy = await fetch(`${origin}/tenant/${id}/billing?invoice=1`, {headers});
     assert.equal(await proxy.text(), 'tenant-app');
     assert.equal(proxy.headers.get('set-cookie'), 'session=test; Secure; HttpOnly');
     assert.equal(proxy.headers.get('cache-control'), 'private, no-store');
-    assert.deepEqual(requests.at(-1), {path: '/billing?invoice=1', host: `${id}.cloud.test`, credential: undefined});
+    assert.deepEqual(requests.at(-1), {path: '/billing?invoice=1', host: `${id}.cloud.test`, credential: undefined, clientIp: '198.51.100.42', forwarded: '198.51.100.42', ingress: input.appKey});
     headers['x-spartan-host'] = `t-${'2'.repeat(24)}.cloud.test`;
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
     headers['x-spartan-host'] = 'billing.customer.test';

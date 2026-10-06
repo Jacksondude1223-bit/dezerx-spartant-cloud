@@ -97,7 +97,7 @@ test('routing selects region, preserves application credentials, strips origin s
   const {env, tenants} = fixture();
   const record = await (await reserve(env)).json();
   await tenants.get(record.id).fetch('https://tenant/complete', {method: 'POST'});
-  const request = new Request(`${record.url}/invoices?x=1`, {method: 'POST', body: 'invoice', headers: {authorization: 'Bearer app-token', cookie: 'session=value', 'x-spartan-origin': 'attacker', 'x-spartan-hop': '1', 'x-forwarded-host': 'evil.test'}});
+  const request = new Request(`${record.url}/invoices?x=1`, {method: 'POST', body: 'invoice', headers: {'cf-connecting-ip': '198.51.100.42', 'x-spartan-client-ip': 'attacker', 'x-forwarded-for': 'attacker', 'x-real-ip': 'attacker', authorization: 'Bearer app-token', cookie: 'session=value', 'x-spartan-origin': 'attacker', 'x-spartan-hop': '1', 'x-forwarded-host': 'evil.test'}});
   Object.defineProperty(request, 'cf', {value: {country: 'DE'}});
   const previous = globalThis.fetch;
   globalThis.fetch = async upstream => {
@@ -110,6 +110,9 @@ test('routing selects region, preserves application credentials, strips origin s
     assert.equal(upstream.headers.get('x-spartan-origin'), secret);
     assert.equal(upstream.headers.get('x-spartan-hop'), null);
     assert.equal(upstream.headers.get('x-forwarded-host'), null);
+    assert.equal(upstream.headers.get('x-spartan-client-ip'), '198.51.100.42');
+    assert.equal(upstream.headers.get('x-forwarded-for'), '198.51.100.42');
+    assert.equal(upstream.headers.get('x-real-ip'), '198.51.100.42');
     return new Response('ok', {status: 201});
   };
   try { assert.equal((await routing.fetch(request, env)).status, 201); }
@@ -118,14 +121,14 @@ test('routing selects region, preserves application credentials, strips origin s
 test('routing refuses unknown and pending tenants and never retries a failed write', async () => {
   const {env} = fixture();
   const record = await (await reserve(env)).json();
-  assert.equal((await routing.fetch(new Request(record.url), env)).status, 503);
+  assert.equal((await routing.fetch(new Request(record.url, {headers: {'cf-connecting-ip': '198.51.100.42'}}), env)).status, 503);
   assert.equal((await routing.fetch(new Request('https://evil.cloud.test'), env)).status, 404);
   await env.TENANTS.getByName(record.id).fetch('https://tenant/complete', {method: 'POST'});
   const previous = globalThis.fetch;
   let attempts = 0;
   globalThis.fetch = async () => { attempts++; throw new Error('failed'); };
   try {
-    const response = await routing.fetch(new Request(record.url, {method: 'POST', body: 'write'}), env);
+    const response = await routing.fetch(new Request(record.url, {method: 'POST', body: 'write', headers: {'cf-connecting-ip': '198.51.100.42'}}), env);
     assert.equal(response.status, 503);
     assert.equal(attempts, 1);
   } finally { globalThis.fetch = previous; }
@@ -163,4 +166,24 @@ test('invalid initial admin details are rejected before reservation', async () =
   const good = {displayName: 'Owner', email: 'owner@example.test', password: 'Valid-password!'};
   for (const initialAdmin of [{...good, role: 'user'}, {...good, displayName: 'Name\n2'}, {...good, password: 'short'}, {...good, email: 'invalid'}, null]) assert.equal((await reserve(env, {initialAdmin})).status, 400);
   assert.equal(tenants.size, 0);
+});
+
+test('routing captures original IPv6 before Cloudflare changes headers on an origin subrequest', async () => {
+  const {env} = fixture();
+  const record = await (await reserve(env)).json();
+  await env.TENANTS.getByName(record.id).fetch('https://tenant/complete', {method: 'POST'});
+  const previous = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async request => {
+    calls++;
+    assert.equal(request.headers.get('x-spartan-client-ip'), '2001:db8::42');
+    assert.equal(request.headers.get('x-forwarded-for'), '2001:db8::42');
+    assert.equal(request.headers.get('true-client-ip'), null);
+    return new Response('ok');
+  };
+  try {
+    assert.equal((await routing.fetch(new Request(record.url, {headers: {'cf-connecting-ip': '240.0.0.1', 'cf-connecting-ipv6': '2001:db8::42', 'true-client-ip': 'attacker'}}), env)).status, 200);
+    assert.equal((await routing.fetch(new Request(record.url, {headers: {'x-forwarded-for': 'attacker'}}), env)).status, 503);
+    assert.equal(calls, 1);
+  } finally { globalThis.fetch = previous; }
 });

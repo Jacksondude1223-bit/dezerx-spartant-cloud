@@ -116,7 +116,7 @@ test('custom domain requests retain their hostname and use the mapped tenant pat
     return new Response('tenant');
   };
   try {
-    const response = await routing.fetch(new Request('https://billing.customer.test/invoices', {headers: {'x-spartan-custom-domain': 'evil'}}), f.env);
+    const response = await routing.fetch(new Request('https://billing.customer.test/invoices', {headers: {'cf-connecting-ip': '198.51.100.42', 'x-spartan-custom-domain': 'evil'}}), f.env);
     assert.equal(await response.text(), 'tenant');
     assert.equal((await routing.fetch(new Request('https://unknown.customer.test/'), f.env)).status, 404);
   } finally { globalThis.fetch = original; }

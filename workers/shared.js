@@ -48,3 +48,19 @@ export async function openAdmin(value, secret) {
   if (!validInitialAdmin(admin)) throw new Error('invalid_initial_admin');
   return admin;
 }
+
+export function validClientIp(value) {
+  if (typeof value !== 'string' || value.length > 45) return false;
+  if (value.includes(':')) {
+    if (!/^[0-9a-fA-F:.]+$/.test(value)) return false;
+    try { return new URL(`http://[${value}]/`).hostname.startsWith('['); } catch { return false; }
+  }
+  const parts = value.split('.');
+  return parts.length === 4 && parts.every(part => /^(0|[1-9][0-9]{0,2})$/.test(part) && Number(part) <= 255);
+}
+export function visitorIp(headers) {
+  const ip = headers.get('cf-connecting-ip');
+  const ipv6 = headers.get('cf-connecting-ipv6');
+  if (validClientIp(ip) && !ip.includes(':') && Number(ip.split('.')[0]) >= 240 && validClientIp(ipv6) && ipv6.includes(':')) return ipv6;
+  return validClientIp(ip) ? ip : null;
+}

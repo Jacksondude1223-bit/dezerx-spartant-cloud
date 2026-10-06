@@ -1,4 +1,6 @@
 import http from 'node:http';
+import {isIP} from 'node:net';
+import {proxyHeaders} from './client-ip.mjs';
 import https from 'node:https';
 import {createHmac, timingSafeEqual, randomUUID} from 'node:crypto';
 import {execFile} from 'node:child_process';
@@ -192,7 +194,7 @@ async function control(req, res, url) {
   reply(res, 200, result);
 }
 async function target(req) {
-  if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET)) return null;
+  if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET) || typeof req.headers['x-spartan-client-ip'] !== 'string' || !isIP(req.headers['x-spartan-client-ip'])) return null;
   const match = req.url.match(/^\/tenant\/(t-[a-f0-9]{24})(\/.*)$/);
   if (!match) return null;
   const record = await load(match[1]);
@@ -203,24 +205,6 @@ async function target(req) {
   if (req.headers['x-spartan-hop']) return null;
   const origin = record.primary === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN;
   return {url: new URL(`${origin}${req.url}`), record, local: false};
-}
-function proxyHeaders(req, info) {
-  const headers = {...req.headers};
-  if (info.local) {
-    headers.host = req.headers['x-spartan-host'];
-    headers['x-forwarded-host'] = headers.host;
-    headers['x-forwarded-proto'] = 'https';
-    delete headers['x-spartan-origin'];
-    delete headers['x-spartan-host'];
-    delete headers['x-spartan-hop'];
-    delete headers['x-spartan-custom-domain'];
-  } else {
-    headers.host = info.url.host;
-    headers['x-spartan-hop'] = '1';
-  }
-  delete headers['cf-access-client-id'];
-  delete headers['cf-access-client-secret'];
-  return headers;
 }
 const server = http.createServer(async (req, res) => {
   try {
