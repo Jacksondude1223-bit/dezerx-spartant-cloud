@@ -1,4 +1,5 @@
 import {ID, REGIONS, json, digest, verify, nodeCall} from './shared.js';
+export {Recovery} from './recovery.js';
 export {Domains} from './domains.js';
 
 export class Tenant {
@@ -60,6 +61,11 @@ export default {
       if (Number(request.headers.get('content-length') || 0) > 16384) return json({error: 'too_large'}, 413);
       const body = await request.text();
       if (body.length > 16384) return json({error: 'too_large'}, 413);
+      if (url.pathname === '/v1/recovery') {
+        if (request.method !== 'POST') return json({error: 'method_not_allowed'}, 405);
+        if (!await verify(request, body, env.AI_RECOVERY_SECRET)) return json({error: 'unauthorized'}, 401);
+        return env.RECOVERY.getByName('global-budget').fetch('https://recovery/choose', {method: 'POST', body});
+      }
       if (!await verify(request, body, env.BILLING_WEBHOOK_SECRET)) return json({error: 'unauthorized'}, 401);
       const domain = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/domains\/(reserve|verify|status|delete)$/);
       if (request.method === 'POST' && domain) {

@@ -5,24 +5,24 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {diagnose, permitted, chooseRepair, createRecovery} from '../node/recovery.mjs';
 
-const config = {GEMINI_RECOVERY_ENABLED: 'true', GEMINI_FREE_TIER_CONFIRMED: 'true', GEMINI_API_KEY: 'private-key', SPARTAN_IMAGE: 'registry/image@sha256:' + 'a'.repeat(64)};
-const response = decision => Response.json({candidates: [{finishReason: 'STOP', content: {parts: [{text: JSON.stringify(decision)}]}}]});
+const config = {AI_RECOVERY_ENABLED: 'true', AI_RECOVERY_URL: 'https://spartan.example/v1/recovery', AI_RECOVERY_SECRET: 'private-key', SPARTAN_IMAGE: 'registry/image@sha256:' + 'a'.repeat(64)};
+const response = decision => Response.json(decision);
 test('diagnostics expose only categories and numeric container state', () => {
   const value = diagnose('health', {message: 'password=secret client@example.com', stderr: 'Permission denied token=private'}, 'APP_KEY=base64:secret', {exists: true, running: false, exitCode: 1, customer: 'private'});
   assert.deepEqual(value.signals, ['permissions']);
   for (const secret of ['password', 'secret', 'example.com', 'APP_KEY', 'private']) assert.equal(JSON.stringify(value).includes(secret), false);
 });
-test('Gemini receives no logs and can select only predefined repairs', async () => {
+test('Signed Llama endpoint receives no logs and can select only predefined repairs', async () => {
   const diagnostic = diagnose('health', {message: 'Permission denied PASSWORD=secret'});
   const choice = await chooseRepair(config, diagnostic, async (url, init) => {
-    assert.equal(url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent');
-    assert.equal(init.headers['x-goog-api-key'], 'private-key');
-    assert.equal(init.body.includes('secret'), true);
+    assert.equal(url, config.AI_RECOVERY_URL);
+    assert.match(init.headers['x-spartan-signature'], /^[a-f0-9]{64}$/);
+    assert.equal(init.redirect, 'error');
     const payload = JSON.parse(init.body);
-    const input = JSON.parse(payload.contents[0].parts[0].text);
+    const input = payload;
     assert.equal(JSON.stringify(input).includes('PASSWORD'), false);
     assert.equal(JSON.stringify(input).includes('secret'), false);
-    assert.ok(input.allowedActions.includes('repair_permissions'));
+    assert.ok(input.signals.includes('permissions'));
     return response({action: 'repair_permissions', confidence: 0.95});
   });
   assert.equal(choice.action, 'repair_permissions');
@@ -39,8 +39,8 @@ test('rate limits stop API use without paid models or alternate-provider fallbac
   assert.equal(result.status, 'rate_limited');
   assert.equal(calls, 1);
 });
-test('unconfirmed free tier disables Gemini calls', async () => {
-  const result = await chooseRepair({...config, GEMINI_FREE_TIER_CONFIRMED: 'false'}, diagnose('pull', {}), async () => assert.fail('must_not_call'));
+test('disabled recovery makes no AI calls', async () => {
+  const result = await chooseRepair({...config, AI_RECOVERY_ENABLED: 'false'}, diagnose('pull', {}), async () => assert.fail('must_not_call'));
   assert.equal(result.status, 'disabled');
 });
 test('disk, migration, dependencies and memory failures require manual intervention', () => {
@@ -56,7 +56,7 @@ test('repairs remain tenant-scoped with persistent attempt and daily budget limi
   try {
     await mkdir(dir);
     await writeFile(path.join(dir, 'state.json'), JSON.stringify({id, fingerprint: 'f', status: 'provisioning'}));
-    const recovery = createRecovery({config: {...config, GEMINI_MAX_CALLS_PER_DAY: '2'}, root, now: () => now, docker: async args => { commands.push(args); if (args[0] === 'inspect') return JSON.stringify([{Config: {Labels: {'spartan.fingerprint': 'f'}}, State: {Running: true, ExitCode: 0}}]); if (args[0] === 'logs') return 'permission denied'; return ''; }, run: async (cmd, args) => { commands.push([cmd, ...args]); }, transport: async () => { calls++; return response({action: 'repair_permissions', confidence: 0.99}); }});
+    const recovery = createRecovery({config: {...config, AI_MAX_CALLS_PER_DAY: '2'}, root, now: () => now, docker: async args => { commands.push(args); if (args[0] === 'inspect') return JSON.stringify([{Config: {Labels: {'spartan.fingerprint': 'f'}}, State: {Running: true, ExitCode: 0}}]); if (args[0] === 'logs') return 'permission denied'; return ''; }, run: async (cmd, args) => { commands.push([cmd, ...args]); }, transport: async () => { calls++; return response({action: 'repair_permissions', confidence: 0.99}); }});
     assert.equal(await recovery.recover(id, 'health', new Error('permission denied')), true);
     assert.equal(await recovery.recover(id, 'health', new Error('permission denied')), false);
     now += 61000;

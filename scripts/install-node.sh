@@ -16,6 +16,7 @@ install -m 600 "generated/$location.tunnel-token" /etc/spartan-cloud/tunnel-toke
 test -f /etc/spartan-cloud/laravel-env.json || install -m 600 /dev/null /etc/spartan-cloud/laravel-env.json
 test -s /etc/spartan-cloud/laravel-env.json || printf '{}\n' > /etc/spartan-cloud/laravel-env.json
 install -m 644 node/agent.mjs /opt/spartan-cloud/agent.mjs
+install -m 644 node/recovery-policy.mjs /opt/spartan-cloud/recovery-policy.mjs
 install -m 644 node/recovery.mjs /opt/spartan-cloud/recovery.mjs
 install -m 755 scripts/backup.sh /opt/spartan-cloud/backup.sh
 node_path="$(command -v node)"

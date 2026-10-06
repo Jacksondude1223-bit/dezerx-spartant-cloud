@@ -24,6 +24,8 @@ let state;
 try { state = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); }
 catch (error) { if (error.code !== 'ENOENT') throw error; state = {accountId: cfg.CLOUDFLARE_ACCOUNT_ID, zoneId: cfg.CLOUDFLARE_ZONE_ID, baseDomain: cfg.BASE_DOMAIN, BILLING_WEBHOOK_SECRET: randomBytes(32).toString('hex'), NODE_CONTROL_SECRET: randomBytes(32).toString('hex'), ORIGIN_SECRET: randomBytes(32).toString('hex'), tunnels: {}}; }
 if (state.accountId !== cfg.CLOUDFLARE_ACCOUNT_ID || state.zoneId !== cfg.CLOUDFLARE_ZONE_ID || state.baseDomain !== cfg.BASE_DOMAIN) throw new Error('configuration_conflict');
+state.AI_RECOVERY_SECRET ||= randomBytes(32).toString('hex');
+await write('state.json', JSON.stringify(state));
 const api = async (method, resource, body) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4${resource}`, {method, headers: {authorization: `Bearer ${cfg.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});
   const result = await response.json();
@@ -33,6 +35,12 @@ const api = async (method, resource, body) => {
 const zone = await api('GET', `/zones/${cfg.CLOUDFLARE_ZONE_ID}`);
 for (const host of [cfg.BASE_DOMAIN, cfg.US_HOSTNAME, cfg.DE_HOSTNAME]) if (host !== zone.name && !host.endsWith(`.${zone.name}`)) throw new Error('zone_mismatch');
 const account = `/accounts/${cfg.CLOUDFLARE_ACCOUNT_ID}`;
+const aiEnabled = cfg.AI_RECOVERY_ENABLED === 'true';
+const aiLimit = Number(cfg.AI_MAX_CALLS_PER_DAY || 10);
+if (!Number.isInteger(aiLimit) || aiLimit < 1 || aiLimit > 20) throw new Error('invalid_ai_daily_limit');
+const subdomain = aiEnabled ? (await api('GET', `${account}/workers/subdomain`)).subdomain : '';
+if (aiEnabled && !/^[a-z0-9-]+$/.test(subdomain || '')) throw new Error('workers_subdomain_required');
+const aiUrl = aiEnabled ? `https://spartan-provisioning.${subdomain}.workers.dev/v1/recovery` : '';
 const dns = async (name, content) => {
   const records = await api('GET', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/dns_records?name=${encodeURIComponent(name)}`);
   if (records.length && (records.length !== 1 || records[0].type !== 'CNAME' || records[0].content !== content)) throw new Error(`dns_conflict_${name}`);
@@ -56,8 +64,7 @@ for (const location of ['us', 'de']) {
   await write(`${location}.tunnel-token`, token);
   await dns(hostname, `${tunnel.id}.cfargotunnel.com`);
   const env = {NODE_REGION: location, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ORIGIN_SECRET: state.ORIGIN_SECRET, BASE_DOMAIN: cfg.BASE_DOMAIN, SPARTAN_IMAGE: cfg.SPARTAN_IMAGE, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', TENANT_CPUS: cfg.TENANT_CPUS || '1', TENANT_MEMORY: cfg.TENANT_MEMORY || '512m', MAX_TENANTS: cfg.MAX_TENANTS || '100', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
-  Object.assign(env, {GEMINI_RECOVERY_ENABLED: cfg.GEMINI_RECOVERY_ENABLED || 'false', GEMINI_FREE_TIER_CONFIRMED: cfg.GEMINI_FREE_TIER_CONFIRMED || 'false', GEMINI_MAX_CALLS_PER_DAY: cfg.GEMINI_MAX_CALLS_PER_DAY || '10'});
-  if (cfg.GEMINI_API_KEY && !cfg.GEMINI_API_KEY.includes('CHANGE_ME')) env.GEMINI_API_KEY = cfg.GEMINI_API_KEY;
+  Object.assign(env, {AI_RECOVERY_ENABLED: String(aiEnabled), AI_RECOVERY_URL: aiUrl, AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, AI_MAX_CALLS_PER_DAY: String(aiLimit)});
   if (Object.values(env).some(value => /[\r\n]/.test(value))) throw new Error('invalid_node_environment');
   await write(`${location}.env`, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
 }
@@ -84,11 +91,11 @@ for (const queue_name of ['spartan-provision', 'spartan-provision-dead']) {
 }
 const vars = {BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, CLOUDFLARE_ZONE_ID: cfg.CLOUDFLARE_ZONE_ID, SAAS_ZONE_DOMAIN: zone.name, SAAS_CNAME_TARGET: cfg.BASE_DOMAIN};
 const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026-10-01', vars, observability: {enabled: true}};
-await write('provisioning.json', JSON.stringify({...common, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
+await write('provisioning.json', JSON.stringify({...common, ai: {binding: 'AI'}, vars: {...vars, AI_RECOVERY_ENABLED: String(aiEnabled), AI_MAX_CALLS_PER_DAY: String(aiLimit)}, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}, {name: 'RECOVERY', class_name: 'Recovery'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}, {tag: 'v3', new_sqlite_classes: ['Recovery']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
 const routes = [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];
 if (customDomains) routes.push({pattern: '*/*', zone_id: cfg.CLOUDFLARE_ZONE_ID});
 await write('routing.json', JSON.stringify({...common, name: 'spartan-routing', main: '../workers/routing.js', workers_dev: false, routes, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}, {name: 'DOMAINS', class_name: 'Domains', script_name: 'spartan-provisioning'}]}}));
-await write('provisioning.secrets.json', JSON.stringify({BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
+await write('provisioning.secrets.json', JSON.stringify({AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
 await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET}));
 await write('billing.env', `BILLING_WEBHOOK_SECRET=${state.BILLING_WEBHOOK_SECRET}\nSPARTAN_PROVISION_URL=CHANGE_ME\n`);
 await write('state.json', JSON.stringify(state));
