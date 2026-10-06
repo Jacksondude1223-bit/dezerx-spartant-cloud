@@ -35,6 +35,11 @@ test('configure generates Workers AI binding, shared secret, migration and signe
       assert.equal(toml.includes('SECRET'), false);
     }
     const secrets = JSON.parse(await readFile(path.join(directory, 'generated/provisioning.secrets.json'), 'utf8'));
+    const routeWorker = JSON.parse(await readFile(path.join(directory, 'generated/routing.json'), 'utf8'));
+    assert.equal(routeWorker.durable_objects.bindings.some(binding => binding.script_name), false);
+    assert.deepEqual(routeWorker.migrations[0].new_sqlite_classes, ['RoutingTenant', 'Domains']);
+    const routeSecrets = JSON.parse(await readFile(path.join(directory, 'generated/routing.secrets.json'), 'utf8'));
+    assert.match(routeSecrets.ROUTING_CONTROL_SECRET, /^[a-f0-9]{64}$/);
     assert.deepEqual(worker.ai, {binding: 'AI'});
     assert.equal(worker.vars.MAX_CUSTOM_HOSTNAMES, '30');
     assert.deepEqual(worker.triggers.crons, ['0 */6 * * *']);

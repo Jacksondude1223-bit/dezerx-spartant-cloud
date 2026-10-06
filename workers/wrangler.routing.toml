@@ -1,7 +1,7 @@
 compatibility_date = "2026-10-01"
 name = "dezerx-spartant-cloud"
 main = "routing.js"
-workers_dev = false
+workers_dev = true
 
 [observability]
 enabled = true
@@ -15,22 +15,20 @@ CLOUDFLARE_ZONE_ID = "CHANGE_ME"
 SAAS_ZONE_DOMAIN = "example.com"
 SAAS_CNAME_TARGET = "cloud.example.com"
 
-[[routes]]
-pattern = "*.cloud.example.com/*"
-zone_id = "CHANGE_ME"
-
-[[routes]]
-pattern = "*/*"
-zone_id = "CHANGE_ME"
 
 [durable_objects]
 
 [[durable_objects.bindings]]
 name = "TENANTS"
-class_name = "Tenant"
-script_name = "spartan-provisioning"
+class_name = "RoutingTenant"
 
 [[durable_objects.bindings]]
 name = "DOMAINS"
 class_name = "Domains"
-script_name = "spartan-provisioning"
+
+[[migrations]]
+tag = "routing-v1"
+new_sqlite_classes = ["RoutingTenant", "Domains"]
+
+[triggers]
+crons = ["0 */6 * * *"]

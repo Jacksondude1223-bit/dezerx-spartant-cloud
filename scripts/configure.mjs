@@ -28,6 +28,7 @@ try { state = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf
 catch (error) { if (error.code !== 'ENOENT') throw error; state = {accountId: cfg.CLOUDFLARE_ACCOUNT_ID, zoneId: cfg.CLOUDFLARE_ZONE_ID, baseDomain: cfg.BASE_DOMAIN, BILLING_WEBHOOK_SECRET: randomBytes(32).toString('hex'), NODE_CONTROL_SECRET: randomBytes(32).toString('hex'), ORIGIN_SECRET: randomBytes(32).toString('hex'), tunnels: {}}; }
 if (state.accountId !== cfg.CLOUDFLARE_ACCOUNT_ID || state.zoneId !== cfg.CLOUDFLARE_ZONE_ID || state.baseDomain !== cfg.BASE_DOMAIN) throw new Error('configuration_conflict');
 state.AI_RECOVERY_SECRET ||= randomBytes(32).toString('hex');
+state.ROUTING_CONTROL_SECRET ||= randomBytes(32).toString('hex');
 await write('state.json', JSON.stringify(state));
 const api = async (method, resource, body) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4${resource}`, {method, headers: {authorization: `Bearer ${cfg.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});
@@ -99,9 +100,10 @@ const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026
 await write('provisioning.json', JSON.stringify({...common, ai: {binding: 'AI'}, vars: {...vars, AI_RECOVERY_ENABLED: String(aiEnabled), AI_MAX_CALLS_PER_DAY: String(aiLimit)}, triggers: {crons: ['0 */6 * * *']}, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}, {name: 'RECOVERY', class_name: 'Recovery'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}, {tag: 'v3', new_sqlite_classes: ['Recovery']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
 const routes = [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];
 if (customDomains) routes.push({pattern: '*/*', zone_id: cfg.CLOUDFLARE_ZONE_ID});
-await write('routing.json', JSON.stringify({...common, name: routingWorkerName, main: '../workers/routing.js', workers_dev: false, routes, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}, {name: 'DOMAINS', class_name: 'Domains', script_name: 'spartan-provisioning'}]}}));
+await write('routing.json', JSON.stringify({...common, name: routingWorkerName, main: '../workers/routing.js', workers_dev: true, routes, triggers: {crons: ['0 */6 * * *']}, migrations: [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}], durable_objects: {bindings: [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]}}));
 await write('provisioning.secrets.json', JSON.stringify({AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
-await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET}));
+await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET, ROUTING_CONTROL_SECRET: state.ROUTING_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
+await write('routing.env', `ROUTING_CONTROL_SECRET=${state.ROUTING_CONTROL_SECRET}\nSPARTAN_ROUTING_URL=CHANGE_ME\n`);
 await write('billing.env', `BILLING_WEBHOOK_SECRET=${state.BILLING_WEBHOOK_SECRET}\nSPARTAN_PROVISION_URL=CHANGE_ME\n`);
 await write('state.json', JSON.stringify(state));
 await mkdir(path.resolve('workers'), {recursive: true});

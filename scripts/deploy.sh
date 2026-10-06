@@ -4,7 +4,9 @@ cd "$(dirname "$0")/.."
 set -a
 source .env
 set +a
-npx wrangler deploy --config workers/wrangler.provisioning.toml
-npx wrangler secret bulk generated/provisioning.secrets.json --config workers/wrangler.provisioning.toml
+if [ "${DEPLOY_PROVISIONING_WORKER:-false}" = true ]; then
+  npx wrangler deploy --config workers/wrangler.provisioning.toml
+  npx wrangler secret bulk generated/provisioning.secrets.json --config workers/wrangler.provisioning.toml
+fi
 npx wrangler deploy --config workers/wrangler.toml
 npx wrangler secret bulk generated/routing.secrets.json --config workers/wrangler.toml

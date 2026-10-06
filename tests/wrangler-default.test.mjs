@@ -12,6 +12,10 @@ test('default Cloudflare build selects routing and does not force a placeholder 
   assert.equal(routing.name, 'dezerx-spartant-cloud');
   assert.equal(routing.main, 'routing.js');
   assert.equal('account_id' in routing, false);
+  assert.equal(routing.workers_dev, true);
+  assert.equal('routes' in routing, false);
+  assert.deepEqual(routing.durable_objects.bindings, [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]);
+  assert.deepEqual(routing.migrations, [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}]);
   assert.equal('queues' in routing, false);
   assert.equal('ai' in routing, false);
   const provisioning = configs['wrangler.provisioning.toml'];

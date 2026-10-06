@@ -1,0 +1,13 @@
+import {signature} from '../workers/shared.js';
+const [id, serviceId, customerId, primary, status, revision] = process.argv.slice(2);
+const lifecycleVersion = Number(revision);
+if (!/^t-[a-f0-9]{24}$/.test(id || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(serviceId || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(customerId || '') || !['us', 'de'].includes(primary) || !['pending', 'ready', 'active', 'suspended', 'terminated'].includes(status) || revision === undefined || !Number.isSafeInteger(lifecycleVersion) || lifecycleVersion < 0) throw new Error('invalid_route');
+if (!process.env.SPARTAN_ROUTING_URL || !process.env.ROUTING_CONTROL_SECRET || process.env.ROUTING_CONTROL_SECRET.length < 32) throw new Error('routing_configuration_required');
+const path = '/v1/routing/instances';
+const url = new URL(path, process.env.SPARTAN_ROUTING_URL);
+if (url.protocol !== 'https:') throw new Error('https_required');
+const body = JSON.stringify({id, serviceId, customerId, primary, status, lifecycleVersion});
+const timestamp = String(Date.now());
+const response = await fetch(url, {method: 'POST', body, redirect: 'manual', headers: {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': await signature(process.env.ROUTING_CONTROL_SECRET, timestamp, 'POST', path, body)}});
+console.log(await response.text());
+if (!response.ok) process.exitCode = 1;

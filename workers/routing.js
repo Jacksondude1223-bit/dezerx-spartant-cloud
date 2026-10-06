@@ -1,9 +1,21 @@
 import {ID, json, region, visitorIp} from './shared.js';
+import {routingControl} from './routing-registry.js';
+export {RoutingTenant} from './routing-registry.js';
+export {Domains} from './domains.js';
 
 export default {
+  async scheduled(event, env) {
+    const response = await env.DOMAINS.getByName('registry').fetch('https://domains/monitor', {method: 'POST', body: '{}'});
+    if (!response.ok) throw new Error('domain_monitor_failed');
+  },
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
+      const controlHost = url.hostname === env.BASE_DOMAIN || url.hostname === env.ROUTING_API_HOSTNAME || url.hostname.endsWith('.workers.dev');
+      if (controlHost && url.pathname.startsWith('/v1/routing/')) {
+        if (url.protocol !== 'https:') return json({error: 'https_required'}, 400);
+        return await routingControl(request, env);
+      }
       let id;
       if (url.hostname.endsWith(`.${env.BASE_DOMAIN}`)) id = url.hostname.slice(0, -env.BASE_DOMAIN.length - 1);
       else {
