@@ -17,6 +17,8 @@ export default {
       const state = await env.TENANTS.getByName(id).fetch('https://tenant/status');
       if (!state.ok) return json({error: 'not_found'}, 404);
       const record = await state.json();
+      if (['suspended', 'suspending'].includes(record.status)) return json({error: 'service_suspended'}, 403);
+      if (['terminated', 'terminating'].includes(record.status)) return json({error: 'service_terminated'}, 410);
       if (record.status !== 'ready') return json({error: 'provisioning'}, 503);
       const ip = visitorIp(request.headers);
       if (!ip) return json({error: 'client_ip_unavailable'}, 503);

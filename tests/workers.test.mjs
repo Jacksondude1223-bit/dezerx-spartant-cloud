@@ -187,3 +187,90 @@ test('routing captures original IPv6 before Cloudflare changes headers on an ori
     assert.equal(calls, 1);
   } finally { globalThis.fetch = previous; }
 });
+
+async function serviceStatus(env, status) {
+  return provisioning.fetch(await signed('POST', '/v1/services/status', JSON.stringify({serviceId: 'service_123', status})), env);
+}
+async function consume(env, id, expectRetry = false) {
+  let acknowledged = false;
+  let retried = false;
+  await provisioning.queue({messages: [{body: {id}, ack() { acknowledged = true; }, retry() { retried = true; }}]}, env);
+  assert.equal(retried, expectRetry);
+  assert.equal(acknowledged, !expectRetry);
+}
+test('suspension blocks routing immediately, stops both nodes and prevents queued reprovisioning', async () => {
+  const {env, tenants} = fixture();
+  const record = await (await reserve(env)).json();
+  await tenants.get(record.id).fetch('https://tenant/complete', {method: 'POST'});
+  assert.equal((await serviceStatus(env, 'suspended')).status, 202);
+  assert.equal((await routing.fetch(new Request(record.url), env)).status, 403);
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push({url, input: JSON.parse(init.body)});
+    return Response.json({status: 'suspended'});
+  };
+  try {
+    await consume(env, record.id);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(call => new URL(call.url).pathname === '/control/lifecycle' && call.input.action === 'suspended' && call.input.lifecycleVersion === 1));
+    assert.equal(tenants.get(record.id).values.get('record').status, 'suspended');
+    await consume(env, record.id);
+    await tenants.get(record.id).tenant.alarm();
+    assert.equal(calls.length, 2);
+    assert.equal((await serviceStatus(env, 'suspended')).status, 200);
+  } finally { globalThis.fetch = previous; }
+});
+test('partial node failure retries the lifecycle action instead of provisioning', async () => {
+  const {env, tenants} = fixture();
+  const record = await (await reserve(env)).json();
+  await serviceStatus(env, 'terminated');
+  const previous = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => { calls.push(url); return new URL(url).host.startsWith('us.') ? Response.json({status: 'terminated'}) : new Response('', {status: 503}); };
+  try {
+    await consume(env, record.id, true);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(url => new URL(url).pathname === '/control/lifecycle'));
+    assert.equal(tenants.get(record.id).values.get('record').status, 'terminating');
+    assert.ok(tenants.get(record.id).values.get('alarm'));
+  } finally { globalThis.fetch = previous; }
+});
+test('termination is permanent and resumed suspensions require a newer lifecycle version', async () => {
+  const {env, tenants} = fixture();
+  const record = await (await reserve(env)).json();
+  await serviceStatus(env, 'suspended');
+  const resumed = await (await serviceStatus(env, 'active')).json();
+  assert.equal(resumed.lifecycleVersion, 2);
+  assert.equal(resumed.status, 'pending');
+  assert.equal((await tenants.get(record.id).fetch('https://tenant/complete', {method: 'POST', body: JSON.stringify({lifecycleVersion: 0})})).status, 409);
+  await serviceStatus(env, 'terminated');
+  assert.equal((await serviceStatus(env, 'active')).status, 409);
+  assert.equal((await routing.fetch(new Request(record.url), env)).status, 410);
+  assert.equal((await tenants.get(record.id).fetch('https://tenant/complete', {method: 'POST', body: JSON.stringify({lifecycleVersion: 2})})).status, 409);
+});
+test('lifecycle API requires a signature and refuses unknown or invalid services', async () => {
+  const {env} = fixture();
+  assert.equal((await provisioning.fetch(new Request('https://worker/v1/services/status', {method: 'POST', body: JSON.stringify({serviceId: 'service_123', status: 'terminated'})}), env)).status, 401);
+  assert.equal((await serviceStatus(env, 'terminated')).status, 404);
+  await reserve(env);
+  assert.equal((await serviceStatus(env, 'delete_everything')).status, 400);
+});
+
+test('suspension arriving during provisioning cannot be overwritten by late completion', async () => {
+  const {env, tenants} = fixture();
+  const record = await (await reserve(env)).json();
+  const previous = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    if (calls === 1) await serviceStatus(env, 'suspended');
+    return Response.json({status: 'ready'});
+  };
+  try {
+    await consume(env, record.id, true);
+    assert.equal(tenants.get(record.id).values.get('record').status, 'suspending');
+    assert.equal(tenants.get(record.id).values.get('record').lifecycleVersion, 1);
+    assert.equal((await routing.fetch(new Request(record.url), env)).status, 403);
+  } finally { globalThis.fetch = previous; }
+});

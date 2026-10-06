@@ -18,6 +18,7 @@ test -s /etc/spartan-cloud/laravel-env.json || printf '{}\n' > /etc/spartan-clou
 install -m 644 node/admin-validation.mjs /opt/spartan-cloud/admin-validation.mjs
 install -m 644 node/initial-admin.mjs /opt/spartan-cloud/initial-admin.mjs
 install -m 644 node/client-ip.mjs /opt/spartan-cloud/client-ip.mjs
+install -m 644 node/service-lifecycle.mjs /opt/spartan-cloud/service-lifecycle.mjs
 install -m 644 node/agent.mjs /opt/spartan-cloud/agent.mjs
 install -m 644 node/recovery-policy.mjs /opt/spartan-cloud/recovery-policy.mjs
 install -m 644 node/recovery.mjs /opt/spartan-cloud/recovery.mjs

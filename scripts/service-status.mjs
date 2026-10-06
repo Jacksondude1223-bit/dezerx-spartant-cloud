@@ -1,0 +1,10 @@
+import {signature} from '../workers/shared.js';
+const [serviceId, status] = process.argv.slice(2);
+if (!/^[A-Za-z0-9_-]{1,100}$/.test(serviceId || '') || !['active', 'suspended', 'terminated'].includes(status)) throw new Error('invalid_service_status');
+if (!process.env.SPARTAN_PROVISION_URL || !process.env.BILLING_WEBHOOK_SECRET) throw new Error('billing_configuration_required');
+const path = '/v1/services/status';
+const body = JSON.stringify({serviceId, status});
+const timestamp = String(Date.now());
+const response = await fetch(new URL(path, process.env.SPARTAN_PROVISION_URL), {method: 'POST', body, headers: {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': await signature(process.env.BILLING_WEBHOOK_SECRET, timestamp, 'POST', path, body)}});
+console.log(await response.text());
+if (!response.ok) process.exitCode = 1;

@@ -29,11 +29,13 @@ test('node agent authenticates control requests and proxies only the correct ten
 const fs=require('node:fs');
 const args=process.argv.slice(2);
 const file=process.env.FAKE_STATE;
-if(args[0]==='inspect'){if(!fs.existsSync(file))process.exit(1); console.log(fs.readFileSync(file,'utf8'));}
+if(args[0]==='inspect'){if(!fs.existsSync(file)){console.error('No such object');process.exit(1);} console.log(fs.readFileSync(file,'utf8'));}
 if(args[0]==='exec' && args.some(x=>x.endsWith('/cloud-create-admin'))){ process.stdin.resume(); let value=''; process.stdin.on('data', chunk=>value+=chunk); process.stdin.on('end', ()=>{const admin=JSON.parse(value); if(admin.email!=='owner@example.test'||admin.password!=='Chosen-password!') process.exit(1); fs.appendFileSync(process.env.ADMIN_CALLS,'created\\n');}); }
+if(args[0]==='stop'||args[0]==='start'){const state=JSON.parse(fs.readFileSync(file,'utf8'));state[0].State.Running=args[0]==='start';fs.writeFileSync(file,JSON.stringify(state));}
+if(args[0]==='rm'){fs.unlinkSync(file);}
 if(args[0]==='run'){
  const label=args.find(x=>x.startsWith('spartan.fingerprint='));
- const result=[{Config:{Labels:{'spartan.fingerprint':label.split('=')[1]}},State:{Running:true},NetworkSettings:{Ports:{'8080/tcp':[{HostPort:process.env.FAKE_PORT}]}}}];
+ const result=[{Config:{Labels:{'spartan.fingerprint':label.split('=')[1], 'spartan.managed':'true', 'spartan.tenant':args.find(x=>x.startsWith('spartan.tenant=')).split('=')[1]}},State:{Running:true},NetworkSettings:{Ports:{'8080/tcp':[{HostPort:process.env.FAKE_PORT}]}}}];
  fs.writeFileSync(file,JSON.stringify(result));console.log('container');
 }
 `;
@@ -87,6 +89,21 @@ if(args[0]==='run'){
     const alias = await fetch(`${origin}/tenant/${id}/billing`, {headers});
     assert.equal(await alias.text(), 'tenant-app');
     assert.equal(requests.at(-1).host, 'billing.customer.test');
+    const lifecycle = async (action, lifecycleVersion) => {
+      const payload = JSON.stringify({id, fingerprint: input.fingerprint, action, lifecycleVersion});
+      const stamp = String(Date.now());
+      return fetch(`${origin}/control/lifecycle`, {method: 'POST', body: payload, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', '/control/lifecycle', payload)}});
+    };
+    assert.equal((await lifecycle('suspended', 1)).status, 200);
+    assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
+    assert.equal((await send()).status, 503);
+    body = JSON.stringify({...input, lifecycleVersion: 2});
+    assert.equal((await send()).status, 200);
+    assert.equal((await readFile(path.join(dir, 'admin-calls'), 'utf8')).trim(), 'created');
+    assert.equal((await lifecycle('terminated', 3)).status, 200);
+    body = JSON.stringify({...input, lifecycleVersion: 4});
+    assert.equal((await send()).status, 503);
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8')).status, 'terminated');
   } finally {
     agent.kill('SIGTERM');
     await new Promise(resolve => agent.once('exit', resolve));

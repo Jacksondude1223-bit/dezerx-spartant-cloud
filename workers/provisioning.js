@@ -14,11 +14,12 @@ export class Tenant {
       {
         const existing = await this.ctx.storage.get('record');
         if (existing) {
+          if (existing.desiredStatus === 'terminated') return json({error: 'service_terminated'}, 409);
           if (existing.fingerprint !== input.fingerprint) return json({error: 'service_conflict'}, 409);
           return json(this.public(existing), existing.status === 'ready' ? 200 : 202);
         }
         const key = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))));
-        const record = {...input, appKey: `base64:${key}`, status: 'pending', createdAt: new Date().toISOString(), attempts: 0};
+        const record = {...input, appKey: `base64:${key}`, status: 'pending', desiredStatus: 'active', lifecycleVersion: 0, createdAt: new Date().toISOString(), attempts: 0};
         await this.ctx.storage.transaction(async tx => {
           await tx.put('record', record);
           await tx.setAlarm(Date.now() + 1000);
@@ -29,25 +30,47 @@ export class Tenant {
     const record = await this.ctx.storage.get('record');
     if (!record) return json({error: 'not_found'}, 404);
     if (path === '/internal') return json(record);
-    if (path === '/complete' && request.method === 'POST') {
+    if (path === '/lifecycle' && request.method === 'POST') {
+      const input = await request.json();
+      if (!['active', 'suspended', 'terminated'].includes(input.status)) return json({error: 'invalid_service_status'}, 400);
+      if (input.serviceId && input.serviceId !== record.serviceId) return json({error: 'service_conflict'}, 409);
+      const desired = record.desiredStatus || 'active';
+      if (desired === 'terminated' && input.status !== 'terminated') return json({error: 'service_terminated'}, 409);
+      if (desired === input.status) return json(this.public(record), ['ready', 'suspended', 'terminated'].includes(record.status) ? 200 : 202);
+      const updated = {...record, desiredStatus: input.status, lifecycleVersion: (record.lifecycleVersion || 0) + 1, status: input.status === 'active' ? 'pending' : input.status === 'suspended' ? 'suspending' : 'terminating', lastError: undefined};
+      if (input.status === 'terminated') delete updated.initialAdminEncrypted;
+      await this.ctx.storage.transaction(async tx => { await tx.put('record', updated); await tx.setAlarm(Date.now() + 1000); });
+      return json(this.public(updated), 202);
+    }
+    if (path === '/lifecycle-complete' && request.method === 'POST') {
+      const input = await request.json();
+      if (input.lifecycleVersion !== (record.lifecycleVersion || 0) || input.status !== record.desiredStatus || !['suspended', 'terminated'].includes(input.status)) return json({error: 'stale_operation'}, 409);
+      await this.ctx.storage.put('record', {...record, status: input.status, updatedAt: new Date().toISOString()});
+      await this.ctx.storage.deleteAlarm();
+      return json({ok: true});
+    }
+    if (path === '/complete'  && request.method === 'POST') {
+      const input = await request.json().catch(() => ({}));
+      if ((record.desiredStatus || 'active') !== 'active' || (input.lifecycleVersion || 0) !== (record.lifecycleVersion || 0)) return json({error: 'stale_operation'}, 409);
       const {initialAdminEncrypted, ...completed} = record;
       await this.ctx.storage.put('record', {...completed, status: 'ready', readyAt: new Date().toISOString()});
       await this.ctx.storage.deleteAlarm();
       return json({ok: true});
     }
     if (path === '/failure' && request.method === 'POST') {
-      const {error} = await request.json();
+      const {error, lifecycleVersion = 0} = await request.json();
+      if (lifecycleVersion !== (record.lifecycleVersion || 0)) return json({ok: true});
       if (record.status !== 'ready') await this.ctx.storage.put('record', {...record, lastError: error});
       return json({ok: true});
     }
     return json(this.public(record));
   }
   public(record) {
-    return {id: record.id, serviceId: record.serviceId, primary: record.primary, status: record.status, url: record.url, createdAt: record.createdAt, readyAt: record.readyAt};
+    return {id: record.id, serviceId: record.serviceId, primary: record.primary, status: record.status, desiredStatus: record.desiredStatus || 'active', lifecycleVersion: record.lifecycleVersion || 0, url: record.url, createdAt: record.createdAt, readyAt: record.readyAt};
   }
   async alarm() {
     const record = await this.ctx.storage.get('record');
-    if (!record || record.status === 'ready') return;
+    if (!record || ['ready', 'suspended', 'terminated'].includes(record.status)) return;
     await this.ctx.storage.setAlarm(Date.now() + 300000);
     await this.ctx.storage.put('record', {...record, attempts: record.attempts + 1});
     await this.env.PROVISION_QUEUE.send({id: record.id});
@@ -68,6 +91,14 @@ export default {
         return env.RECOVERY.getByName('global-budget').fetch('https://recovery/choose', {method: 'POST', body});
       }
       if (!await verify(request, body, env.BILLING_WEBHOOK_SECRET)) return json({error: 'unauthorized'}, 401);
+      if (request.method === 'POST' && url.pathname === '/v1/services/status') {
+        const input = JSON.parse(body);
+        if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.serviceId || '') || !['active', 'suspended', 'terminated'].includes(input.status)) return json({error: 'invalid_service_status'}, 400);
+        const id = `t-${(await digest(input.serviceId)).slice(0, 24)}`;
+        return env.TENANTS.getByName(id).fetch('https://tenant/lifecycle', {method: 'POST', body: JSON.stringify(input)});
+      }
+      const lifecycle = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/lifecycle$/);
+      if (request.method === 'POST' && lifecycle) return env.TENANTS.getByName(lifecycle[1]).fetch('https://tenant/lifecycle', {method: 'POST', body});
       const domain = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/domains\/(reserve|verify|status|delete)$/);
       if (request.method === 'POST' && domain) {
         const input = JSON.parse(body);
@@ -99,21 +130,33 @@ export default {
       const id = message.body.id;
       if (!ID.test(id || '')) { message.ack(); continue; }
       const stub = env.TENANTS.getByName(id);
+      let operationVersion = 0;
       try {
         const response = await stub.fetch('https://tenant/internal');
         if (!response.ok) { message.ack(); continue; }
         const record = await response.json();
-        if (record.status === 'ready') { message.ack(); continue; }
+        operationVersion = record.lifecycleVersion || 0;
+        if (['ready', 'suspended', 'terminated'].includes(record.status)) { message.ack(); continue; }
+        if (['suspended', 'terminated'].includes(record.desiredStatus)) {
+          const input = {id, fingerprint: record.fingerprint, lifecycleVersion: record.lifecycleVersion || 0, action: record.desiredStatus};
+          const results = await Promise.allSettled(['us', 'de'].map(region => nodeCall(env, region, '/control/lifecycle', input)));
+          if (results.some(result => result.status !== 'fulfilled' || result.value.status !== record.desiredStatus)) throw new Error('lifecycle_node_failed');
+          const completed = await stub.fetch('https://tenant/lifecycle-complete', {method: 'POST', body: JSON.stringify({status: record.desiredStatus, lifecycleVersion: record.lifecycleVersion || 0})});
+          if (!completed.ok) throw new Error('stale_operation');
+          message.ack();
+          continue;
+        }
         const {initialAdminEncrypted, ...replicaRecord} = record;
         const primaryRecord = {...replicaRecord, ...(initialAdminEncrypted ? {initialAdmin: await openAdmin(initialAdminEncrypted, env.NODE_CONTROL_SECRET)} : {})};
         const primary = await nodeCall(env, record.primary, '/control/provision', primaryRecord);
         if (primary.status !== 'ready') throw new Error('primary_not_ready');
         const secondary = await nodeCall(env, record.primary === 'us' ? 'de' : 'us', '/control/provision', replicaRecord);
         if (secondary.status !== 'ready') throw new Error('secondary_not_ready');
-        await stub.fetch('https://tenant/complete', {method: 'POST'});
+        const completed = await stub.fetch('https://tenant/complete', {method: 'POST', body: JSON.stringify({lifecycleVersion: record.lifecycleVersion || 0})});
+        if (!completed.ok) throw new Error('stale_operation');
         message.ack();
       } catch (error) {
-        await stub.fetch('https://tenant/failure', {method: 'POST', body: JSON.stringify({error: String(error.message).slice(0, 120)})});
+        await stub.fetch('https://tenant/failure', {method: 'POST', body: JSON.stringify({error: String(error.message).slice(0, 120), lifecycleVersion: operationVersion})});
         message.retry({delaySeconds: 60});
       }
     }

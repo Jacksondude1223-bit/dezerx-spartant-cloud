@@ -1,5 +1,6 @@
 import http from 'node:http';
 import {isIP} from 'node:net';
+import {applyLifecycle} from './service-lifecycle.mjs';
 import {proxyHeaders} from './client-ip.mjs';
 import https from 'node:https';
 import {createHmac, timingSafeEqual, randomUUID} from 'node:crypto';
@@ -55,7 +56,12 @@ async function provisionOnce(input, progress) {
   if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) throw new Error('invalid_initial_admin');
   const {initialAdmin, ...persistedInput} = input;
   const existing = await load(id);
-  if (existing && (existing.fingerprint !== fingerprint || existing.appKey !== appKey || existing.primary !== primary)) throw new Error('tenant_conflict');
+  persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
+  const version = input.lifecycleVersion || 0;
+  if (!Number.isSafeInteger(version) || version < 0) throw new Error('invalid_input');
+  if (existing?.status === 'terminated') throw new Error('service_terminated');
+  if (version < (existing?.lifecycleVersion || 0) || existing?.status === 'suspended' && version <= (existing.lifecycleVersion || 0)) throw new Error('stale_operation');
+  if (existing && (existing.fingerprint !== fingerprint || existing.appKey && existing.appKey !== appKey || existing.primary && existing.primary !== primary)) throw new Error('tenant_conflict');
   const directory = path.join(root, id);
   await mkdir(directory, {recursive: true, mode: 0o700});
   const role = primary === cfg.NODE_REGION ? 'primary' : 'secondary';
@@ -86,6 +92,7 @@ async function provisionOnce(input, progress) {
     await docker(['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/database,dst=/var/www/html/database/persistent`, '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, cfg.SPARTAN_IMAGE]);
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
+    if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
     if (!inspect.State.Running) { progress.stage = 'start'; await docker(['start', container(id)]); }
   }
   inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
@@ -97,9 +104,10 @@ async function provisionOnce(input, progress) {
     try {
       const health = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
       if (health.ok) {
-        if (role === 'primary' && initialAdmin && existing?.status !== 'ready') {
+        if (role === 'primary' && initialAdmin && !persistedInput.adminInitialized) {
           progress.stage = 'initial_admin';
           await createInitialAdmin(id, initialAdmin);
+          persistedInput.adminInitialized = true;
         }
         await save({...persistedInput, role, port: assignedPort, status: 'ready'});
         await recovery.success(id).catch(() => {});
@@ -122,7 +130,7 @@ async function provision(input) {
       if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
       if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
     } catch (error) {
-      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed'].includes(error.message)) throw error;
+      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
       if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
     }
   }
@@ -183,15 +191,14 @@ async function control(req, res, url) {
   const timestamp = req.headers['x-spartan-timestamp'];
   const expected = createHmac('sha256', cfg.NODE_CONTROL_SECRET).update(`${timestamp}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex');
   if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) return reply(res, 401, {error: 'unauthorized'});
-  if (url.pathname !== '/control/provision') return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
-  if (!jobs.has(input.id)) {
-    const job = provision(input).finally(() => jobs.delete(input.id));
-    jobs.set(input.id, job);
-  }
-  const result = await jobs.get(input.id);
-  reply(res, 200, result);
+  const previous = jobs.get(input.id) || Promise.resolve();
+  const job = previous.catch(() => {}).then(() => url.pathname === '/control/lifecycle' ? applyLifecycle(input, {root, load, save, docker}) : provision(input));
+  jobs.set(input.id, job);
+  try { const result = await job; reply(res, 200, result); }
+  finally { if (jobs.get(input.id) === job) jobs.delete(input.id); }
 }
 async function target(req) {
   if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET) || typeof req.headers['x-spartan-client-ip'] !== 'string' || !isIP(req.headers['x-spartan-client-ip'])) return null;

@@ -18,6 +18,14 @@ final class SpartanCloudProvisioner
         return $this->request('POST', '/v1/instances', json_encode(['serviceId' => $paidServiceId, 'customerId' => $customerId, 'primary' => $primary, ...($initialAdmin === null ? [] : ['initialAdmin' => $initialAdmin])], JSON_THROW_ON_ERROR));
     }
 
+    public function setServiceStatus(string $paidServiceId, string $status): array
+    {
+        if (!preg_match('/^[A-Za-z0-9_-]{1,100}$/', $paidServiceId) || !in_array($status, ['active', 'suspended', 'terminated'], true)) {
+            throw new InvalidArgumentException('invalid_service_status');
+        }
+        return $this->request('POST', '/v1/services/status', json_encode(['serviceId' => $paidServiceId, 'status' => $status], JSON_THROW_ON_ERROR));
+    }
+
     public function status(string $id): array
     {
         if (!preg_match('/^t-[a-f0-9]{24}$/', $id)) {
