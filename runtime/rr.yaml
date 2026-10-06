@@ -1,0 +1,17 @@
+version: "3"
+server:
+  command: "php vendor/bin/roadrunner-worker"
+  relay: pipes
+rpc:
+  listen: tcp://127.0.0.1:6001
+http:
+  address: 127.0.0.1:8000
+  middleware: []
+  pool:
+    num_workers: 2
+    max_jobs: 500
+logs:
+  mode: production
+  level: warn
+  output: stdout
+  encoding: json

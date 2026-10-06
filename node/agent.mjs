@@ -70,7 +70,7 @@ async function provisionOnce(input, progress) {
     await mkdir(dir, {recursive: true, mode: 0o700});
     await run('chown', ['-R', '33:33', dir]);
   }
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', APP_KEY: appKey, APP_URL: url, ASSET_URL: url, LOG_CHANNEL: 'stderr', DB_CONNECTION: 'sqlite', DB_DATABASE: '/var/www/html/database/persistent/database.sqlite', DB_FOREIGN_KEYS: 'true', SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: url, ASSET_URL: url, LOG_CHANNEL: 'stderr', DB_CONNECTION: 'sqlite', DB_DATABASE: '/var/www/html/database/persistent/database.sqlite', DB_FOREIGN_KEYS: 'true', SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');

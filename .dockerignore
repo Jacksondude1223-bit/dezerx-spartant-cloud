@@ -3,6 +3,8 @@
 !app/**
 !runtime
 !runtime/**
+!tests
+!tests/runtime_octane_test.php
 app/.env
 app/.env.*
 app/.git
