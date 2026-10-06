@@ -8,6 +8,7 @@ import {createReadStream, createWriteStream} from 'node:fs';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import path from 'node:path';
+import {createRecovery} from './recovery.mjs';
 
 const run = promisify(execFile);
 const cfg = process.env;
@@ -28,6 +29,10 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const equal = (left, right) => typeof left === 'string' && typeof right === 'string' && Buffer.byteLength(left) === Buffer.byteLength(right) && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const reply = (res, status, payload) => { res.writeHead(status, {'content-type': 'application/json', 'cache-control': 'no-store'}); res.end(JSON.stringify(payload)); };
 const docker = async args => (await run('docker', args, {timeout: 120000, maxBuffer: 1024 * 1024})).stdout.trim();
+const recovery = createRecovery({config: cfg, root, docker: async args => {
+  const result = await run('docker', args, {timeout: 20000, maxBuffer: 1024 * 1024});
+  return args[0] === 'logs' ? `${result.stdout}\n${result.stderr}` : result.stdout.trim();
+}, run});
 const stateFile = id => path.join(root, id, 'state.json');
 async function load(id) {
   if (!validId(id)) throw new Error('invalid_id');
@@ -40,7 +45,8 @@ async function save(record) {
   await writeFile(temp, JSON.stringify(record), {mode: 0o600});
   await rename(temp, dest);
 }
-async function provision(input) {
+async function provisionOnce(input, progress) {
+  progress.stage = 'prepare';
   const {id, primary, appKey, url, fingerprint} = input;
   if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || url !== `https://${id}.${cfg.BASE_DOMAIN}` || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
   const existing = await load(id);
@@ -69,21 +75,26 @@ async function provision(input) {
   if (!inspect) {
     const count = (await readdir(root)).filter(validId).length;
     if (count > Number(cfg.MAX_TENANTS || 100)) throw new Error('node_capacity');
+    progress.stage = 'pull';
     await docker(['pull', cfg.SPARTAN_IMAGE]);
+    progress.stage = 'launch';
     await docker(['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/database,dst=/var/www/html/database/persistent`, '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, cfg.SPARTAN_IMAGE]);
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
-    if (!inspect.State.Running) await docker(['start', container(id)]);
+    if (!inspect.State.Running) { progress.stage = 'start'; await docker(['start', container(id)]); }
   }
   inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
   const assignedPort = Number(inspect.NetworkSettings.Ports['8080/tcp']?.[0]?.HostPort);
   if (!assignedPort) throw new Error('missing_port');
   await save({...input, role, port: assignedPort, status: 'provisioning'});
+  progress.stage = 'health';
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
       const health = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
       if (health.ok) {
         await save({...input, role, port: assignedPort, status: 'ready'});
+        await recovery.success(id).catch(() => {});
+        progress.stage = 'replica';
         if (role === 'secondary') await synchronize(id);
         return {id, status: 'ready', role};
       }
@@ -91,6 +102,22 @@ async function provision(input) {
     await sleep(1000);
   }
   return {id, status: 'provisioning', role};
+}
+async function provision(input) {
+  const before = validId(input.id) ? await load(input.id) : null;
+  const mayRecover = !before || before.status !== 'ready';
+  const progress = {stage: 'prepare'};
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const result = await provisionOnce(input, progress);
+      if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
+      if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
+    } catch (error) {
+      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env'].includes(error.message)) throw error;
+      if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
+    }
+  }
+  throw new Error('recovery_exhausted');
 }
 async function synchronize(id) {
   if (syncJobs.has(id)) return syncJobs.get(id);

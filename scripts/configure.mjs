@@ -56,6 +56,9 @@ for (const location of ['us', 'de']) {
   await write(`${location}.tunnel-token`, token);
   await dns(hostname, `${tunnel.id}.cfargotunnel.com`);
   const env = {NODE_REGION: location, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ORIGIN_SECRET: state.ORIGIN_SECRET, BASE_DOMAIN: cfg.BASE_DOMAIN, SPARTAN_IMAGE: cfg.SPARTAN_IMAGE, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', TENANT_CPUS: cfg.TENANT_CPUS || '1', TENANT_MEMORY: cfg.TENANT_MEMORY || '512m', MAX_TENANTS: cfg.MAX_TENANTS || '100', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
+  Object.assign(env, {GEMINI_RECOVERY_ENABLED: cfg.GEMINI_RECOVERY_ENABLED || 'false', GEMINI_FREE_TIER_CONFIRMED: cfg.GEMINI_FREE_TIER_CONFIRMED || 'false', GEMINI_MAX_CALLS_PER_DAY: cfg.GEMINI_MAX_CALLS_PER_DAY || '10'});
+  if (cfg.GEMINI_API_KEY && !cfg.GEMINI_API_KEY.includes('CHANGE_ME')) env.GEMINI_API_KEY = cfg.GEMINI_API_KEY;
+  if (Object.values(env).some(value => /[\r\n]/.test(value))) throw new Error('invalid_node_environment');
   await write(`${location}.env`, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');
 }
 await dns(`*.${cfg.BASE_DOMAIN}`, `${state.tunnels.us.id}.cfargotunnel.com`);
