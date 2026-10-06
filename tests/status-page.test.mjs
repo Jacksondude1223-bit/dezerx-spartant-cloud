@@ -51,3 +51,30 @@ test('request metadata is escaped in HTML and HEAD responses have no body', asyn
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
 });
+
+test('unmapped custom hostnames display the landing page instead of raw JSON', async () => {
+  const unmapped = {...env, DOMAINS: {getByName() { return {async fetch() { return Response.json({error: 'not_found'}, {status: 404}); }}; }}};
+  const response = await routing.fetch(new Request('https://custom.provider.test/', {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.22'}}), unmapped);
+  assert.equal(response.status, 404);
+  assert.equal(response.headers.get('x-spartan-page'), 'routing-status-v1');
+  const html = await response.text();
+  assert.ok(html.includes('custom.provider.test'));
+  assert.ok(html.includes('198.51.100.22'));
+  assert.ok(html.includes('Jokes on you'));
+  const refresh = await routing.fetch(new Request('https://custom.provider.test/__routing_status', {headers: {'cf-connecting-ip': '198.51.100.22'}}), unmapped);
+  assert.equal((await refresh.json()).hostname, 'custom.provider.test');
+  const api = await routing.fetch(new Request('https://custom.provider.test/unknown-api', {method: 'POST', body: '{}'}), unmapped);
+  assert.equal(api.status, 404);
+  assert.deepEqual(await api.json(), {error: 'not_found'});
+});
+
+test('browser requests for registered customer homepages still reach their own panel', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const id = 't-' + 'c'.repeat(24);
+  const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', TENANTS: {getByName(received) { assert.equal(received, id); return {async fetch() { return Response.json({status: 'ready'}); }}; }}};
+  globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/`); return new Response('customer-panel'); };
+  const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/`, {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.22'}}), configured);
+  assert.equal(await response.text(), 'customer-panel');
+  assert.equal(response.headers.has('x-spartan-page'), false);
+});
