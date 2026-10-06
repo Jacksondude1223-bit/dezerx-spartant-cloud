@@ -1,6 +1,5 @@
-account_id = "CHANGE_ME"
 compatibility_date = "2026-10-01"
-name = "spartan-routing"
+name = "dezerx-spartant-cloud"
 main = "routing.js"
 workers_dev = false
 

@@ -1,0 +1,62 @@
+compatibility_date = "2026-10-01"
+name = "spartan-provisioning"
+main = "provisioning.js"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[vars]
+MAX_CUSTOM_HOSTNAMES = "30"
+BASE_DOMAIN = "cloud.example.com"
+US_ORIGIN = "https://node-us.example.com"
+DE_ORIGIN = "https://node-de.example.com"
+CLOUDFLARE_ZONE_ID = "CHANGE_ME"
+SAAS_ZONE_DOMAIN = "example.com"
+SAAS_CNAME_TARGET = "cloud.example.com"
+AI_RECOVERY_ENABLED = "true"
+AI_MAX_CALLS_PER_DAY = "10"
+
+[ai]
+binding = "AI"
+
+[triggers]
+crons = ["0 */6 * * *"]
+
+[durable_objects]
+
+[[durable_objects.bindings]]
+name = "TENANTS"
+class_name = "Tenant"
+
+[[durable_objects.bindings]]
+name = "DOMAINS"
+class_name = "Domains"
+
+[[durable_objects.bindings]]
+name = "RECOVERY"
+class_name = "Recovery"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Tenant"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Domains"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["Recovery"]
+
+[queues]
+
+[[queues.producers]]
+binding = "PROVISION_QUEUE"
+queue = "spartan-provision"
+
+[[queues.consumers]]
+queue = "spartan-provision"
+max_batch_size = 1
+max_retries = 5
+dead_letter_queue = "spartan-provision-dead"

@@ -25,7 +25,7 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     };`);
     await exec(process.execPath, ['--import', path.join(directory, 'mock.mjs'), '--input-type=module', '-e', `await import(${JSON.stringify(configure)})`], {cwd: directory});
     const worker = JSON.parse(await readFile(path.join(directory, 'generated/provisioning.json'), 'utf8'));
-    for (const [source, target] of [['provisioning.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
+    for (const [source, target] of [['provisioning.json', 'wrangler.provisioning.toml'], ['routing.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
       const expected = JSON.parse(await readFile(path.join(directory, 'generated', source), 'utf8'));
       expected.main = path.basename(expected.main);
       const {stdout} = await exec('python3', ['-c', 'import json,sys,tomllib; print(json.dumps(tomllib.load(open(sys.argv[1], "rb"))))', path.join(directory, 'workers', target)]);

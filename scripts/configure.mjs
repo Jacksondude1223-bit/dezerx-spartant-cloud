@@ -10,6 +10,8 @@ try {
     if (match && !cfg[match[1]]) cfg[match[1]] = match[2];
   }
 } catch (error) { if (error.code !== 'ENOENT') throw error; }
+const routingWorkerName = cfg.ROUTING_WORKER_NAME || 'dezerx-spartant-cloud';
+if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(routingWorkerName)) throw new Error('invalid_routing_worker_name');
 for (const name of ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ZONE_ID', 'CLOUDFLARE_API_TOKEN', 'BASE_DOMAIN', 'US_HOSTNAME', 'DE_HOSTNAME', 'SPARTAN_IMAGE']) {
   if (!cfg[name] || cfg[name].includes('CHANGE_ME') || /[\s\r\n]/.test(cfg[name])) throw new Error(`missing_${name}`);
 }
@@ -86,7 +88,7 @@ if (customDomains) {
     if (!existingRoutes.some(route => route.pattern === pattern)) await api('POST', `/zones/${cfg.CLOUDFLARE_ZONE_ID}/workers/routes`, {pattern, script: null});
   }
   const catchall = existingRoutes.find(route => route.pattern === '*/*');
-  if (catchall?.script && catchall.script !== 'spartan-routing') throw new Error('saas_worker_route_conflict');
+  if (catchall?.script && catchall.script !== routingWorkerName) throw new Error('saas_worker_route_conflict');
 }
 const queues = await api('GET', `${account}/queues?per_page=100`);
 for (const queue_name of ['spartan-provision', 'spartan-provision-dead']) {
@@ -97,13 +99,13 @@ const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026
 await write('provisioning.json', JSON.stringify({...common, ai: {binding: 'AI'}, vars: {...vars, AI_RECOVERY_ENABLED: String(aiEnabled), AI_MAX_CALLS_PER_DAY: String(aiLimit)}, triggers: {crons: ['0 */6 * * *']}, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}, {name: 'RECOVERY', class_name: 'Recovery'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}, {tag: 'v3', new_sqlite_classes: ['Recovery']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
 const routes = [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];
 if (customDomains) routes.push({pattern: '*/*', zone_id: cfg.CLOUDFLARE_ZONE_ID});
-await write('routing.json', JSON.stringify({...common, name: 'spartan-routing', main: '../workers/routing.js', workers_dev: false, routes, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}, {name: 'DOMAINS', class_name: 'Domains', script_name: 'spartan-provisioning'}]}}));
+await write('routing.json', JSON.stringify({...common, name: routingWorkerName, main: '../workers/routing.js', workers_dev: false, routes, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant', script_name: 'spartan-provisioning'}, {name: 'DOMAINS', class_name: 'Domains', script_name: 'spartan-provisioning'}]}}));
 await write('provisioning.secrets.json', JSON.stringify({AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
 await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET}));
 await write('billing.env', `BILLING_WEBHOOK_SECRET=${state.BILLING_WEBHOOK_SECRET}\nSPARTAN_PROVISION_URL=CHANGE_ME\n`);
 await write('state.json', JSON.stringify(state));
 await mkdir(path.resolve('workers'), {recursive: true});
-for (const [source, target] of [['provisioning.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
+for (const [source, target] of [['provisioning.json', 'wrangler.provisioning.toml'], ['routing.json', 'wrangler.toml'], ['routing.json', 'wrangler.routing.toml']]) {
   const config = JSON.parse(await readFile(path.join(directory, source), 'utf8'));
   config.main = path.basename(config.main);
   await writeFile(path.resolve('workers', target), wranglerToml(config), {mode: 0o644});
