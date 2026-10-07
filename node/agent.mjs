@@ -74,6 +74,25 @@ async function refreshPort(id) {
   portChecks.set(id, check);
   return check;
 }
+function runArgs({id, role, fingerprint, envFile, directory, image}) {
+  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, image];
+}
+async function assignedPortOf(id) {
+  const inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
+  const assigned = Number(inspect.NetworkSettings?.Ports?.['8080/tcp']?.[0]?.HostPort);
+  if (!assigned) throw new Error('missing_port');
+  return assigned;
+}
+async function healthy(assignedPort, attempts) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
+      if (response.ok) return true;
+    } catch {}
+    await sleep(1000);
+  }
+  return false;
+}
 async function provisionOnce(input, progress) {
   progress.stage = 'prepare';
   const {id, primary, appKey, url, fingerprint} = input;
@@ -82,6 +101,7 @@ async function provisionOnce(input, progress) {
   const {initialAdmin, ...persistedInput} = input;
   const existing = await load(id);
   persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
+  persistedInput.image = cfg.SPARTAN_IMAGE;
   const version = input.lifecycleVersion || 0;
   if (!Number.isSafeInteger(version) || version < 0) throw new Error('invalid_input');
   if (existing?.status === 'terminated') throw new Error('service_terminated');
@@ -118,7 +138,7 @@ async function provisionOnce(input, progress) {
     progress.stage = 'pull';
     await docker(['pull', cfg.SPARTAN_IMAGE]);
     progress.stage = 'launch';
-    await docker(['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, cfg.SPARTAN_IMAGE]);
+    await docker(runArgs({id, role, fingerprint, envFile, directory, image: cfg.SPARTAN_IMAGE}));
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
     if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
@@ -163,6 +183,53 @@ async function provision(input) {
   }
   throw new Error('recovery_exhausted');
 }
+async function upgrade(input) {
+  const {id, fingerprint} = input;
+  if (!validId(id) || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
+  const record = await load(id);
+  if (!record) throw new Error('not_provisioned');
+  if (record.fingerprint !== fingerprint) throw new Error('tenant_conflict');
+  if (record.status === 'terminated') throw new Error('service_terminated');
+  if (record.status !== 'ready') throw new Error('service_not_ready');
+  let inspect;
+  try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; } catch { throw new Error('not_provisioned'); }
+  const labels = inspect.Config?.Labels || {};
+  if (labels['spartan.fingerprint'] !== fingerprint || labels['spartan.tenant'] !== id || labels['spartan.managed'] !== 'true') throw new Error('container_conflict');
+  const previousImage = inspect.Config?.Image || record.image;
+  if (previousImage === cfg.SPARTAN_IMAGE) return {id, status: 'current', image: previousImage, role: record.role};
+  // Pull before touching the running container, so an unreachable or wrong digest fails
+  // while the tenant is still serving.
+  await docker(['pull', cfg.SPARTAN_IMAGE]);
+  const directory = path.join(root, id);
+  const envFile = path.join(directory, 'app.env');
+  await docker(['stop', '--time', '30', container(id)]);
+  await docker(['rm', '--force', container(id)]);
+  const create = async image => {
+    await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
+    const assigned = await assignedPortOf(id);
+    await save({...record, image, port: assigned});
+    return assigned;
+  };
+  let assignedPort;
+  try { assignedPort = await create(cfg.SPARTAN_IMAGE); }
+  catch (error) {
+    // The replacement never started, so its entrypoint never reached migrate and the
+    // previous image is still safe to put back.
+    const reason = String(error.message).slice(0, 100);
+    try { await create(previousImage); }
+    catch { throw new Error('upgrade_failed'); }
+    console.error(JSON.stringify({event: 'tenant_upgrade_rolled_back', id, reason}));
+    return {id, status: 'rolled_back', image: previousImage, attempted: cfg.SPARTAN_IMAGE, reason, role: record.role};
+  }
+  if (await healthy(assignedPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60))) {
+    await recovery.success(id).catch(() => {});
+    console.error(JSON.stringify({event: 'tenant_upgraded', id, from: previousImage, to: cfg.SPARTAN_IMAGE}));
+    return {id, status: 'upgraded', previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
+  }
+  // It started, so migrations may already have applied. Rolling back now could leave the
+  // schema ahead of the code, so report and let the operator decide.
+  return {id, status: 'provisioning', previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
+}
 async function body(req) {
   let length = 0;
   const chunks = [];
@@ -178,11 +245,12 @@ async function control(req, res, url) {
   const timestamp = req.headers['x-spartan-timestamp'];
   const expected = createHmac('sha256', cfg.NODE_CONTROL_SECRET).update(`${timestamp}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex');
   if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) return reply(res, 401, {error: 'unauthorized'});
-  if (!['/control/provision', '/control/lifecycle'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
   const previous = jobs.get(input.id) || Promise.resolve();
-  const job = previous.catch(() => {}).then(() => url.pathname === '/control/lifecycle' ? applyLifecycle(input, {root, load, save, docker}) : provision(input));
+  const job = previous.catch(() => {}).then(() => url.pathname === '/control/lifecycle' ? applyLifecycle(input, {root, load, save, docker})
+    : url.pathname === '/control/upgrade' ? upgrade(input) : provision(input));
   jobs.set(input.id, job);
   try { const result = await job; reply(res, 200, result); }
   finally { if (jobs.get(input.id) === job) jobs.delete(input.id); }
@@ -227,7 +295,11 @@ const server = http.createServer(async (req, res) => {
     res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
     req.pipe(upstream);
   } catch (error) {
-    console.error(JSON.stringify({event: 'request_failed', code: String(error.code || error.message).slice(0, 100)}));
+    // execFile puts the whole command line in error.message, which for mysql includes
+    // IDENTIFIED BY '<password>'. Prefer stderr, redact either, and never log the command.
+    const safe = text => String(text || '').replace(/IDENTIFIED BY '[^']*'/g, "IDENTIFIED BY '<redacted>'").trim().replace(/\s+/g, ' ').slice(0, 300);
+    const detail = error.stderr ? safe(error.stderr) : safe(String(error.message || '').replace(/^Command failed:[\s\S]*$/, 'command failed'));
+    console.error(JSON.stringify({event: 'request_failed', code: String(error.code ?? error.message ?? '').slice(0, 60), detail}));
     if (!res.headersSent) reply(res, error instanceof SyntaxError ? 400 : 503, {error: error instanceof SyntaxError ? 'invalid_json' : 'operation_failed'});
   }
 });
@@ -262,15 +334,3 @@ server.listen(port, '127.0.0.1');
   try { for (const id of (await readdir(root)).filter(validId)) await refreshPort(id).catch(() => {}); }
   catch { console.error(JSON.stringify({event: 'port_reconcile_failed'})); }
 })();
-let syncing = false;
-setInterval(async () => {
-  if (syncing) return;
-  syncing = true;
-  try {
-    for (const id of (await readdir(root)).filter(validId)) {
-      try { await synchronize(id); }
-      catch { console.error(JSON.stringify({event: 'replica_sync_failed', id})); }
-    }
-  } catch { console.error(JSON.stringify({event: 'replica_scan_failed'})); }
-  finally { syncing = false; }
-}, Math.max(60000, Number(cfg.REPLICA_INTERVAL_MS || 300000))).unref();

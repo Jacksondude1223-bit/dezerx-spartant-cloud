@@ -146,6 +146,10 @@ Increase the version again. Reuse `POST /control/provision` on both nodes with t
 
 Detach custom domains while the routing record is still ready; the domain API requires a ready tenant even for deletion. Then increase the version, publish `terminated`, and send `action: terminated` to both nodes. Containers are removed, but the tenant's MariaDB database, its `storage/` directory and its backups remain. Termination is irreversible for that tenant ID; it is not a full data-erasure API. If already suspended, the current domain API rejects deletion because the tenant is not ready; termination still blocks customer access, but retained domain records need separate reconciliation.
 
+### Update Spartan
+
+Build and push a new image, then take the digest from `scripts/build-image.sh`. Set it as `SPARTAN_IMAGE` on each node and restart the agent. New services pick it up automatically; existing ones need `POST /control/upgrade` per tenant. Run them one at a time and inspect each response, and keep the previous digest so you can set it back and upgrade again to roll a bad release forward.
+
 ## Node API
 
 Node control bodies are limited to 16,384 bytes. Sign control requests with `NODE_CONTROL_SECRET`.
@@ -210,6 +214,38 @@ HTTP 200 response:
 ```json
 {"id":"t-111111111111111111111111","status":"suspended","lifecycleVersion":1}
 ```
+
+### POST /control/upgrade
+
+```json
+{
+  "id": "t-111111111111111111111111",
+  "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}
+```
+
+Moves an existing tenant onto the image the node is configured with. `POST /control/provision` deliberately will not do this: it reuses a container that already exists, so a new `SPARTAN_IMAGE` otherwise reaches new tenants only.
+
+Both fields are required. The call compares the running container's image to the node's `SPARTAN_IMAGE` and, when they differ, pulls the new image, stops and removes the container, and recreates it with the same labels, limits, environment file and mounts. The tenant's database and `storage/` are untouched, and the recreated container's entrypoint runs `migrate --force`, so a release's migrations apply as part of the upgrade.
+
+The pull happens **before** the container is stopped, so an unreachable or wrong digest fails while the tenant is still serving. Recreating a container assigns it a new host port; the agent re-reads and persists it.
+
+| Response `status` | Meaning |
+| --- | --- |
+| `current` | Already on that image. Nothing was pulled, stopped or recreated. |
+| `upgraded` | Recreated and healthy. `previousImage` names what it replaced. |
+| `rolled_back` | The replacement would not start, so the previous image was put back and the tenant is serving again. `attempted` and `reason` say what failed. |
+| `provisioning` | Recreated and started, but not healthy within the wait. **Not** rolled back: its entrypoint reached `migrate`, so reverting could leave the schema ahead of the code. Investigate before retrying. |
+
+HTTP 200 response:
+
+```json
+{"id":"t-111111111111111111111111","status":"upgraded","previousImage":"registry/spartan@sha256:...","image":"registry/spartan@sha256:...","role":"primary"}
+```
+
+Upgrades are refused for a suspended tenant, because recreating its container would silently resume it, and for a terminated one. A tenant with no container is reported rather than created; use `POST /control/provision` for that. A fingerprint mismatch, or container labels that do not match the tenant, are refused as well.
+
+Repeating the call is safe: once the tenant is on the target image the answer is `current`. Upgrade one tenant at a time so a bad release cannot take a whole node down, and check each response before moving on. Set `UPGRADE_HEALTH_ATTEMPTS` on the node to change how many seconds the health wait allows; the default is 60, and a slow migration can outlast the HTTP request, in which case a repeated call reports the outcome.
 
 ### GET /__cloud_node_health
 

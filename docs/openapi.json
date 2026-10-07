@@ -2136,6 +2136,104 @@
           }
         }
       }
+    },
+    "/control/upgrade": {
+      "post": {
+        "tags": [
+          "Nodes"
+        ],
+        "summary": "Move an existing tenant onto the node's configured image",
+        "description": "Compares the running container's image to SPARTAN_IMAGE and recreates the container when they differ. The pull happens before the container is stopped. Responds with status current, upgraded, rolled_back or provisioning. Refused for suspended or terminated tenants and when no container exists.",
+        "operationId": "upgradeTenant",
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Upgrade outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "current",
+                        "upgraded",
+                        "rolled_back",
+                        "provisioning"
+                      ]
+                    },
+                    "image": {
+                      "type": "string"
+                    },
+                    "previousImage": {
+                      "type": "string"
+                    },
+                    "attempted": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "role": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature or stale timestamp"
+          },
+          "503": {
+            "description": "Refused or failed; the node log carries the reason"
+          }
+        }
+      }
     }
   },
   "components": {

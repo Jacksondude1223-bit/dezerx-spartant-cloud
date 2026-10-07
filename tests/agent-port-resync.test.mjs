@@ -46,6 +46,8 @@ if(args[0]==='run'){
 }
 `, {mode: 0o755});
   await writeFile(path.join(bin, 'chown'), '#!/bin/sh\nexit 0\n', {mode: 0o755});
+  // Stubbed so the suite never reaches a real MariaDB and provisions databases on the host.
+  await writeFile(path.join(bin, 'mysql'), '#!/bin/sh\ncase "$*" in *"SELECT 1"*) echo 1 ;; esac\nexit 0\n', {mode: 0o755});
 
   const env = {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: state, FAKE_PORT: String(before.port),
