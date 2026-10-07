@@ -18,6 +18,8 @@ The routing Worker keeps its routing records and custom-domain registrations in 
 | Optional provisioning Worker | `https://spartan-provisioning.ACCOUNT.workers.dev` | HMAC using `BILLING_WEBHOOK_SECRET` |
 | Optional recovery endpoint | Provisioning Worker base URL | HMAC using `AI_RECOVERY_SECRET` |
 
+Each tenant's application data lives in its own MariaDB database on the node, named `sp_` followed by the tenant ID's 24 hexadecimal characters, with a matching user restricted to that database. Containers reach MariaDB over its unix socket, whose directory is bind-mounted read-only; MariaDB never listens on a public interface and no root password is stored on the node. Per-tenant uploads stay on disk under `storage/`, which is the only per-tenant bind mount.
+
 Replace every example hostname and credential. Secrets belong in server-side configuration; never send them to customer browsers. Use HTTPS for all public calls. Node tunnels forward HTTP internally to `127.0.0.1:8788`.
 
 The routing API accepts its Workers.dev hostname, `BASE_DOMAIN`, or the configured `ROUTING_API_HOSTNAME`. Tenant hostnames are application routes, not control API base URLs.
@@ -142,7 +144,7 @@ Increase the version again. Reuse `POST /control/provision` on both nodes with t
 
 ### Terminate a service
 
-Detach custom domains while the routing record is still ready; the domain API requires a ready tenant even for deletion. Then increase the version, publish `terminated`, and send `action: terminated` to both nodes. Containers are removed, but data directories and backups remain. Termination is irreversible for that tenant ID; it is not a full data-erasure API. If already suspended, the current domain API rejects deletion because the tenant is not ready; termination still blocks customer access, but retained domain records need separate reconciliation.
+Detach custom domains while the routing record is still ready; the domain API requires a ready tenant even for deletion. Then increase the version, publish `terminated`, and send `action: terminated` to both nodes. Containers are removed, but the tenant's MariaDB database, its `storage/` directory and its backups remain. Termination is irreversible for that tenant ID; it is not a full data-erasure API. If already suspended, the current domain API rejects deletion because the tenant is not ready; termination still blocks customer access, but retained domain records need separate reconciliation.
 
 ## Node API
 
@@ -218,10 +220,6 @@ Send `X-Spartan-Origin: {ORIGIN_SECRET}` rather than HMAC headers.
 ```
 
 HTTP 200 confirms that the agent responds; it does not check every tenant container. Missing or incorrect origin credentials return HTTP 401. The installer separately checks Cloudflare Tunnel connectivity locally.
-
-### GET /replica/{id}
-
-Internal node-to-node endpoint. Requires `X-Spartan-Origin`. Returns an SQLite snapshot as `application/octet-stream`, only from the ready primary. It is not a customer API. Missing authorization, invalid ID, or an unavailable primary record returns HTTP 404.
 
 ### /tenant/{id}/{applicationPath}
 
@@ -306,7 +304,7 @@ Public JSON diagnostics on the routing control hostname. No signature is require
 
 The Worker selects Germany for the country set in `workers/shared.js`; other countries use the US node. It does not currently implement measured latency, health-based failover, or automatic primary promotion.
 
-The primary owns writable SQLite data. The secondary synchronizes SQLite snapshots, but its node agent currently forwards **all application requests** to the primary rather than serving them locally. A regional route therefore does not currently guarantee that the application is executed in that region. Do not treat this as an active-active database or independent failover setup.
+The primary owns the tenant's MariaDB database, and its node agent serves the application. A node where the tenant is not primary forwards **all application requests** to the primary rather than serving them locally, so a regional route does not mean the application executes in that region. There is no cross-node data replication: a non-primary node holds no tenant data at all. Do not treat this as an active-active database or an automatic failover setup.
 
 Customer request outcomes include HTTP 403 `service_suspended`, HTTP 410 `service_terminated`, HTTP 503 `provisioning`, HTTP 503 `client_ip_unavailable`, and HTTP 503 `origin_unavailable`. Unmapped browser requests can return the status page with HTTP 404; unmapped API requests return JSON `not_found`.
 
@@ -358,7 +356,7 @@ This endpoint lives on the optional provisioning Worker and uses `AI_RECOVERY_SE
 
 The diagnostic must contain exactly `stage`, `signals`, and `container`; the container object must contain exactly the four illustrated keys. No raw logs, passwords, arbitrary commands, or tenant data are accepted in this diagnostic schema.
 
-Stages: `prepare`, `pull`, `launch`, `start`, `health`, `replica`. Signals: `permissions`, `stale_cache`, `transient_network`, `sqlite_locked`, `missing_dependency`, `migration_error`, `disk_full`, `out_of_memory`; maximum eight unique entries. `exitCode` is null or an integer from 0 through 255.
+Stages: `prepare`, `pull`, `launch`, `start`, `health`. Signals: `permissions`, `stale_cache`, `transient_network`, `db_locked`, `missing_dependency`, `migration_error`, `disk_full`, `out_of_memory`; maximum eight unique entries. `exitCode` is null or an integer from 0 through 255.
 
 HTTP 200 response:
 
@@ -367,6 +365,16 @@ HTTP 200 response:
 ```
 
 Actions are `repair_permissions`, `clear_cache`, `retry_pull`, `start_container`, `restart_container`, `retry_deployment`, or `manual`. The Worker selects only actions permitted by diagnostics; nodes execute a bounded allowlist rather than model-written commands. Unsupported or uncertain repairs return `manual`. The model is `@cf/meta/llama-3.1-8b-instruct`. Calls are limited to the configured 1–20 per UTC day and at least 60 seconds apart globally. Diagnostics for which only `manual` is permitted do not consume a model call.
+
+## Tenant databases and backups
+
+One MariaDB serves every tenant on a node. Provisioning creates the tenant's database and user if absent and resyncs the user's password, so repeating a provision call is safe. The password is generated and held by the node in its tenant state file; it is never accepted or returned by the control API.
+
+`MAX_USER_CONNECTIONS` is set to 20 per tenant so one tenant cannot exhaust the server, and the installer raises `max_connections` to 500. A shared server is a shared failure domain: a tenant running expensive queries can affect its neighbours, and MariaDB offers no per-user CPU limit.
+
+An hourly systemd timer writes, per tenant, a `mysqldump --single-transaction` of the database, a tar of `storage/`, and copies of `app.env` and `state.json` into `/srv/spartan-backups/{id}/{timestamp}/`, finishing with a `complete` marker. A tenant whose backup fails is reported and skipped without stopping the others, and the run exits non-zero. Set `BACKUP_KEEP` to retain only that many completed backups per tenant; unset or `0` keeps all of them.
+
+Backups are written to the same machine as the data they protect. Copy them off the node if you want them to survive losing it, and restore one periodically — a dump that has never been restored is not a verified backup.
 
 ## Responses, retries, and operational errors
 
@@ -387,7 +395,7 @@ Errors usually have `{"error":"code"}`. Domain ownership errors also include the
 
 Retry connection failures and genuine transient failures with bounded backoff and a newly signed timestamp. Preserve identity, keys, initial-administrator payload, and lifecycle version for retries. A changed desired state needs a newer version. Reconcile both nodes and routing metadata after partial failures. Do not retry termination by creating a new record with the same tenant ID.
 
-Cloudflare browser challenges should target customer browser traffic. Exclude master control requests, node-origin traffic, health probes, replication, billing webhooks, and application API integrations from browser challenges. A challenge page is HTML and cannot be completed by these API clients.
+Cloudflare browser challenges should target customer browser traffic. Exclude master control requests, node-origin traffic, health probes, billing webhooks, and application API integrations from browser challenges. A challenge page is HTML and cannot be completed by these API clients.
 
 ## PHP integration helpers
 

@@ -5,6 +5,8 @@ exec 9>/run/spartan-backup.lock
 flock -n 9 || exit 0
 data_root="${DATA_ROOT:-/srv/spartan-cloud}"
 backup_root="${BACKUP_ROOT:-/srv/spartan-backups}"
+socket="${MYSQL_SOCKET:-/run/mysqld/mysqld.sock}"
+keep="${BACKUP_KEEP:-0}"
 mkdir -p "$backup_root"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 failed=0

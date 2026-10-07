@@ -1526,76 +1526,6 @@
         ]
       }
     },
-    "/replica/{id}": {
-      "get": {
-        "operationId": "getReplicaSnapshot",
-        "summary": "Download ready primary SQLite snapshot",
-        "tags": [
-          "Internal"
-        ],
-        "description": "Internal replication. Invalid authentication and unavailable or non-primary records return 404. Not a customer endpoint.",
-        "responses": {
-          "200": {
-            "description": "SQLite database snapshot",
-            "content": {
-              "application/octet-stream": {
-                "schema": {
-                  "type": "string",
-                  "format": "binary"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Resource or route not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Operation or dependency unavailable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "OriginSecret": []
-          }
-        ],
-        "x-origin-secret": "ORIGIN_SECRET",
-        "servers": [
-          {
-            "url": "https://node-us.yourdomain.com",
-            "description": "US node; replace hostname"
-          },
-          {
-            "url": "https://node-de.yourdomain.com",
-            "description": "Germany node; replace hostname"
-          }
-        ],
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "pattern": "^t-[a-f0-9]{24}$"
-            }
-          }
-        ]
-      }
-    },
     "/v1/instances": {
       "post": {
         "operationId": "createProvisioningInstance",
@@ -2082,7 +2012,7 @@
         "tags": [
           "Recovery"
         ],
-        "description": "Optional provisioning Worker only. Diagnostic limit 2,048 decoded characters. No raw logs or arbitrary commands. Configured global daily budget 1\u201320 model calls per UTC day, at least 60 seconds apart. May return manual without a model call.",
+        "description": "Optional provisioning Worker only. Diagnostic limit 2,048 decoded characters. No raw logs or arbitrary commands. Configured global daily budget 1–20 model calls per UTC day, at least 60 seconds apart. May return manual without a model call.",
         "responses": {
           "200": {
             "description": "Inspect the response body state",
@@ -2226,7 +2156,7 @@
         "type": "apiKey",
         "in": "header",
         "name": "X-Spartan-Origin",
-        "description": "Literal ORIGIN_SECRET, for internal health and replication requests only."
+        "description": "Literal ORIGIN_SECRET, for internal health and ingress requests only."
       }
     },
     "schemas": {
@@ -2880,8 +2810,7 @@
               "pull",
               "launch",
               "start",
-              "health",
-              "replica"
+              "health"
             ]
           },
           "signals": {
@@ -2894,7 +2823,7 @@
                 "permissions",
                 "stale_cache",
                 "transient_network",
-                "sqlite_locked",
+                "db_locked",
                 "missing_dependency",
                 "migration_error",
                 "disk_full",

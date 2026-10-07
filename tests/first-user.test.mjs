@@ -11,7 +11,7 @@ const filename = new URL('../scripts/create-first-user.sh', import.meta.url).pat
 async function fixture(fn) {
   const root = await mkdtemp(path.join(tmpdir(), 'spartan-admin-'));
   try {
-    await mkdir(path.join(root, id, 'database'), {recursive: true});
+    await mkdir(path.join(root, id, 'storage', 'app'), {recursive: true});
     await mkdir(path.join(root, 'bin'));
     await writeFile(path.join(root, 'bin/docker'), `#!/usr/bin/env node
 const fs = require('fs');
@@ -38,7 +38,7 @@ test('first user script uses the interactive Artisan command once on the primary
     const before = await readFile(env.CALLS, 'utf8');
     const create = before.trim().split('\n').map(JSON.parse).find(args => args.includes('dx:user:create'));
     assert.deepEqual(create, ['exec', '-it', '--user', 'www-data', '--workdir', '/var/www/html', `spartan-${id}`, 'php', 'artisan', 'dx:user:create']);
-    assert.ok(await readFile(path.join(root, id, 'database/.cloud-first-user-created'), 'utf8'));
+    assert.ok(await readFile(path.join(root, id, 'storage/app/.cloud-first-user-created'), 'utf8'));
     await exec('bash', [filename, id], {env});
     const after = (await readFile(env.CALLS, 'utf8')).trim().split('\n').map(JSON.parse);
     assert.equal(after.filter(args => args.includes('dx:user:create')).length, 1);
@@ -51,7 +51,7 @@ test('secondary, mismatched tenant, existing user and failed creation cannot mar
     if (scenario === 'existing') await writeFile(env.USERS, 'existing');
     if (scenario === 'failure') env.CREATE_FAIL = 'true';
     await assert.rejects(exec('script', ['-q', '-e', '-c', `bash '${filename}' '${id}'`, '/dev/null'], {env}));
-    await assert.rejects(readFile(path.join(root, id, 'database/.cloud-first-user-created')), {code: 'ENOENT'});
+    await assert.rejects(readFile(path.join(root, id, 'storage/app/.cloud-first-user-created')), {code: 'ENOENT'});
     const calls = (await readFile(env.CALLS, 'utf8')).trim().split('\n').map(JSON.parse);
     assert.equal(calls.filter(args => args.includes('dx:user:create')).length, scenario === 'failure' ? 1 : 0);
   });

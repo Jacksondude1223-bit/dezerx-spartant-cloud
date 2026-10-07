@@ -1,7 +1,7 @@
 import {actions, stages, permitted} from '../node/recovery-policy.mjs';
 import {json} from './shared.js';
 
-const signalNames = new Set(['permissions', 'stale_cache', 'transient_network', 'sqlite_locked', 'missing_dependency', 'migration_error', 'disk_full', 'out_of_memory']);
+const signalNames = new Set(['permissions', 'stale_cache', 'transient_network', 'db_locked', 'missing_dependency', 'migration_error', 'disk_full', 'out_of_memory']);
 export function validDiagnostic(value) {
   if (!value || Object.keys(value).sort().join(',') !== 'container,signals,stage' || !stages.has(value.stage) || !Array.isArray(value.signals) || value.signals.length > 8 || new Set(value.signals).size !== value.signals.length || !value.signals.every(x => signalNames.has(x))) return false;
   const state = value.container;

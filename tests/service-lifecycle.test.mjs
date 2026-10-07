@@ -9,8 +9,8 @@ const fingerprint = 'b'.repeat(64);
 async function fixture(fn) {
   const root = await mkdtemp(path.join(tmpdir(), 'spartan-lifecycle-'));
   try {
-    await mkdir(path.join(root, id, 'database'), {recursive: true});
-    await writeFile(path.join(root, id, 'database/database.sqlite'), 'keep-data');
+    await mkdir(path.join(root, id, 'storage'), {recursive: true});
+    await writeFile(path.join(root, id, 'storage/keep.txt'), 'keep-data');
     let record = {id, fingerprint, lifecycleVersion: 0, status: 'ready', appKey: 'keep-key'};
     let container = {Config: {Labels: {'spartan.fingerprint': fingerprint, 'spartan.tenant': id, 'spartan.managed': 'true'}}, State: {Running: true}};
     const calls = [];
@@ -36,14 +36,14 @@ test('suspension stops only the matching tenant and disables automatic Docker re
     assert.equal(calls.filter(args => args[0] === 'stop').length, 1);
   });
 });
-test('termination removes the container once and preserves database and tombstone on retries', async () => {
+test('termination removes the container once and preserves tenant data and tombstone on retries', async () => {
   await fixture(async ({deps, calls, record}) => {
     const input = {id, fingerprint, lifecycleVersion: 1, action: 'terminated'};
     await applyLifecycle(input, deps);
     await applyLifecycle(input, deps);
     assert.equal(calls.filter(args => args[0] === 'rm').length, 1);
     assert.deepEqual(calls.find(args => args[0] === 'rm'), ['rm', '--force', `spartan-${id}`]);
-    assert.equal(await readFile(path.join(deps.root, id, 'database/database.sqlite'), 'utf8'), 'keep-data');
+    assert.equal(await readFile(path.join(deps.root, id, 'storage/keep.txt'), 'utf8'), 'keep-data');
     assert.equal(record().status, 'terminated');
     await assert.rejects(applyLifecycle({...input, lifecycleVersion: 2, action: 'suspended'}, deps), /service_terminated/);
   });

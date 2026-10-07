@@ -41,7 +41,15 @@ if(args[0]==='run'){
 `;
   await writeFile(path.join(bin, 'docker'), fake, {mode: 0o755});
   await writeFile(path.join(bin, 'chown'), '#!/bin/sh\ntest "$1" = -R && test "$2" = 33:33\n', {mode: 0o755});
-  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), NODE_REGION: 'us', NODE_CONTROL_SECRET: secret, ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
+  // Stubbed so the suite never reaches a real MariaDB: without this it silently
+  // provisions databases on whatever host runs the tests.
+  await writeFile(path.join(bin, 'mysql'), `#!/usr/bin/env node
+const fs=require('node:fs');
+const sql=process.argv[process.argv.length-1];
+fs.appendFileSync(process.env.MYSQL_CALLS, sql + '\\n');
+if (/^SELECT 1$/.test(sql)) console.log('1');
+`, {mode: 0o755});
+  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_REGION: 'us', NODE_CONTROL_SECRET: secret, ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
   let stderr = '';
   agent.stderr.on('data', value => { stderr += value; });
   const origin = `http://127.0.0.1:${agentPort}`;
@@ -76,7 +84,18 @@ if(args[0]==='run'){
     assert.equal((await readFile(path.join(dir, 'admin-calls'), 'utf8')).trim(), 'created');
     const state = await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8');
     const envFile = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
+    const sqlCalls = await readFile(path.join(dir, 'mysql-calls'), 'utf8');
+    assert.match(sqlCalls, /CREATE DATABASE IF NOT EXISTS `sp_1{24}`/, 'provisioning creates the tenant database');
+    assert.match(sqlCalls, /CREATE USER IF NOT EXISTS 'sp_1{24}'@'localhost'/);
+    assert.match(sqlCalls, /GRANT ALL PRIVILEGES ON `sp_1{24}`\.\* TO/);
+    assert.match(sqlCalls, /MAX_USER_CONNECTIONS 20/);
+    assert.ok(envFile.includes('DB_CONNECTION=mysql'), 'tenant runs on mysql');
+    assert.ok(envFile.includes('DB_SOCKET=/run/mysqld/mysqld.sock'));
+    assert.ok(envFile.includes(`DB_DATABASE=sp_${'1'.repeat(24)}`));
+    assert.equal(envFile.includes('sqlite'), false, 'no sqlite configuration survives');
+    assert.ok(JSON.parse(state).dbPassword.length >= 16, 'the node owns the database password');
     for (const value of [state, envFile, stderr]) { assert.equal(value.includes('Chosen-password!'), false); assert.equal(value.includes('owner@example.test'), false); }
+    assert.equal(stderr.includes(JSON.parse(state).dbPassword), false, 'the database password never reaches the log');
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`)).status, 404);
     const headers = {'x-spartan-client-ip': '198.51.100.42', 'x-forwarded-for': 'attacker', 'cf-connecting-ip': 'attacker', 'x-real-ip': 'attacker', 'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
     for (const clientIp of ['', '198.51.100.42, 203.0.113.9', 'invalid']) assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers: {...headers, 'x-spartan-client-ip': clientIp}})).status, 404);
