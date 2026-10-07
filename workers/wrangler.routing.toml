@@ -8,12 +8,12 @@ enabled = true
 
 [vars]
 MAX_CUSTOM_HOSTNAMES = "30"
-BASE_DOMAIN = "cloud.example.com"
-US_ORIGIN = "https://node-us.example.com"
-DE_ORIGIN = "https://node-de.example.com"
-CLOUDFLARE_ZONE_ID = "CHANGE_ME"
-SAAS_ZONE_DOMAIN = "example.com"
-SAAS_CNAME_TARGET = "cloud.example.com"
+BASE_DOMAIN = "load.dezerx.cloud"
+US_ORIGIN = "https://node-us.dezerx.cloud"
+DE_ORIGIN = "https://node-de.dezerx.cloud"
+CLOUDFLARE_ZONE_ID = "9709025acf2bfa1c3d8a513c923a5f94"
+SAAS_ZONE_DOMAIN = "dezerx.cloud"
+SAAS_CNAME_TARGET = "load.dezerx.cloud"
 
 
 [durable_objects]
