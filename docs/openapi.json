@@ -2220,6 +2220,14 @@
                     },
                     "role": {
                       "type": "string"
+                    },
+                    "changed": {
+                      "type": "string",
+                      "enum": [
+                        "image",
+                        "environment",
+                        "image_and_environment"
+                      ]
                     }
                   }
                 }
@@ -2430,6 +2438,13 @@
           },
           "initialAdmin": {
             "$ref": "#/components/schemas/InitialAdmin"
+          },
+          "licenseKey": {
+            "type": "string",
+            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "minLength": 16,
+            "maxLength": 256,
+            "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
           }
         },
         "required": [
@@ -2437,7 +2452,8 @@
           "primary",
           "appKey",
           "url",
-          "fingerprint"
+          "fingerprint",
+          "licenseKey"
         ],
         "additionalProperties": true
       },

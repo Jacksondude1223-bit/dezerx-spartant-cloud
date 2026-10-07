@@ -116,7 +116,7 @@ const appKey = 'base64:' + randomBytes(32).toString('base64');
 const fingerprint = createHash('sha256').update(JSON.stringify([serviceId, customerId, primary])).digest('hex');
 ```
 
-For direct node provisioning, that fingerprint recipe is a recommended stable ownership fingerprint; the node validates its format and equality, not its derivation. Persist `id`, `appKey`, `fingerprint`, `primary`, and `lifecycleVersion` in the master website database. Use the same values on both nodes. Generate `appKey` once per service; do not regenerate it for retries or resume operations. The application URL must be exactly `https://{id}.{BASE_DOMAIN}` even when a custom domain is attached.
+For direct node provisioning, that fingerprint recipe is a recommended stable ownership fingerprint; the node validates its format and equality, not its derivation. Persist `id`, `appKey`, `fingerprint`, `primary`, `licenseKey`, and `lifecycleVersion` in the master website database. Use the same values on both nodes. Generate `appKey` once per service; do not regenerate it for retries or resume operations. The application URL must be exactly `https://{id}.{BASE_DOMAIN}` even when a custom domain is attached.
 
 `primary` is the writable database owner, not the visitor's location. Do not change it on an existing route or node record.
 
@@ -124,7 +124,7 @@ For direct node provisioning, that fingerprint recipe is a recommended stable ow
 
 ### Create a service
 
-1. Confirm payment in the master website and create persistent provisioning state.
+1. Confirm payment in the master website, obtain the Spartan licence for the service, and create persistent provisioning state.
 2. Call `POST /control/provision` on the primary node, including the initial administrator details.
 3. Wait for `status: ready`. If the response is `provisioning`, retry the same persisted request until ready or escalate the failure.
 4. Call `POST /control/provision` on the other node with the same identity, key, fingerprint, and version. Omit `initialAdmin` on the secondary.
@@ -146,6 +146,10 @@ Increase the version again. Reuse `POST /control/provision` on both nodes with t
 
 Detach custom domains while the routing record is still ready; the domain API requires a ready tenant even for deletion. Then increase the version, publish `terminated`, and send `action: terminated` to both nodes. Containers are removed, but the tenant's MariaDB database, its `storage/` directory and its backups remain. Termination is irreversible for that tenant ID; it is not a full data-erasure API. If already suspended, the current domain API rejects deletion because the tenant is not ready; termination still blocks customer access, but retained domain records need separate reconciliation.
 
+### Rotate a licence or change tenant environment
+
+Docker reads an environment file once, when it creates a container, so rewriting it changes nothing by itself. Send `POST /control/provision` with the new `licenseKey` (or after editing the node's `LARAVEL_ENV_FILE`) to rewrite `app.env`, then `POST /control/upgrade` to recreate the container so it takes effect. The upgrade reports `changed: "environment"`. The tenant's database and `storage/` are untouched.
+
 ### Update Spartan
 
 Build and push a new image, then take the digest from `scripts/build-image.sh`. Set it as `SPARTAN_IMAGE` on each node and restart the agent. New services pick it up automatically; existing ones need `POST /control/upgrade` per tenant. Run them one at a time and inspect each response, and keep the previous digest so you can set it back and upgrade again to roll a bad release forward.
@@ -165,6 +169,7 @@ Example request to the primary node:
   "appKey": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
   "url": "https://t-111111111111111111111111.cloud.yourdomain.com",
   "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "licenseKey": "SPARTANPROFESSIONAL_replace-with-the-issued-key",
   "lifecycleVersion": 0,
   "initialAdmin": {
     "displayName": "Customer Owner",
@@ -181,10 +186,13 @@ Example request to the primary node:
 | `appKey` | Required, `base64:` followed by a base64-encoded 32-byte key |
 | `url` | Required, exact generated tenant URL |
 | `fingerprint` | Required, 64 lowercase hexadecimal characters |
+| `licenseKey` | Required; the Spartan licence issued for this service |
 | `lifecycleVersion` | Nonnegative safe integer; defaults to zero if omitted |
 | `initialAdmin` | Optional; supply on the primary when creating the first user |
 
-The illustrated key and fingerprint are placeholders, not values to deploy.
+The illustrated key, fingerprint and licence are placeholders, not values to deploy.
+
+A Spartan licence is issued per domain, so each service needs its own. The master website obtains it from DezerX when the service is purchased and passes it here; the node does not mint, derive or share licences. It must begin with `SPARTANSTARTER_`, `SPARTANPROFESSIONAL_`, `SPARTANULTIMATE_` or `SPARTANDEV_` and otherwise contain only letters, digits, `_` and `-`, which is what the vendor's own download client accepts. `PRODUCT_ID` is derived from that prefix. The key is written only into the tenant's `app.env` and its state file, both mode 600, and is never logged or returned. Anything else is refused with `invalid_license_key`, which is not retried.
 
 `initialAdmin` accepts exactly `displayName`, `email`, and `password`. Display name: nonblank, maximum 100 characters. Email: valid basic email format, maximum 254 characters. Password: 8–128 characters. Control characters are rejected. Do not include a `role` field. The container creates this user as **superadmin** using `php artisan dx:user:create`. Creation occurs only on the primary and is not repeated after initialization; this endpoint is not a password-reset API.
 
@@ -226,14 +234,14 @@ HTTP 200 response:
 
 Moves an existing tenant onto the image the node is configured with. `POST /control/provision` deliberately will not do this: it reuses a container that already exists, so a new `SPARTAN_IMAGE` otherwise reaches new tenants only.
 
-Both fields are required. The call compares the running container's image to the node's `SPARTAN_IMAGE` and, when they differ, pulls the new image, stops and removes the container, and recreates it with the same labels, limits, environment file and mounts. The tenant's database and `storage/` are untouched, and the recreated container's entrypoint runs `migrate --force`, so a release's migrations apply as part of the upgrade.
+Both fields are required. The call compares the running container's image to the node's `SPARTAN_IMAGE`, and the tenant's current `app.env` to the one its container was created from. When either differs it pulls the image, stops and removes the container, and recreates it with the same labels, limits, environment file and mounts. The tenant's database and `storage/` are untouched, and the recreated container's entrypoint runs `migrate --force`, so a release's migrations apply as part of the upgrade.
 
 The pull happens **before** the container is stopped, so an unreachable or wrong digest fails while the tenant is still serving. Recreating a container assigns it a new host port; the agent re-reads and persists it.
 
 | Response `status` | Meaning |
 | --- | --- |
 | `current` | Already on that image. Nothing was pulled, stopped or recreated. |
-| `upgraded` | Recreated and healthy. `previousImage` names what it replaced. |
+| `upgraded` | Recreated and healthy. `previousImage` names what it replaced, and `changed` is `image`, `environment` or `image_and_environment`. |
 | `rolled_back` | The replacement would not start, so the previous image was put back and the tenant is serving again. `attempted` and `reason` say what failed. |
 | `provisioning` | Recreated and started, but not healthy within the wait. **Not** rolled back: its entrypoint reached `migrate`, so reverting could leave the schema ahead of the code. Investigate before retrying. |
 

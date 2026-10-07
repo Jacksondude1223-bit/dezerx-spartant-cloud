@@ -47,7 +47,7 @@ if (args[0] === 'run') {
 }
 `;
 
-async function harness({image = NEW, status = 'ready', ports, failPull, failRunImage, containerImage = OLD, container = true} = {}) {
+async function harness({image = NEW, status = 'ready', ports, failPull, failRunImage, containerImage = OLD, container = true, envHash = 'e1', containerEnvHash = 'e1'} = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'spartan-upgrade-'));
   const servers = [];
   const listening = [];
@@ -69,7 +69,7 @@ async function harness({image = NEW, status = 'ready', ports, failPull, failRunI
   const labels = {'spartan.managed': 'true', 'spartan.tenant': id, 'spartan.role': 'primary', 'spartan.fingerprint': fingerprint};
   await mkdir(path.join(dir, 'data', id, 'storage'), {recursive: true});
   await writeFile(path.join(dir, 'data', id, 'app.env'), 'APP_KEY=base64:x\n');
-  await writeFile(path.join(dir, 'data', id, 'state.json'), JSON.stringify({id, primary: 'us', appKey: 'base64:x', url: `https://${id}.cloud.test`, fingerprint, role: 'primary', status, port: 1, image: containerImage, dbPassword: 'x'.repeat(32)}));
+  await writeFile(path.join(dir, 'data', id, 'state.json'), JSON.stringify({id, primary: 'us', appKey: 'base64:x', url: `https://${id}.cloud.test`, fingerprint, role: 'primary', status, port: 1, image: containerImage, dbPassword: 'x'.repeat(32), envHash, containerEnvHash}));
   if (container) await writeFile(state, JSON.stringify([{Config: {Image: containerImage, Labels: labels}, State: {Running: true}, NetworkSettings: {Ports: {'8080/tcp': [{HostPort: '1'}]}}}]));
   const reservation = http.createServer();
   await new Promise(resolve => reservation.listen(0, '127.0.0.1', resolve));
@@ -126,6 +126,7 @@ test('a new image is pulled before the container is stopped, then recreated and 
     assert.equal(result.body.status, 'upgraded');
     assert.equal(result.body.previousImage, OLD);
     assert.equal(result.body.image, NEW);
+    assert.equal(result.body.changed, 'image');
     const ordered = (await harnessed.calls()).filter(call => /^(pull|stop|rm|run)/.test(call)).map(call => call.split(' ')[0]);
     assert.deepEqual(ordered, ['pull', 'stop', 'rm', 'run'], 'the pull must succeed before the tenant is stopped');
     assert.equal(await harnessed.liveImage(), NEW);
@@ -202,5 +203,43 @@ test('a tenant with no container is reported rather than created by upgrade', as
   try {
     assert.equal((await harnessed.upgrade()).status, 503);
     assert.equal((await harnessed.calls()).some(call => /^run/.test(call)), false, 'upgrade is not a provisioning path');
+  } finally { await harnessed.stop(); }
+});
+
+test('a rewritten environment is recreated even when the image has not changed', async () => {
+  // Docker reads --env-file once, at create time. A renewed licence or new mail settings
+  // rewrite app.env and change nothing until the container is recreated, so a mismatch
+  // between the recorded environment and the one the container was built from is a reason
+  // to recreate on its own.
+  const harnessed = await harness({image: OLD, ports: ['live'], envHash: 'renewed', containerEnvHash: 'e1'});
+  try {
+    const result = await harnessed.upgrade();
+    assert.equal(result.status, 200, harnessed.stderr());
+    assert.equal(result.body.status, 'upgraded');
+    assert.equal(result.body.changed, 'environment');
+    const ordered = (await harnessed.calls()).filter(call => /^(pull|stop|rm|run)/.test(call)).map(call => call.split(' ')[0]);
+    assert.deepEqual(ordered, ['pull', 'stop', 'rm', 'run']);
+    assert.equal(await harnessed.liveImage(), OLD, 'the same image, with the new environment applied');
+    const state = await harnessed.state();
+    assert.equal(state.containerEnvHash, 'renewed', 'the container now matches the recorded environment');
+  } finally { await harnessed.stop(); }
+});
+
+test('a changed image and a rewritten environment are reported together', async () => {
+  const harnessed = await harness({ports: ['live'], envHash: 'renewed', containerEnvHash: 'e1'});
+  try {
+    const result = await harnessed.upgrade();
+    assert.equal(result.body.status, 'upgraded');
+    assert.equal(result.body.changed, 'image_and_environment');
+    assert.equal(await harnessed.liveImage(), NEW);
+  } finally { await harnessed.stop(); }
+});
+
+test('a container already matching both its image and its environment is left alone', async () => {
+  const harnessed = await harness({image: OLD, ports: ['live'], envHash: 'e1', containerEnvHash: 'e1'});
+  try {
+    const result = await harnessed.upgrade();
+    assert.equal(result.body.status, 'current');
+    assert.equal((await harnessed.calls()).some(call => /^(pull|stop|rm|run)/.test(call)), false);
   } finally { await harnessed.stop(); }
 });
