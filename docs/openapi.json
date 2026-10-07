@@ -1635,6 +1635,8 @@
                 "serviceId": "svc_1001",
                 "customerId": "cus_42",
                 "primary": "us",
+                "licenseKey": "SPARTANPROFESSIONAL_replace-with-the-issued-key",
+                "domain": "panel.customer.example",
                 "initialAdmin": {
                   "displayName": "Customer Owner",
                   "email": "owner@customer.example",
@@ -2005,6 +2007,141 @@
         }
       }
     },
+    "/v1/instances/{id}/app-url": {
+      "post": {
+        "operationId": "setProvisioningInstanceAppUrl",
+        "summary": "Move a tenant to a new domain and licence",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Only on the optional provisioning Worker. Sets the tenant's APP_URL to the customer's domain and the licence issued for that domain, then queues a rewrite and a single container restart on each node. The tenant stays ready throughout, so routing is not interrupted. Requires a ready tenant. Reserve and verify the hostname through the domain API as well, so Cloudflare terminates TLS for it.",
+        "responses": {
+          "200": {
+            "description": "Already on that domain and licence; nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; both nodes are reconfigured asynchronously",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Tenant is not ready (service_not_ready) or is terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantAppUrlInput"
+              },
+              "example": {
+                "domain": "panel.customer.example",
+                "licenseKey": "SPARTANPROFESSIONAL_replace-with-the-issued-key"
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/recovery": {
       "post": {
         "operationId": "selectRecoveryAction",
@@ -2012,7 +2149,7 @@
         "tags": [
           "Recovery"
         ],
-        "description": "Optional provisioning Worker only. Diagnostic limit 2,048 decoded characters. No raw logs or arbitrary commands. Configured global daily budget 1–20 model calls per UTC day, at least 60 seconds apart. May return manual without a model call.",
+        "description": "Optional provisioning Worker only. Diagnostic limit 2,048 decoded characters. No raw logs or arbitrary commands. Configured global daily budget 1\u201320 model calls per UTC day, at least 60 seconds apart. May return manual without a model call.",
         "responses": {
           "200": {
             "description": "Inspect the response body state",
@@ -2424,7 +2561,7 @@
           "url": {
             "type": "string",
             "format": "uri",
-            "description": "Must equal https://{id}.{BASE_DOMAIN}."
+            "description": "The tenant's own application URL: the customer's domain as a bare https origin, or https://{id}.{BASE_DOMAIN} before they have one. No port, path, query or credentials; BASE_DOMAIN itself and either node origin are refused."
           },
           "fingerprint": {
             "type": "string",
@@ -2793,6 +2930,19 @@
               "de"
             ]
           },
+          "licenseKey": {
+            "type": "string",
+            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "minLength": 16,
+            "maxLength": 256,
+            "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
+          },
+          "domain": {
+            "type": "string",
+            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
+            "maxLength": 253,
+            "description": "Bare hostname of the customer's domain, which becomes the tenant's APP_URL. Omit it to serve on https://{id}.{BASE_DOMAIN} until the customer has one. The control host and both node origins are refused with invalid_domain."
+          },
           "initialAdmin": {
             "$ref": "#/components/schemas/InitialAdmin"
           }
@@ -2800,7 +2950,8 @@
         "required": [
           "serviceId",
           "customerId",
-          "primary"
+          "primary",
+          "licenseKey"
         ],
         "additionalProperties": true
       },
@@ -3006,6 +3157,29 @@
         "required": [
           "action",
           "confidence"
+        ],
+        "additionalProperties": false
+      },
+      "TenantAppUrlInput": {
+        "type": "object",
+        "properties": {
+          "domain": {
+            "type": "string",
+            "pattern": "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z]{2,63}$",
+            "maxLength": 253,
+            "description": "Bare hostname of the customer's domain, which becomes the tenant's APP_URL. Omit it to serve on https://{id}.{BASE_DOMAIN} until the customer has one. The control host and both node origins are refused with invalid_domain."
+          },
+          "licenseKey": {
+            "type": "string",
+            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "minLength": 16,
+            "maxLength": 256,
+            "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
+          }
+        },
+        "required": [
+          "domain",
+          "licenseKey"
         ],
         "additionalProperties": false
       }

@@ -32,9 +32,14 @@ function fixture() {
   }};
   return {env, tenants, messages};
 }
+const license = 'SPARTANPROFESSIONAL_cccccccccccccccccccc';
 async function reserve(env, changes = {}) {
-  const body = JSON.stringify({serviceId: 'service_123', customerId: 'customer_123', primary: 'us', ...changes});
+  const body = JSON.stringify({serviceId: 'service_123', customerId: 'customer_123', primary: 'us', licenseKey: license, ...changes});
   return provisioning.fetch(await signed('POST', '/v1/instances', body), env);
+}
+async function post(env, path, payload) {
+  const body = JSON.stringify(payload);
+  return provisioning.fetch(await signed('POST', path, body), env);
 }
 
 test('signatures reject changed payloads, changed paths and expired timestamps', async () => {
@@ -282,4 +287,62 @@ test('suspension arriving during provisioning cannot be overwritten by late comp
     assert.equal(tenants.get(record.id).values.get('record').lifecycleVersion, 1);
     assert.equal((await routing.fetch(new Request(record.url), env)).status, 403);
   } finally { globalThis.fetch = previous; }
+});
+
+test('a tenant is created for the customer domain its licence was issued for', async () => {
+  const {env, tenants} = fixture();
+  assert.equal((await reserve(env, {licenseKey: undefined})).status, 400, 'a tenant without a licence would be refused by the node');
+  assert.equal((await reserve(env, {licenseKey: 'NOTASPARTANKEY_aaaaaaaaaaaaaaaa'})).status, 400);
+  for (const domain of ['cloud.test', 'us.origin.test', 'de.origin.test', 'panel.customer.test/app', 'panel.customer.test:8443', 'https://panel.customer.test', 'no-dot', 42]) {
+    assert.equal((await reserve(env, {domain})).status, 400, `refused domain: ${domain}`);
+  }
+  const record = await (await reserve(env, {domain: 'panel.customer.test'})).json();
+  assert.equal(record.url, 'https://panel.customer.test', 'the tenant calls itself by the customer domain');
+  const stored = tenants.get(record.id).values.get('record');
+  assert.equal(stored.licenseKey, license, 'the node is told which licence to run');
+  assert.equal(stored.url, 'https://panel.customer.test');
+  const plain = await (await reserve(env, {serviceId: 'service_456'})).json();
+  assert.equal(plain.url, `https://${plain.id}.cloud.test`, 'without a domain the tenant serves on its routing subdomain');
+});
+test('a tenant moves to a new domain and licence without leaving the routing table', async () => {
+  const {env, tenants, messages} = fixture();
+  const record = await (await reserve(env)).json();
+  const renewed = 'SPARTANULTIMATE_dddddddddddddddddddd';
+  const move = (payload = {domain: 'panel.customer.test', licenseKey: renewed}) => post(env, `/v1/instances/${record.id}/app-url`, payload);
+  // Nothing is serving yet, so there is no container for the node to recreate.
+  assert.equal((await move()).status, 409);
+  const ready = async (handler, body) => {
+    const previous = globalThis.fetch;
+    globalThis.fetch = handler;
+    try { await provisioning.queue({messages: [{body, ack() {}, retry() { assert.fail('unexpected_retry'); }}]}, env); }
+    finally { globalThis.fetch = previous; }
+  };
+  await ready(async () => Response.json({status: 'ready'}), {id: record.id});
+  assert.equal(tenants.get(record.id).values.get('record').status, 'ready');
+  assert.equal((await move({domain: 'cloud.test', licenseKey: renewed})).status, 400, 'a tenant cannot claim the control host');
+  assert.equal((await move({domain: 'panel.customer.test', licenseKey: 'NOTALICENCE'})).status, 400, 'a new domain needs the licence issued for it');
+  messages.length = 0;
+  const moved = await move();
+  assert.equal(moved.status, 202);
+  assert.equal((await moved.json()).url, 'https://panel.customer.test');
+  const stored = tenants.get(record.id).values.get('record');
+  assert.equal(stored.status, 'ready', 'routing keeps serving the tenant while the change is applied');
+  assert.equal(stored.licenseKey, renewed);
+  assert.deepEqual(messages, [{id: record.id, action: 'reconfigure'}]);
+  messages.length = 0;
+  assert.equal((await move()).status, 200, 'repeating the same change is not a second restart');
+  assert.deepEqual(messages, []);
+  const calls = [];
+  await ready(async (url, init) => {
+    const target = new URL(url);
+    calls.push(`${target.host}${target.pathname}`);
+    assert.equal(await verify(new Request(url, init), init.body, secret), true);
+    const payload = JSON.parse(init.body);
+    if (target.pathname !== '/control/provision') return Response.json({status: 'upgraded'});
+    assert.equal(payload.url, 'https://panel.customer.test', 'the node writes the new application URL');
+    assert.equal(payload.licenseKey, renewed);
+    return Response.json({status: 'ready'});
+  }, {id: record.id, action: 'reconfigure'});
+  assert.deepEqual(calls, ['us.origin.test/control/provision', 'us.origin.test/control/upgrade', 'de.origin.test/control/provision', 'de.origin.test/control/upgrade'], 'each node rewrites its environment and then recreates the container once');
+  assert.equal(tenants.get(record.id).values.get('record').status, 'ready');
 });

@@ -104,6 +104,23 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.ok(JSON.parse(state).dbPassword.length >= 16, 'the node owns the database password');
     for (const value of [state, envFile, stderr]) { assert.equal(value.includes('Chosen-password!'), false); assert.equal(value.includes('owner@example.test'), false); }
     assert.equal(stderr.includes(JSON.parse(state).dbPassword), false, 'the database password never reaches the log');
+    // The panel exists so the tenant's own URL is the customer's domain; routing still
+    // reaches it through the shared subdomain, which is why both are accepted here.
+    body = JSON.stringify({...input, url: 'https://panel.customer.test'});
+    assert.equal((await send()).status, 200, 'a customer domain is a valid application URL');
+    const moved = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
+    assert.ok(moved.includes('APP_URL=https://panel.customer.test'), 'APP_URL is the customer domain');
+    assert.ok(moved.includes('ASSET_URL=https://panel.customer.test'));
+    const movedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
+    assert.equal(movedState.status, 'ready', 'a serving tenant is not taken offline to rewrite its environment');
+    assert.equal(movedState.url, 'https://panel.customer.test');
+    assert.notEqual(movedState.envHash, movedState.containerEnvHash, 'the new environment waits for an upgrade to recreate the container');
+    for (const refused of ['https://cloud.test', 'https://us.origin.test', 'http://panel.customer.test', 'https://panel.customer.test/app', 'https://panel.customer.test:8443', 'panel.customer.test']) {
+      body = JSON.stringify({...input, url: refused});
+      assert.equal((await send()).status, 503, `refused application URL: ${refused}`);
+    }
+    body = JSON.stringify(input);
+    assert.equal((await send()).status, 200, 'the routing subdomain stays a valid application URL');
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`)).status, 404);
     const headers = {'x-spartan-client-ip': '198.51.100.42', 'x-forwarded-for': 'attacker', 'cf-connecting-ip': 'attacker', 'x-real-ip': 'attacker', 'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
     for (const clientIp of ['', '198.51.100.42, 203.0.113.9', 'invalid']) assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers: {...headers, 'x-spartan-client-ip': clientIp}})).status, 404);
