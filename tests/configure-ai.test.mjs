@@ -20,6 +20,8 @@ test('configure generates Workers AI binding, shared secret, migration and signe
       else if (resource.endsWith('/token')) result = 'tunnel-token';
       else if (resource.endsWith('/dns_records') || resource.endsWith('/queues')) result = init.method === 'GET' ? [] : {};
       else if (resource.endsWith('/configurations')) result = {};
+      else if (resource.endsWith('/d1/database')) result = init.method === 'GET' ? [] : {uuid: 'd1-uuid', name: 'spartan-routing-cloud-spartan-test'};
+      else if (resource.endsWith('/query')) result = [{success: true}];
       else throw new Error('unexpected_resource');
       return Response.json({success: true, result});
     };`);
@@ -39,6 +41,8 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     const routeWorker = JSON.parse(await readFile(path.join(directory, 'generated/routing.json'), 'utf8'));
     assert.equal(routeWorker.durable_objects.bindings.some(binding => binding.script_name), false);
     assert.deepEqual(routeWorker.migrations[0].new_sqlite_classes, ['RoutingTenant', 'Domains']);
+    assert.deepEqual(routeWorker.d1_databases, [{binding: 'DB', database_name: 'spartan-routing-cloud-spartan-test', database_id: 'd1-uuid'}]);
+    assert.deepEqual(routeWorker.triggers.crons, ['*/5 * * * *'], 'the cron now drives the certificate sweep that the Durable Object alarm used to');
     const routeSecrets = JSON.parse(await readFile(path.join(directory, 'generated/routing.secrets.json'), 'utf8'));
     assert.match(routeSecrets.ROUTING_CONTROL_SECRET, /^[a-f0-9]{64}$/);
     assert.deepEqual(worker.ai, {binding: 'AI'});

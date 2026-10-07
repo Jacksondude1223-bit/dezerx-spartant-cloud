@@ -9,14 +9,14 @@ export function hostname(value, env) {
   }
   return name;
 }
-async function api(env, method, suffix, body) {
+export async function api(env, method, suffix, body) {
   if (!env.CF_SAAS_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) throw new Error('saas_configuration_required');
   const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CLOUDFLARE_ZONE_ID}/custom_hostnames${suffix}`, {method, headers: {authorization: `Bearer ${env.CF_SAAS_API_TOKEN}`, 'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(8000)});
   const result = await response.json();
   if (!response.ok || !result.success) throw new Error(`cloudflare_${response.status}`);
   return result.result;
 }
-async function dns(name, type) {
+export async function dns(name, type) {
   const url = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`;
   const response = await fetch(url, {headers: {accept: 'application/dns-json'}, signal: AbortSignal.timeout(5000)});
   if (!response.ok) throw new Error('dns_unavailable');
@@ -24,7 +24,7 @@ async function dns(name, type) {
   if (data.Status !== 0 || data.CD === true) return [];
   return data.Answer || [];
 }
-function txt(value) {
+export function txt(value) {
   const chunks = value.match(/"(?:[^"\\]|\\.)*"/g);
   if (!chunks) return value;
   try { return chunks.map(chunk => JSON.parse(chunk)).join(''); } catch { return ''; }
@@ -59,6 +59,8 @@ export class Domains {
   async handle(request) {
     const input = await request.json();
     if (new URL(request.url).pathname === '/monitor') { await this.schedule(); return json({ok: true}); }
+    // Migration only: this object can list its own keys, so its records can be moved to D1.
+    if (new URL(request.url).pathname === '/export') return json({domains: [...(await this.ctx.storage.list({prefix: 'domain:'})).values()]});
     const name = hostname(input.hostname, this.env);
     const key = `domain:${name}`;
     const record = await this.ctx.storage.get(key);
