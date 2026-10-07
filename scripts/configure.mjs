@@ -95,12 +95,23 @@ const queues = await api('GET', `${account}/queues?per_page=100`);
 for (const queue_name of ['spartan-provision', 'spartan-provision-dead']) {
   if (!queues.some(queue => queue.queue_name === queue_name)) await api('POST', `${account}/queues`, {queue_name});
 }
+// Routing state lives in D1 rather than Durable Objects: a Durable Object bills for the
+// wall-clock time it stays awake, so reading one per request kept an object warm per tenant.
+const databaseName = `spartan-routing-${cfg.BASE_DOMAIN.replace(/[^a-z0-9]+/g, '-')}`;
+if (!state.d1 || state.d1.name !== databaseName) {
+  const existing = await api('GET', `${account}/d1/database?name=${encodeURIComponent(databaseName)}`);
+  const found = (Array.isArray(existing) ? existing : []).find(database => database.name === databaseName);
+  state.d1 = {name: databaseName, id: found ? found.uuid : (await api('POST', `${account}/d1/database`, {name: databaseName})).uuid};
+  await write('state.json', JSON.stringify(state));
+}
+// schema.sql is CREATE TABLE IF NOT EXISTS throughout, so applying it again is a no-op.
+await api('POST', `${account}/d1/database/${state.d1.id}/query`, {sql: await readFile(new URL('../workers/schema.sql', import.meta.url), 'utf8')});
 const vars = {MAX_CUSTOM_HOSTNAMES: String(hostnameLimit), BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, CLOUDFLARE_ZONE_ID: cfg.CLOUDFLARE_ZONE_ID, SAAS_ZONE_DOMAIN: zone.name, SAAS_CNAME_TARGET: cfg.BASE_DOMAIN};
 const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026-10-01', vars, observability: {enabled: true}};
 await write('provisioning.json', JSON.stringify({...common, ai: {binding: 'AI'}, vars: {...vars, AI_RECOVERY_ENABLED: String(aiEnabled), AI_MAX_CALLS_PER_DAY: String(aiLimit)}, triggers: {crons: ['0 */6 * * *']}, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}, {name: 'RECOVERY', class_name: 'Recovery'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}, {tag: 'v3', new_sqlite_classes: ['Recovery']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
 const routes = [{pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];
 if (customDomains) routes.push({pattern: '*/*', zone_id: cfg.CLOUDFLARE_ZONE_ID});
-await write('routing.json', JSON.stringify({...common, name: routingWorkerName, assets: {directory: '../workers/public', binding: 'ASSETS', run_worker_first: true}, main: '../workers/routing.js', workers_dev: true, routes, triggers: {crons: ['0 */6 * * *']}, migrations: [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}], durable_objects: {bindings: [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]}}));
+await write('routing.json', JSON.stringify({...common, name: routingWorkerName, assets: {directory: '../workers/public', binding: 'ASSETS', run_worker_first: true}, main: '../workers/routing.js', workers_dev: true, routes, d1_databases: [{binding: 'DB', database_name: state.d1.name, database_id: state.d1.id}], triggers: {crons: ['*/5 * * * *']}, migrations: [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}], durable_objects: {bindings: [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]}}));
 await write('provisioning.secrets.json', JSON.stringify({AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, BILLING_WEBHOOK_SECRET: state.BILLING_WEBHOOK_SECRET, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
 await write('routing.secrets.json', JSON.stringify({ORIGIN_SECRET: state.ORIGIN_SECRET, ROUTING_CONTROL_SECRET: state.ROUTING_CONTROL_SECRET, ...(customDomains ? {CF_SAAS_API_TOKEN: cfg.CF_SAAS_API_TOKEN || cfg.CLOUDFLARE_API_TOKEN} : {})}));
 await write('routing.env', `ROUTING_CONTROL_SECRET=${state.ROUTING_CONTROL_SECRET}\nSPARTAN_ROUTING_URL=CHANGE_ME\n`);

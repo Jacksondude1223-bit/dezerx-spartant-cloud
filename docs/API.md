@@ -8,6 +8,8 @@ Based on the implementation at repository commit `0d60c324f84b4dceab6308f9290ce8
 
 The default Worker is a router. The master website provisions and manages Docker containers by calling each node, then publishes service state to the routing Worker. Registering a route does not create, stop, restart, or delete a container.
 
+The routing Worker keeps its routing records and custom-domain registrations in a D1 database bound as `DB`, created by `npm run configure`. Earlier revisions kept them in Durable Objects; a Durable Object is billed for the wall-clock time it stays awake, so consulting one on every request kept an object warm per tenant. The Durable Object classes remain deployed only so existing registrations can be migrated out. Certificate monitoring runs from the Worker's cron trigger, every five minutes, because D1 has no alarms.
+
 | API | Example base URL | Authentication |
 | --- | --- | --- |
 | Routing Worker | `https://dezerx-spartant-cloud.ACCOUNT.workers.dev` | HMAC using `ROUTING_CONTROL_SECRET` |
@@ -286,7 +288,15 @@ A first reservation response can look like:
 
 Optional fields are omitted until known. Domain statuses include `pending_ownership`, `pending_certificate`, `active`, and `deleting`. Successful deletion returns `{"deleted":true}`. A verify HTTP 200 can still mean `pending_certificate`; inspect the body.
 
-Cloudflare for SaaS configuration, the zone ID, API token, fallback origin, and DNS/Worker routes must already be configured. The repository's local custom-hostname limit defaults to 30. The implementation also guards against reaching 100 registrations using Cloudflare's reported quota and a conservative stored allocation counter; deletion does not decrement that local counter. These are code limits, not a guarantee about your Cloudflare plan or bill.
+Cloudflare for SaaS configuration, the zone ID, API token, fallback origin, and DNS/Worker routes must already be configured. The repository's local custom-hostname limit defaults to 30. The implementation also guards against reaching 100 registrations using Cloudflare's reported quota and a count of the hostnames it currently holds; deleting a hostname frees its slot. These are code limits, not a guarantee about your Cloudflare plan or bill.
+
+Two verify calls for the same hostname cannot both register it: only the caller that claims the registration attempt contacts Cloudflare, and the other receives the current record. Poll `status` after `verify`, as step 5 above already requires.
+
+### POST /v1/routing/migrate/domains
+
+One-shot migration, signed with `ROUTING_CONTROL_SECRET` and an empty JSON object as the body. Copies custom-domain registrations out of the pre-D1 Durable Object into D1 and reports `{"found":N,"imported":N}`. Replaying it imports nothing further, so it is safe to repeat.
+
+Routing records cannot be migrated this way, because a Durable Object namespace cannot be enumerated by name. Re-register each tenant with `POST /v1/routing/instances` from the master website, which is the authoritative source for that state. `scripts/migrate-routing.mjs` does both halves.
 
 ### GET /__routing_status
 

@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import routing, {RoutingTenant, Domains} from '../workers/routing.js';
 import {signature} from '../workers/shared.js';
+import {d1} from './d1.mjs';
+import {resolveHostname} from '../workers/store.js';
 const secret = 'r'.repeat(64);
 const id = 't-' + 'a'.repeat(24);
 const input = {id, serviceId: 'service_1', customerId: 'customer_1', primary: 'us', status: 'ready', lifecycleVersion: 0};
@@ -16,6 +18,7 @@ function fixture() {
     const object = new Class({storage, blockConcurrencyWhile: fn => fn()}, env);
     return {fetch: (url, init) => object.fetch(new Request(url, init))};
   }});
+  env.DB = d1();
   env.TENANTS = namespace(RoutingTenant);
   env.DOMAINS = namespace(Domains);
   return {env, records};
@@ -90,4 +93,23 @@ test('oversized routing control payloads are refused before registration', async
   const request = new Request('https://routing.workers.dev/v1/routing/instances', {method: 'POST', body: 'x'.repeat(65537)});
   assert.equal((await routing.fetch(request, env)).status, 413);
   assert.equal(records.size, 0);
+});
+
+test('custom domain registrations migrate out of the Durable Object into D1', async () => {
+  const {env, records} = fixture();
+  // Seed the legacy object exactly as a pre-D1 deployment would have left it.
+  records.set('Domains:registry', new Map([
+    ['domain:billing.customer.test', {hostname: 'billing.customer.test', tenantId: id, token: 'token-1', status: 'active', cloudflareId: 'cf-1', slotReserved: true, createAttempted: true, nextCheckAt: 1234}],
+    ['domain:shop.customer.test', {hostname: 'shop.customer.test', tenantId: id, token: 'token-2', status: 'pending_ownership', nextCheckAt: 99}],
+    ['budgetUsed', 7]
+  ]));
+  assert.equal(await resolveHostname(env, 'billing.customer.test'), null);
+  const migrated = await routing.fetch(await signed('/v1/routing/migrate/domains', {}), env);
+  assert.equal(migrated.status, 200);
+  assert.deepEqual(await migrated.json(), {found: 2, imported: 2}, 'the stray budgetUsed key is not a domain');
+  assert.equal(await resolveHostname(env, 'billing.customer.test'), id);
+  assert.equal(await resolveHostname(env, 'shop.customer.test'), null, 'a pending reservation must not route yet');
+  const again = await routing.fetch(await signed('/v1/routing/migrate/domains', {}), env);
+  assert.deepEqual(await again.json(), {found: 2, imported: 0}, 'replaying the migration changes nothing');
+  assert.equal((await routing.fetch(new Request('https://routing.workers.dev/v1/routing/migrate/domains', {method: 'POST', body: '{}'}), env)).status, 401, 'migration requires a signature');
 });
