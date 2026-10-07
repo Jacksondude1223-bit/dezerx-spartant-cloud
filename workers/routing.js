@@ -1,13 +1,15 @@
 import {ID, json, region, visitorIp} from './shared.js';
 import {routingControl} from './routing-registry.js';
+import {readRoute, resolveHostname} from './store.js';
+import {monitorDomains} from './domains-d1.js';
 import {statusPage} from './status-page.js';
 export {RoutingTenant} from './routing-registry.js';
 export {Domains} from './domains.js';
 
 export default {
   async scheduled(event, env) {
-    const response = await env.DOMAINS.getByName('registry').fetch('https://domains/monitor', {method: 'POST', body: '{}'});
-    if (!response.ok) throw new Error('domain_monitor_failed');
+    // D1 has no alarms, so the cron trigger drives the certificate sweep.
+    await monitorDomains(env);
   },
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -29,16 +31,14 @@ export default {
       let id;
       if (url.hostname.endsWith(`.${env.BASE_DOMAIN}`)) id = url.hostname.slice(0, -env.BASE_DOMAIN.length - 1);
       else {
-        if (!env.DOMAINS) return await missing();
-        const mapping = await env.DOMAINS.getByName('registry').fetch('https://domains/resolve', {method: 'POST', body: JSON.stringify({hostname: url.hostname})});
-        if (!mapping.ok) return await missing();
-        id = (await mapping.json()).id;
+        if (!env.DB) return await missing();
+        id = await resolveHostname(env, url.hostname);
+        if (!id) return await missing();
       }
       if (!ID.test(id)) return await missing();
       if (url.protocol !== 'https:') { url.protocol = 'https:'; return Response.redirect(url.toString(), 308); }
-      const state = await env.TENANTS.getByName(id).fetch('https://tenant/status');
-      if (!state.ok) return await missing();
-      const record = await state.json();
+      const record = await readRoute(env, id);
+      if (!record) return await missing();
       if (['suspended', 'suspending'].includes(record.status)) return json({error: 'service_suspended'}, 403);
       if (['terminated', 'terminating'].includes(record.status)) return json({error: 'service_terminated'}, 410);
       if (record.status !== 'ready') return json({error: 'provisioning'}, 503);

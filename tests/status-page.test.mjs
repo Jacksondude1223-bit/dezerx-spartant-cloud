@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import routing from '../workers/routing.js';
 import {routingStatus} from '../workers/status-page.js';
+import {d1, setRoute} from './d1.mjs';
 const env = {BASE_DOMAIN: 'cloud.example.com', US_ORIGIN: 'https://node-us.example.com', DE_ORIGIN: 'https://node-de.example.com'};
 function request(path = '/', headers = {}, cf = {}) {
   const req = new Request(`https://routing.workers.dev${path}`, {headers});
@@ -72,7 +73,8 @@ test('browser requests for registered customer homepages still reach their own p
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   const id = 't-' + 'c'.repeat(24);
-  const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', TENANTS: {getByName(received) { assert.equal(received, id); return {async fetch() { return Response.json({status: 'ready'}); }}; }}};
+  const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', DB: d1()};
+  setRoute(configured, {id, status: 'ready'});
   globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/`); return new Response('customer-panel'); };
   const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/`, {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.22'}}), configured);
   assert.equal(await response.text(), 'customer-panel');
@@ -86,7 +88,7 @@ test('meme video requests use the asset binding and preserve range requests', as
   assert.equal(response.status, 206);
   assert.equal(response.headers.get('content-type'), 'video/mp4');
   assert.equal(observed.headers.get('range'), 'bytes=0-10');
-  const unmapped = {...env, ASSETS: assets, DOMAINS: {getByName() { return {async fetch() { return Response.json({error: 'not_found'}, {status: 404}); }}; }}};
+  const unmapped = {...env, ASSETS: assets, DB: d1()};
   const custom = await routing.fetch(new Request('https://custom.provider.test/__spartan_meme/meme.mp4'), unmapped);
   assert.equal(custom.status, 206);
   assert.equal(observed.url, 'https://custom.provider.test/__spartan_meme/meme.mp4');
@@ -96,7 +98,8 @@ test('registered customer media paths continue to their own application', async 
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   const id = 't-' + 'd'.repeat(24);
-  const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', ASSETS: {async fetch() { throw new Error('customer_asset_intercepted'); }}, TENANTS: {getByName() { return {async fetch() { return Response.json({status: 'ready'}); }}; }}};
+  const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', ASSETS: {async fetch() { throw new Error('customer_asset_intercepted'); }}, DB: d1()};
+  setRoute(configured, {id, status: 'ready'});
   globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/__spartan_meme/meme.mp4`); return new Response('customer-media'); };
   const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/__spartan_meme/meme.mp4`, {headers: {'cf-connecting-ip': '198.51.100.22'}}), configured);
   assert.equal(await response.text(), 'customer-media');
