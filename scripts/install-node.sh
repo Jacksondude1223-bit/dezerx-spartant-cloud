@@ -1,27 +1,57 @@
 #!/usr/bin/env bash
 set -euo pipefail
-test "$(id -u)" -eq 0
+set +x
+umask 077
+export PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
+[ "$(id -u)" -eq 0 ] || { printf 'Run with sudo.\n' >&2; exit 1; }
+invocation_dir="$(pwd)"
 cd "$(dirname "$0")/.."
+location="${1:-}"
+case "$location" in us|de) ;; *) printf 'Usage: sudo bash scripts/install-node.sh us|de [--env FILE] [--token FILE] [--non-interactive] [--skip-dependencies]\n' >&2; exit 1 ;; esac
+shift
+setup_args=()
+skip_dependencies=false
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --skip-dependencies) skip_dependencies=true; shift ;;
+    --non-interactive) setup_args+=("$1"); shift ;;
+    --env|--token)
+      [ "$#" -ge 2 ] || exit 1
+      input_file="$2"
+      if [[ "$input_file" != /* ]]; then input_file="$invocation_dir/$input_file"; fi
+      setup_args+=("$1" "$input_file")
+      shift 2 ;;
+    *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
+  esac
+done
+[ -d /run/systemd/system ] || { printf 'A systemd host is required.\n' >&2; exit 1; }
+command -v flock >/dev/null || { apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y util-linux; }
+exec 9>/run/spartan-install.lock
+flock -n 9 || { printf 'Another node installation is running.\n' >&2; exit 1; }
+if [ "$skip_dependencies" = false ]; then bash scripts/install-dependencies.sh; fi
 node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 docker info >/dev/null
 command -v cloudflared >/dev/null
 command -v sqlite3 >/dev/null
-command -v flock >/dev/null
-location="${1:?}"
-case "$location" in us|de) ;; *) exit 1 ;; esac
+staging="$(mktemp -d)"
+trap 'rm -rf "$staging"' EXIT
+node scripts/setup-node.mjs "$location" "${setup_args[@]}" --output "$staging"
+image="$(cat "$staging/image")"
+printf 'Checking Spartan image availability.\n'
+docker pull "$image" || { printf 'Image pull failed. For private images run sudo docker login REGISTRY, then retry.\n' >&2; exit 1; }
 install -d -m 700 /etc/spartan-cloud /srv/spartan-cloud /srv/spartan-backups
 install -d -m 755 /opt/spartan-cloud
-install -m 600 "generated/$location.env" /etc/spartan-cloud/node.env
-install -m 600 "generated/$location.tunnel-token" /etc/spartan-cloud/tunnel-token
-test -f /etc/spartan-cloud/laravel-env.json || install -m 600 /dev/null /etc/spartan-cloud/laravel-env.json
-test -s /etc/spartan-cloud/laravel-env.json || printf '{}\n' > /etc/spartan-cloud/laravel-env.json
-install -m 644 node/admin-validation.mjs /opt/spartan-cloud/admin-validation.mjs
-install -m 644 node/initial-admin.mjs /opt/spartan-cloud/initial-admin.mjs
-install -m 644 node/client-ip.mjs /opt/spartan-cloud/client-ip.mjs
-install -m 644 node/service-lifecycle.mjs /opt/spartan-cloud/service-lifecycle.mjs
-install -m 644 node/agent.mjs /opt/spartan-cloud/agent.mjs
-install -m 644 node/recovery-policy.mjs /opt/spartan-cloud/recovery-policy.mjs
-install -m 644 node/recovery.mjs /opt/spartan-cloud/recovery.mjs
+if [ -f /etc/spartan-cloud/node.env ]; then
+  install -d -m 700 /etc/spartan-cloud/history
+  previous="$(mktemp -d /etc/spartan-cloud/history/install.XXXXXXXX)"
+  install -m 600 /etc/spartan-cloud/node.env "$previous/node.env"
+  if [ -f /etc/spartan-cloud/tunnel-token ]; then install -m 600 /etc/spartan-cloud/tunnel-token "$previous/tunnel-token"; fi
+fi
+install -m 600 "$staging/node.env" /etc/spartan-cloud/node.env
+install -m 600 "$staging/tunnel-token" /etc/spartan-cloud/tunnel-token
+if [ ! -s /etc/spartan-cloud/laravel-env.json ]; then printf '{}\n' > /etc/spartan-cloud/laravel-env.json; fi
+chmod 600 /etc/spartan-cloud/laravel-env.json
+for module in node/*.mjs; do install -m 644 "$module" "/opt/spartan-cloud/$(basename "$module")"; done
 install -m 755 scripts/backup.sh /opt/spartan-cloud/backup.sh
 node_path="$(command -v node)"
 cloudflared_path="$(command -v cloudflared)"
@@ -49,7 +79,7 @@ After=network-online.target spartan-agent.service
 Wants=network-online.target
 [Service]
 Type=simple
-ExecStart=$cloudflared_path tunnel --no-autoupdate run --token-file /etc/spartan-cloud/tunnel-token
+ExecStart=$cloudflared_path tunnel --metrics 127.0.0.1:8789 --no-autoupdate run --token-file /etc/spartan-cloud/tunnel-token
 Restart=always
 RestartSec=5
 UMask=0077
@@ -76,4 +106,11 @@ RandomizedDelaySec=120
 WantedBy=timers.target
 EOF
 systemctl daemon-reload
-systemctl enable --now spartan-agent spartan-tunnel spartan-backup.timer
+systemctl enable spartan-agent spartan-tunnel spartan-backup.timer
+systemctl restart spartan-agent spartan-tunnel
+systemctl start spartan-backup.timer
+node scripts/setup-node.mjs "$location" --check-health --env /etc/spartan-cloud/node.env
+systemctl is-active --quiet spartan-tunnel
+printf 'Installed %s node. Agent and tunnel start automatically; backups run hourly.\n' "$location"
+printf 'Tunnel ingress must point to http://127.0.0.1:8788.\n'
+printf 'View logs: journalctl -u spartan-agent -u spartan-tunnel -f\n'
