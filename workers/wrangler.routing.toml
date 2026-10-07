@@ -37,8 +37,3 @@ crons = ["*/5 * * * *"]
 directory = "public"
 binding = "ASSETS"
 run_worker_first = true
-
-[[d1_databases]]
-binding = "DB"
-database_name = "CHANGE_ME"
-database_id = "CHANGE_ME"
