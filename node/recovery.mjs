@@ -43,7 +43,7 @@ export function createRecovery({config, root, docker, run, transport = fetch, no
       return serialize(async () => {
         const directory = path.join(root, id);
         const tenant = await read(path.join(directory, 'state.json'));
-        if (tenant.status === 'ready' || !tenant.id || !stages.has(stage) || stage === 'replica') return false;
+        if (tenant.status === 'ready' || !tenant.id || !stages.has(stage)) return false;
         const file = path.join(directory, 'recovery.json');
         const history = await read(file);
         if ((history.attempts || 0) >= 2) return false;

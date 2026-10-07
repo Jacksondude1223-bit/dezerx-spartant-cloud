@@ -32,7 +32,7 @@ if [ "$skip_dependencies" = false ]; then bash scripts/install-dependencies.sh; 
 node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
 docker info >/dev/null
 command -v cloudflared >/dev/null
-command -v sqlite3 >/dev/null
+command -v mysqldump >/dev/null
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 node scripts/setup-node.mjs "$location" "${setup_args[@]}" --output "$staging"
@@ -40,6 +40,19 @@ image="$(cat "$staging/image")"
 printf 'Checking Spartan image availability.\n'
 docker pull "$image" || { printf 'Image pull failed. For private images run sudo docker login REGISTRY, then retry.\n' >&2; exit 1; }
 install -d -m 700 /etc/spartan-cloud /srv/spartan-cloud /srv/spartan-backups
+# Tenant containers reach MariaDB over its unix socket only, so it never listens on a
+# public interface. Each Octane worker, queue worker and scheduler holds a connection,
+# so the default 151 is far too low for a full node; MAX_USER_CONNECTIONS caps each tenant.
+install -d -m 755 /etc/mysql/mariadb.conf.d
+cat > /etc/mysql/mariadb.conf.d/99-spartan.cnf <<'CNF'
+[mysqld]
+bind-address = 127.0.0.1
+max_connections = 500
+CNF
+chmod 644 /etc/mysql/mariadb.conf.d/99-spartan.cnf
+systemctl enable mariadb
+systemctl restart mariadb
+mysqladmin --protocol=socket -uroot ping
 install -d -m 755 /opt/spartan-cloud
 if [ -f /etc/spartan-cloud/node.env ]; then
   install -d -m 700 /etc/spartan-cloud/history

@@ -13,7 +13,7 @@ esac
 architecture="$(dpkg --print-architecture)"
 case "$architecture" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) printf 'amd64 or arm64 is required.\n' >&2; exit 1 ;; esac
 apt-get update
-apt-get install -y ca-certificates curl tar xz-utils sqlite3 util-linux
+apt-get install -y ca-certificates curl tar xz-utils util-linux mariadb-server mariadb-client
 if ! command -v docker >/dev/null; then
   for package in docker.io podman-docker containerd runc; do
     if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
@@ -59,6 +59,9 @@ if ! command -v node >/dev/null || ! node -e 'process.exit(Number(process.versio
   tar -xJf "$download_dir/$archive" -C /opt/spartan-nodejs
   ln -sfn "/opt/spartan-nodejs/${archive%.tar.xz}/bin/node" /usr/local/bin/node
 fi
+systemctl enable --now mariadb
+mysqladmin --protocol=socket -uroot ping
 node --version
 docker --version
 cloudflared --version
+mysqld --version

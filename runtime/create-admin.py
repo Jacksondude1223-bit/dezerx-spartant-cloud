@@ -71,7 +71,8 @@ def main():
         return 1
     if not 1 <= len(admin['displayName'].strip()) <= 100 or not 8 <= len(admin['password']) <= 128 or len(admin['email']) > 254 or not re.fullmatch(r'[^\s@]+@[^\s@]+\.[^\s@]+', admin['email']):
         return 1
-    return bootstrap(admin, '/var/www/html/database/persistent')
+    # storage/ is the only per-tenant bind mount now that the database lives in MariaDB.
+    return bootstrap(admin, '/var/www/html/storage/app')
 
 
 def bootstrap(admin, directory):

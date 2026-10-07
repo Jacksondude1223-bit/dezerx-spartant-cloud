@@ -8,7 +8,7 @@ import {promisify} from 'node:util';
 import {parseEnvironment, serializeEnvironment, validateNodeEnvironment, checkNodeHealth} from '../scripts/setup-node.mjs';
 
 const run = promisify(execFile);
-const fixture = region => ({NODE_REGION: region, BASE_DOMAIN: 'cloud.customer.test', US_ORIGIN: 'https://node-us.customer.test', DE_ORIGIN: 'https://node-de.customer.test', SPARTAN_IMAGE: `registry.customer.test/spartan@sha256:${'a'.repeat(64)}`, NODE_CONTROL_SECRET: 'b'.repeat(64), ORIGIN_SECRET: 'c'.repeat(64), TENANT_CPUS: '1', TENANT_MEMORY: '512m', MAX_TENANTS: '100', AI_RECOVERY_ENABLED: 'false', AI_MAX_CALLS_PER_DAY: '10', AGENT_PORT: '8788', DATA_ROOT: '/srv/spartan-cloud', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'});
+const fixture = region => ({NODE_REGION: region, BASE_DOMAIN: 'cloud.customer.test', US_ORIGIN: 'https://node-us.customer.test', DE_ORIGIN: 'https://node-de.customer.test', SPARTAN_IMAGE: `registry.customer.test/spartan@sha256:${'a'.repeat(64)}`, NODE_CONTROL_SECRET: 'b'.repeat(64), ORIGIN_SECRET: 'c'.repeat(64), TENANT_CPUS: '1', TENANT_MEMORY: '512m', MAX_TENANTS: '100', AI_RECOVERY_ENABLED: 'false', AI_MAX_CALLS_PER_DAY: '10', AGENT_PORT: '8788', DATA_ROOT: '/srv/spartan-cloud', MYSQL_SOCKET: '/run/mysqld/mysqld.sock', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'});
 
 test('node configuration parser roundtrips literal values without executing shell syntax', () => {
   const env = {...fixture('us'), ORIGIN_SECRET: 'literal-$(touch /tmp/never-execute)-"\\' + 'x'.repeat(32)};

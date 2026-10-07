@@ -67,7 +67,7 @@ for (const location of ['us', 'de']) {
   const token = await api('GET', `${account}/cfd_tunnel/${tunnel.id}/token`);
   await write(`${location}.tunnel-token`, token);
   await dns(hostname, `${tunnel.id}.cfargotunnel.com`);
-  const env = {NODE_REGION: location, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ORIGIN_SECRET: state.ORIGIN_SECRET, BASE_DOMAIN: cfg.BASE_DOMAIN, SPARTAN_IMAGE: cfg.SPARTAN_IMAGE, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', TENANT_CPUS: cfg.TENANT_CPUS || '1', TENANT_MEMORY: cfg.TENANT_MEMORY || '512m', MAX_TENANTS: cfg.MAX_TENANTS || '100', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
+  const env = {NODE_REGION: location, NODE_CONTROL_SECRET: state.NODE_CONTROL_SECRET, ORIGIN_SECRET: state.ORIGIN_SECRET, BASE_DOMAIN: cfg.BASE_DOMAIN, SPARTAN_IMAGE: cfg.SPARTAN_IMAGE, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', MYSQL_SOCKET: '/run/mysqld/mysqld.sock', TENANT_CPUS: cfg.TENANT_CPUS || '1', TENANT_MEMORY: cfg.TENANT_MEMORY || '512m', MAX_TENANTS: cfg.MAX_TENANTS || '100', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
   Object.assign(env, {AI_RECOVERY_ENABLED: String(aiEnabled), AI_RECOVERY_URL: aiUrl, AI_RECOVERY_SECRET: state.AI_RECOVERY_SECRET, AI_MAX_CALLS_PER_DAY: String(aiLimit)});
   if (Object.values(env).some(value => /[\r\n]/.test(value))) throw new Error('invalid_node_environment');
   await write(`${location}.env`, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n');

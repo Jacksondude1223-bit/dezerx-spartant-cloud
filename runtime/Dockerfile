@@ -5,7 +5,7 @@ WORKDIR /build
 COPY app/ ./
 RUN if [ -f package.json ]; then test -f package-lock.json && npm ci --no-audit --no-fund && npm run build; fi
 FROM php:8.4-cli-bookworm
-RUN apt-get update && apt-get install -y --no-install-recommends nginx supervisor sqlite3 python3 libzip-dev libicu-dev libonig-dev libsqlite3-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev libxml2-dev libcurl4-openssl-dev unzip curl ca-certificates && docker-php-ext-configure gd --with-freetype --with-jpeg && docker-php-ext-install gd curl pdo_mysql exif pdo_sqlite bcmath intl mbstring zip opcache pcntl sockets && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends nginx supervisor python3 libzip-dev libicu-dev libonig-dev libsqlite3-dev libpng-dev libjpeg62-turbo-dev libfreetype6-dev libxml2-dev libcurl4-openssl-dev unzip curl ca-certificates && docker-php-ext-configure gd --with-freetype --with-jpeg && docker-php-ext-install gd curl pdo_mysql exif pdo_sqlite bcmath intl mbstring zip opcache pcntl sockets && rm -rf /var/lib/apt/lists/*
 COPY runtime/install-ioncube.sh /usr/local/bin/cloud-install-ioncube
 ARG IONCUBE_SHA256
 RUN IONCUBE_SHA256="$IONCUBE_SHA256" sh /usr/local/bin/cloud-install-ioncube && rm /usr/local/bin/cloud-install-ioncube

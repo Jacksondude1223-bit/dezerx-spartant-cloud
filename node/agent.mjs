@@ -3,16 +3,14 @@ import {isIP} from 'node:net';
 import {applyLifecycle} from './service-lifecycle.mjs';
 import {proxyHeaders} from './client-ip.mjs';
 import https from 'node:https';
-import {createHmac, timingSafeEqual, randomUUID} from 'node:crypto';
+import {createHmac, timingSafeEqual} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
-import {mkdir, readFile, writeFile, rename, chmod, readdir, unlink} from 'node:fs/promises';
-import {createReadStream, createWriteStream} from 'node:fs';
-import {Readable} from 'node:stream';
-import {pipeline} from 'node:stream/promises';
+import {mkdir, readFile, writeFile, rename, chmod, readdir} from 'node:fs/promises';
 import path from 'node:path';
 import {createInitialAdmin, validInitialAdmin} from './initial-admin.mjs';
 import {createRecovery} from './recovery.mjs';
+import {createMysql, newPassword, SOCKET} from './mysql.mjs';
 
 const run = promisify(execFile);
 const cfg = process.env;
@@ -26,7 +24,8 @@ for (const key of ['US_ORIGIN', 'DE_ORIGIN']) if (new URL(cfg[key]).protocol !==
 const root = cfg.DATA_ROOT || '/srv/spartan-cloud';
 const port = Number(cfg.AGENT_PORT || 8788);
 const jobs = new Map();
-const syncJobs = new Map();
+const socketPath = cfg.MYSQL_SOCKET || SOCKET;
+const socketDirectory = path.dirname(socketPath);
 const validId = id => /^t-[a-f0-9]{24}$/.test(id || '');
 const container = id => `spartan-${id}`;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -37,6 +36,7 @@ const recovery = createRecovery({config: cfg, root, docker: async args => {
   const result = await run('docker', args, {timeout: 20000, maxBuffer: 1024 * 1024});
   return args[0] === 'logs' ? `${result.stdout}\n${result.stderr}` : result.stdout.trim();
 }, run});
+const mysql = createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20});
 const stateFile = id => path.join(root, id, 'state.json');
 async function load(id) {
   if (!validId(id)) throw new Error('invalid_id');
@@ -65,12 +65,16 @@ async function provisionOnce(input, progress) {
   const directory = path.join(root, id);
   await mkdir(directory, {recursive: true, mode: 0o700});
   const role = primary === cfg.NODE_REGION ? 'primary' : 'secondary';
-  for (const name of ['database', 'storage']) {
-    const dir = path.join(directory, name);
-    await mkdir(dir, {recursive: true, mode: 0o700});
-    await run('chown', ['-R', '33:33', dir]);
-  }
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: url, ASSET_URL: url, LOG_CHANNEL: 'stderr', DB_CONNECTION: 'sqlite', DB_DATABASE: '/var/www/html/database/persistent/database.sqlite', DB_FOREIGN_KEYS: 'true', SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  const storage = path.join(directory, 'storage');
+  await mkdir(storage, {recursive: true, mode: 0o700});
+  await run('chown', ['-R', '33:33', storage]);
+  if (!await mysql.ready()) throw new Error('database_unavailable');
+  // Node-owned: the password never travels over the control API, and ensureTenant
+  // resyncs it so a lost state.json cannot orphan the database.
+  const dbPassword = existing?.dbPassword || newPassword();
+  persistedInput.dbPassword = dbPassword;
+  const {database, user} = await mysql.ensureTenant(id, dbPassword);
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: url, ASSET_URL: url, LOG_CHANNEL: 'stderr', DB_CONNECTION: 'mysql', DB_SOCKET: socketPath, DB_HOST: '127.0.0.1', DB_PORT: '3306', DB_DATABASE: database, DB_USERNAME: user, DB_PASSWORD: dbPassword, SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');
@@ -89,7 +93,7 @@ async function provisionOnce(input, progress) {
     progress.stage = 'pull';
     await docker(['pull', cfg.SPARTAN_IMAGE]);
     progress.stage = 'launch';
-    await docker(['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/database,dst=/var/www/html/database/persistent`, '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, cfg.SPARTAN_IMAGE]);
+    await docker(['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, cfg.SPARTAN_IMAGE]);
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
     if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
@@ -111,8 +115,6 @@ async function provisionOnce(input, progress) {
         }
         await save({...persistedInput, role, port: assignedPort, status: 'ready'});
         await recovery.success(id).catch(() => {});
-        progress.stage = 'replica';
-        if (role === 'secondary') await synchronize(id);
         return {id, status: 'ready', role};
       }
     } catch (error) { if (progress.stage === 'initial_admin') throw error; }
@@ -135,46 +137,6 @@ async function provision(input) {
     }
   }
   throw new Error('recovery_exhausted');
-}
-async function synchronize(id) {
-  if (syncJobs.has(id)) return syncJobs.get(id);
-  const job = (async () => {
-    const record = await load(id);
-    if (!record || record.role !== 'secondary' || record.status !== 'ready') return;
-    const origin = record.primary === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN;
-    const snapshot = path.join(root, id, 'database', `snapshot-${randomUUID()}.sqlite`);
-    try {
-      const response = await fetch(`${origin}/replica/${id}`, {headers: {'x-spartan-origin': cfg.ORIGIN_SECRET}, signal: AbortSignal.timeout(120000), redirect: 'error'});
-      if (!response.ok || !response.body) throw new Error('snapshot_unavailable');
-      await pipeline(Readable.fromWeb(response.body), createWriteStream(snapshot, {mode: 0o600}));
-      const check = await run('sqlite3', [snapshot, 'PRAGMA integrity_check;'], {timeout: 30000});
-      if (check.stdout.trim() !== 'ok') throw new Error('snapshot_corrupt');
-      await run('chown', ['33:33', snapshot]);
-      await rename(snapshot, path.join(root, id, 'database', 'database.sqlite'));
-      await writeFile(path.join(root, id, 'replica.json'), JSON.stringify({syncedAt: new Date().toISOString(), primary: record.primary}), {mode: 0o600});
-    } finally { await unlink(snapshot).catch(() => {}); }
-  })().finally(() => syncJobs.delete(id));
-  syncJobs.set(id, job);
-  return job;
-}
-async function snapshot(req, res, id) {
-  if (req.method !== 'GET' || !equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET) || !validId(id)) return reply(res, 404, {error: 'not_found'});
-  const record = await load(id);
-  if (!record || record.role !== 'primary' || record.status !== 'ready') return reply(res, 404, {error: 'not_found'});
-  const filename = `snapshot-${randomUUID()}.sqlite`;
-  const inside = `/var/www/html/database/persistent/${filename}`;
-  const outside = path.join(root, id, filename);
-  try {
-    await docker(['exec', container(id), 'sqlite3', '/var/www/html/database/persistent/database.sqlite', '.timeout 10000', `.backup '${inside}'`]);
-    await docker(['cp', `${container(id)}:${inside}`, outside]);
-    await chmod(outside, 0o600);
-    await docker(['exec', container(id), 'rm', '-f', inside]);
-    res.writeHead(200, {'content-type': 'application/octet-stream', 'cache-control': 'no-store'});
-    await pipeline(createReadStream(outside), res);
-  } finally {
-    await unlink(outside).catch(() => {});
-    await docker(['exec', container(id), 'rm', '-f', inside]).catch(() => {});
-  }
 }
 async function body(req) {
   let length = 0;
@@ -221,7 +183,6 @@ const server = http.createServer(async (req, res) => {
       return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION});
     }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
-    if (url.pathname.startsWith('/replica/')) return await snapshot(req, res, url.pathname.slice('/replica/'.length));
     const info = await target(req);
     if (!info) return reply(res, 404, {error: 'not_found'});
     const transport = info.url.protocol === 'https:' ? https : http;
@@ -265,15 +226,3 @@ server.on('upgrade', async (req, socket, head) => {
 server.requestTimeout = 120000;
 server.headersTimeout = 15000;
 server.listen(port, '127.0.0.1');
-let syncing = false;
-setInterval(async () => {
-  if (syncing) return;
-  syncing = true;
-  try {
-    for (const id of (await readdir(root)).filter(validId)) {
-      try { await synchronize(id); }
-      catch { console.error(JSON.stringify({event: 'replica_sync_failed', id})); }
-    }
-  } catch { console.error(JSON.stringify({event: 'replica_scan_failed'})); }
-  finally { syncing = false; }
-}, Math.max(60000, Number(cfg.REPLICA_INTERVAL_MS || 300000))).unref();
