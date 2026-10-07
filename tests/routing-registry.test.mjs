@@ -113,3 +113,18 @@ test('custom domain registrations migrate out of the Durable Object into D1', as
   assert.deepEqual(await again.json(), {found: 2, imported: 0}, 'replaying the migration changes nothing');
   assert.equal((await routing.fetch(new Request('https://routing.workers.dev/v1/routing/migrate/domains', {method: 'POST', body: '{}'}), env)).status, 401, 'migration requires a signature');
 });
+
+test('a Worker deployed without its database binding says so instead of blaming the origin', async () => {
+  const {env} = fixture();
+  delete env.DB;
+  const control = await routing.fetch(await signed(`/v1/routing/instances/${id}`), env);
+  assert.equal(control.status, 503);
+  assert.deepEqual(await control.json(), {error: 'database_binding_missing'}, 'an operator call names the real problem');
+  const tenant = await routing.fetch(customer('/'), env);
+  assert.equal(tenant.status, 503);
+  assert.deepEqual(await tenant.json(), {error: 'database_binding_missing'});
+  // A visitor on a hostname the router cannot resolve still gets the landing page, which
+  // is what it would show on a correctly configured deployment too.
+  const unmapped = await routing.fetch(new Request('https://unknown.customer.test/', {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.5'}}), env);
+  assert.equal(unmapped.headers.get('x-spartan-page'), 'routing-status-v1');
+});
