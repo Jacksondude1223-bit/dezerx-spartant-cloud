@@ -1,0 +1,2971 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Spartan Cloud APIs",
+    "version": "1.0.0",
+    "description": "Powered by Costal Cloud. Current master-to-node provisioning and standalone routing APIs, plus optional provisioning and recovery Worker endpoints. HMAC-SHA256 signs timestamp + newline + uppercase method + newline + pathname + newline + raw body. Timestamps are milliseconds within five minutes; GET signs an empty body. Credentials are literal strings. Exact raw bytes must be sent; do not follow redirects. Header auth controls cannot calculate signatures automatically. See API.md for full integration flow and current regional-routing limitations."
+  },
+  "servers": [
+    {
+      "url": "https://{worker}.{account}.workers.dev",
+      "description": "Default routing-only Worker",
+      "variables": {
+        "worker": {
+          "default": "dezerx-spartant-cloud"
+        },
+        "account": {
+          "default": "YOUR_ACCOUNT_SUBDOMAIN"
+        }
+      }
+    }
+  ],
+  "tags": [
+    {
+      "name": "Routing"
+    },
+    {
+      "name": "Domains"
+    },
+    {
+      "name": "Nodes"
+    },
+    {
+      "name": "Internal"
+    },
+    {
+      "name": "Diagnostics"
+    },
+    {
+      "name": "Optional provisioning"
+    },
+    {
+      "name": "Recovery"
+    }
+  ],
+  "paths": {
+    "/v1/routing/instances": {
+      "post": {
+        "operationId": "registerRoutingInstance",
+        "summary": "Register or update routing metadata",
+        "tags": [
+          "Routing"
+        ],
+        "description": "Does not provision containers. active normalizes to ready. Identity and primary are immutable. A status change needs a higher lifecycleVersion; termination cannot be reversed. Maximum body 65,536 bytes.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteRecord"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteInput"
+              },
+              "example": {
+                "id": "t-111111111111111111111111",
+                "serviceId": "svc_1001",
+                "customerId": "cus_42",
+                "primary": "us",
+                "status": "ready",
+                "lifecycleVersion": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/routing/instances/{id}": {
+      "get": {
+        "operationId": "getRoutingInstance",
+        "summary": "Get stored routing metadata",
+        "tags": [
+          "Routing"
+        ],
+        "description": "Sign an empty request body; this does not inspect Docker.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteRecord"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/routing/instances/{id}/domains/reserve": {
+      "post": {
+        "operationId": "reserveRoutingDomain",
+        "summary": "Reserve custom hostname",
+        "tags": [
+          "Domains"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}/domains/reserve": {
+      "post": {
+        "operationId": "reserveProvisioningDomain",
+        "summary": "Reserve custom hostname",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/routing/instances/{id}/domains/verify": {
+      "post": {
+        "operationId": "verifyRoutingDomain",
+        "summary": "Verify custom hostname",
+        "tags": [
+          "Domains"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}/domains/verify": {
+      "post": {
+        "operationId": "verifyProvisioningDomain",
+        "summary": "Verify custom hostname",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/routing/instances/{id}/domains/status": {
+      "post": {
+        "operationId": "statusRoutingDomain",
+        "summary": "Status custom hostname",
+        "tags": [
+          "Domains"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}/domains/status": {
+      "post": {
+        "operationId": "statusProvisioningDomain",
+        "summary": "Status custom hostname",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/routing/instances/{id}/domains/delete": {
+      "post": {
+        "operationId": "deleteRoutingDomain",
+        "summary": "Delete custom hostname",
+        "tags": [
+          "Domains"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}/domains/delete": {
+      "post": {
+        "operationId": "deleteProvisioningDomain",
+        "summary": "Delete custom hostname",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Requires a ready tenant, including delete. Domain registries are separate for each Worker. verify can return 409 with domain details until ownership is proven; HTTP 200 can still mean pending_certificate.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainInput"
+              },
+              "example": {
+                "hostname": "billing.customer.com"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__routing_status": {
+      "get": {
+        "operationId": "getRoutingDiagnostics",
+        "summary": "Get public connection diagnostics",
+        "tags": [
+          "Diagnostics"
+        ],
+        "description": "Use the routing control hostname; includes this visitor IP, selected node, and agent connection status. Not a tenant inventory.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RoutingStatus"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": []
+      }
+    },
+    "/control/provision": {
+      "post": {
+        "operationId": "provisionNodeTenant",
+        "summary": "Create or resume tenant container on one node",
+        "tags": [
+          "Nodes"
+        ],
+        "description": "Call both nodes with the same persistent ID, key, fingerprint, primary and lifecycle version. Send initialAdmin only to the primary. A 200 provisioning response requires retries. Maximum body 16,384 bytes. Node operational and most validation failures return 503 operation_failed.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeProvisionResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON; most other node validation failures return 503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Node validation or operational failure: operation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "NODE_CONTROL_SECRET",
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeProvisionInput"
+              },
+              "example": {
+                "id": "t-111111111111111111111111",
+                "primary": "us",
+                "appKey": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                "url": "https://t-111111111111111111111111.cloud.yourdomain.com",
+                "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "lifecycleVersion": 0,
+                "initialAdmin": {
+                  "displayName": "Customer Owner",
+                  "email": "owner@customer.example",
+                  "password": "Replace-this-password!"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/lifecycle": {
+      "post": {
+        "operationId": "changeNodeLifecycle",
+        "summary": "Suspend or terminate tenant on one node",
+        "tags": [
+          "Nodes"
+        ],
+        "description": "Call both nodes. Resume through /control/provision with a higher version. Termination removes containers but preserves data and backups; no revival under the same ID.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeLifecycleResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON; most other node validation failures return 503",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Node validation or operational failure: operation_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "NODE_CONTROL_SECRET",
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NodeLifecycleInput"
+              },
+              "example": {
+                "id": "t-111111111111111111111111",
+                "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "lifecycleVersion": 1,
+                "action": "suspended"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/__cloud_node_health": {
+      "get": {
+        "operationId": "getNodeHealth",
+        "summary": "Check authenticated node agent readiness",
+        "tags": [
+          "Nodes"
+        ],
+        "description": "Uses X-Spartan-Origin rather than HMAC. Does not inspect individual tenants.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeHealth"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OriginSecret": []
+          }
+        ],
+        "x-origin-secret": "ORIGIN_SECRET",
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ]
+      }
+    },
+    "/replica/{id}": {
+      "get": {
+        "operationId": "getReplicaSnapshot",
+        "summary": "Download ready primary SQLite snapshot",
+        "tags": [
+          "Internal"
+        ],
+        "description": "Internal replication. Invalid authentication and unavailable or non-primary records return 404. Not a customer endpoint.",
+        "responses": {
+          "200": {
+            "description": "SQLite database snapshot",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "OriginSecret": []
+          }
+        ],
+        "x-origin-secret": "ORIGIN_SECRET",
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/instances": {
+      "post": {
+        "operationId": "createProvisioningInstance",
+        "summary": "Queue optional Worker provisioning",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Only on the separately deployed provisioning Worker. Does not register state in the standalone router. Existing changed ownership or administrator details cause conflicts.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; poll status until completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisioningInput"
+              },
+              "example": {
+                "serviceId": "svc_1001",
+                "customerId": "cus_42",
+                "primary": "us",
+                "initialAdmin": {
+                  "displayName": "Customer Owner",
+                  "email": "owner@customer.example",
+                  "password": "Replace-this-password!"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}": {
+      "get": {
+        "operationId": "getProvisioningInstance",
+        "summary": "Poll optional provisioning state",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Only on the optional provisioning Worker. Sign an empty body.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ]
+      }
+    },
+    "/v1/services/status": {
+      "post": {
+        "operationId": "setProvisioningServiceStatus",
+        "summary": "Queue service lifecycle operation by service ID",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "The controller increments lifecycleVersion on a changed desired state. Synchronize standalone router state separately.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; poll status until completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceStatusInput"
+              },
+              "example": {
+                "serviceId": "svc_1001",
+                "status": "suspended"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/instances/{id}/lifecycle": {
+      "post": {
+        "operationId": "setProvisioningInstanceLifecycle",
+        "summary": "Queue service lifecycle operation by tenant ID",
+        "tags": [
+          "Optional provisioning"
+        ],
+        "description": "Only on the optional provisioning Worker. Synchronize standalone router state separately.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Accepted; poll status until completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProvisioningRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource or route not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict, stale lifecycle version, unready tenant, ownership pending, or quota guard",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "BILLING_WEBHOOK_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProvisioningLifecycleInput"
+              },
+              "example": {
+                "status": "suspended"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/recovery": {
+      "post": {
+        "operationId": "selectRecoveryAction",
+        "summary": "Select bounded repair using optional Llama Worker",
+        "tags": [
+          "Recovery"
+        ],
+        "description": "Optional provisioning Worker only. Diagnostic limit 2,048 decoded characters. No raw logs or arbitrary commands. Configured global daily budget 1\u201320 model calls per UTC day, at least 60 seconds apart. May return manual without a model call.",
+        "responses": {
+          "200": {
+            "description": "Inspect the response body state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecoveryResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or JSON; node control errors usually return 503 instead",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials or timestamp",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body exceeds endpoint limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Operation or dependency unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Recovery rate limit or daily budget exhausted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "405": {
+            "description": "Unsupported HTTP method",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "AI_RECOVERY_SECRET",
+        "servers": [
+          {
+            "url": "https://spartan-provisioning.{account}.workers.dev",
+            "description": "Optional separately deployed provisioning/recovery Worker",
+            "variables": {
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Diagnostic"
+              },
+              "example": {
+                "stage": "pull",
+                "signals": [
+                  "transient_network"
+                ],
+                "container": {
+                  "exists": false,
+                  "running": false,
+                  "oomKilled": false,
+                  "exitCode": null
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "Timestamp": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Spartan-Timestamp",
+        "description": "Decimal Unix milliseconds; calculate with signature for each request."
+      },
+      "Signature": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Spartan-Signature",
+        "description": "Lowercase HMAC-SHA256 of timestamp\\nMETHOD\\npathname\\nrawBody with the operation-specific shared secret."
+      },
+      "OriginSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Spartan-Origin",
+        "description": "Literal ORIGIN_SECRET, for internal health and replication requests only."
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": true
+      },
+      "InitialAdmin": {
+        "type": "object",
+        "properties": {
+          "displayName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Nonblank; no control characters."
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "password": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 128,
+            "writeOnly": true,
+            "description": "No control characters. Always creates a superadmin; do not supply role."
+          }
+        },
+        "required": [
+          "displayName",
+          "email",
+          "password"
+        ],
+        "additionalProperties": false
+      },
+      "RouteInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "customerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "active",
+              "suspended",
+              "terminated"
+            ]
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "serviceId",
+          "customerId",
+          "primary",
+          "status",
+          "lifecycleVersion"
+        ],
+        "additionalProperties": true
+      },
+      "RouteRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "customerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "suspended",
+              "terminated"
+            ]
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "serviceId",
+          "customerId",
+          "primary",
+          "status",
+          "lifecycleVersion"
+        ],
+        "additionalProperties": false
+      },
+      "NodeProvisionInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          },
+          "appKey": {
+            "type": "string",
+            "pattern": "^base64:[A-Za-z0-9+/]{43}=$",
+            "writeOnly": true
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Must equal https://{id}.{BASE_DOMAIN}."
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "default": 0
+          },
+          "initialAdmin": {
+            "$ref": "#/components/schemas/InitialAdmin"
+          }
+        },
+        "required": [
+          "id",
+          "primary",
+          "appKey",
+          "url",
+          "fingerprint"
+        ],
+        "additionalProperties": true
+      },
+      "NodeProvisionResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ready",
+              "provisioning"
+            ]
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "primary",
+              "secondary"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "role"
+        ],
+        "additionalProperties": false
+      },
+      "NodeLifecycleInput": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "fingerprint": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspended",
+              "terminated"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "fingerprint",
+          "lifecycleVersion",
+          "action"
+        ],
+        "additionalProperties": true
+      },
+      "NodeLifecycleResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "suspended",
+              "terminated"
+            ]
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "lifecycleVersion"
+        ],
+        "additionalProperties": false
+      },
+      "NodeHealth": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "ready",
+            "type": "string"
+          },
+          "region": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "region"
+        ],
+        "additionalProperties": false
+      },
+      "DomainInput": {
+        "type": "object",
+        "properties": {
+          "hostname": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "Public customer hostname; excludes reserved SaaS and origin hostnames."
+          }
+        },
+        "required": [
+          "hostname"
+        ],
+        "additionalProperties": true
+      },
+      "DomainRecord": {
+        "type": "object",
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "tenantId": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_ownership",
+              "pending_certificate",
+              "active",
+              "deleting"
+            ]
+          },
+          "cname": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "CNAME",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "target": {
+                "type": "string"
+              },
+              "proxied": {
+                "type": "boolean",
+                "const": false
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "target",
+              "proxied"
+            ],
+            "additionalProperties": false
+          },
+          "ownership": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "const": "TXT",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "name",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "certificateStatus": {
+            "type": "string"
+          },
+          "cloudflareOwnership": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "certificateValidation": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "ssl": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "const": "cloudflare"
+              },
+              "managed": {
+                "type": "boolean",
+                "const": true
+              },
+              "automaticRenewal": {
+                "type": "boolean",
+                "const": true
+              },
+              "method": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "checkedAt": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "nextCheckAt": {
+                "type": "integer"
+              },
+              "lastError": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "managed",
+              "automaticRenewal",
+              "method",
+              "status"
+            ],
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "hostname",
+          "tenantId",
+          "status",
+          "cname",
+          "ownership",
+          "ssl"
+        ],
+        "additionalProperties": false
+      },
+      "Deleted": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean",
+            "const": true
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "additionalProperties": false
+      },
+      "RoutingStatus": {
+        "type": "object",
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "ip": {
+            "type": "string"
+          },
+          "country": {
+            "type": "string"
+          },
+          "edge": {
+            "type": "string"
+          },
+          "node": {
+            "type": "string",
+            "enum": [
+              "United States",
+              "Germany"
+            ]
+          },
+          "connection": {
+            "type": "string",
+            "enum": [
+              "Not configured",
+              "Not connected",
+              "Connected"
+            ]
+          },
+          "connectedTo": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "hostname",
+          "ip",
+          "country",
+          "edge",
+          "node",
+          "connection",
+          "connectedTo",
+          "checkedAt"
+        ],
+        "additionalProperties": false
+      },
+      "ProvisioningInput": {
+        "type": "object",
+        "properties": {
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "customerId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          },
+          "initialAdmin": {
+            "$ref": "#/components/schemas/InitialAdmin"
+          }
+        },
+        "required": [
+          "serviceId",
+          "customerId",
+          "primary"
+        ],
+        "additionalProperties": true
+      },
+      "ProvisioningRecord": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^t-[a-f0-9]{24}$"
+          },
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "primary": {
+            "type": "string",
+            "enum": [
+              "us",
+              "de"
+            ]
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "ready",
+              "suspending",
+              "suspended",
+              "terminating",
+              "terminated"
+            ]
+          },
+          "desiredStatus": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "terminated"
+            ]
+          },
+          "lifecycleVersion": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "readyAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "serviceId",
+          "primary",
+          "status",
+          "desiredStatus",
+          "lifecycleVersion",
+          "url",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "ServiceStatusInput": {
+        "type": "object",
+        "properties": {
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "terminated"
+            ]
+          }
+        },
+        "required": [
+          "serviceId",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "ProvisioningLifecycleInput": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "terminated"
+            ]
+          },
+          "serviceId": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]{1,100}$"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "Diagnostic": {
+        "type": "object",
+        "properties": {
+          "stage": {
+            "type": "string",
+            "enum": [
+              "prepare",
+              "pull",
+              "launch",
+              "start",
+              "health",
+              "replica"
+            ]
+          },
+          "signals": {
+            "type": "array",
+            "maxItems": 8,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "permissions",
+                "stale_cache",
+                "transient_network",
+                "sqlite_locked",
+                "missing_dependency",
+                "migration_error",
+                "disk_full",
+                "out_of_memory"
+              ]
+            }
+          },
+          "container": {
+            "type": "object",
+            "properties": {
+              "exists": {
+                "type": "boolean"
+              },
+              "running": {
+                "type": "boolean"
+              },
+              "oomKilled": {
+                "type": "boolean"
+              },
+              "exitCode": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0,
+                "maximum": 255
+              }
+            },
+            "required": [
+              "exists",
+              "running",
+              "oomKilled",
+              "exitCode"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "stage",
+          "signals",
+          "container"
+        ],
+        "additionalProperties": false
+      },
+      "RecoveryResult": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "repair_permissions",
+              "clear_cache",
+              "retry_pull",
+              "start_container",
+              "restart_container",
+              "retry_deployment",
+              "manual"
+            ]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "required": [
+          "action",
+          "confidence"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}
