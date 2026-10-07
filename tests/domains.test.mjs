@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {Domains, hostname} from '../workers/domains.js';
 import routing from '../workers/routing.js';
+import {d1, setDomain, setRoute} from './d1.mjs';
 
 const first = `t-${'a'.repeat(24)}`;
 const second = `t-${'b'.repeat(24)}`;
@@ -9,6 +10,7 @@ function fixture() {
   const values = new Map();
   const storage = {async get(key) { return structuredClone(values.get(key)); }, async put(key, value) { values.set(key, structuredClone(value)); }, async delete(key) { values.delete(key); }, async setAlarm(value) { values.set('alarm', value); }, async list({prefix}) { return new Map([...values].filter(([key]) => key.startsWith(prefix))); }};
   const env = {BASE_DOMAIN: 'cloud.provider.test', SAAS_ZONE_DOMAIN: 'provider.test', SAAS_CNAME_TARGET: 'cloud.provider.test', US_ORIGIN: 'https://us.provider.test', DE_ORIGIN: 'https://de.provider.test', CF_SAAS_API_TOKEN: 'test', CLOUDFLARE_ZONE_ID: 'zone', ORIGIN_SECRET: 'test', TENANTS: {getByName(id) { return {fetch: async () => Response.json({id, status: 'ready'})}; }}};
+  env.DB = d1();
   const domains = new Domains({storage}, env);
   env.DOMAINS = {getByName() { return {fetch: (url, init) => domains.fetch(new Request(url, init))}; }};
   const call = (action, tenantId = first, name = 'billing.customer.test') => domains.fetch(new Request(`https://domains/${action}`, {method: 'POST', body: JSON.stringify({hostname: name, tenantId})}));
@@ -107,7 +109,8 @@ test('verified active domain resolves exclusively to its owning tenant', async (
 });
 test('custom domain requests retain their hostname and use the mapped tenant path', async () => {
   const f = fixture();
-  f.values.set('domain:billing.customer.test', {hostname: 'billing.customer.test', tenantId: first, status: 'active'});
+  setRoute(f.env, {id: first, status: 'ready'});
+  setDomain(f.env, {hostname: 'billing.customer.test', tenantId: first, status: 'active'});
   const original = globalThis.fetch;
   globalThis.fetch = async request => {
     assert.equal(new URL(request.url).pathname, `/tenant/${first}/invoices`);

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {signature, verify, digest, region} from '../workers/shared.js';
 import provisioning, {Tenant} from '../workers/provisioning.js';
 import routing from '../workers/routing.js';
+import {d1, setRoute} from './d1.mjs';
 
 const secret = 'a'.repeat(64);
 async function signed(method, path, payload = '', stamp = String(Date.now())) {
@@ -12,12 +13,20 @@ function fixture() {
   const tenants = new Map();
   const messages = [];
   const env = {BASE_DOMAIN: 'cloud.test', BILLING_WEBHOOK_SECRET: secret, NODE_CONTROL_SECRET: secret, ORIGIN_SECRET: secret, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', PROVISION_QUEUE: {async send(value) { messages.push(value); }}};
+  env.DB = d1();
   env.TENANTS = {getByName(id) {
     if (!tenants.has(id)) {
       const values = new Map();
       const storage = {async get(key) { return structuredClone(values.get(key)); }, async put(key, value) { values.set(key, structuredClone(value)); }, async setAlarm(value) { values.set('alarm', value); }, async deleteAlarm() { values.delete('alarm'); }, async transaction(fn) { return fn(storage); }};
       const tenant = new Tenant({storage, blockConcurrencyWhile: fn => fn()}, env);
-      tenants.set(id, {tenant, values, async fetch(url, init) { return tenant.fetch(new Request(url, init)); }});
+      tenants.set(id, {tenant, values, async fetch(url, init) {
+        const response = await tenant.fetch(new Request(url, init));
+        // Mirror into D1: the router reads routing records, which the operator publishes
+        // separately. Keeps these tests exercising the real D1 read path.
+        const record = values.get('record');
+        if (record?.id) setRoute(env, record);
+        return response;
+      }});
     }
     return tenants.get(id);
   }};

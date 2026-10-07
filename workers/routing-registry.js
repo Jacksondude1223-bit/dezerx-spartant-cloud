@@ -1,7 +1,16 @@
 import {ID, REGIONS, json, verify} from './shared.js';
+import {readRoute, registerRoute, importDomain} from './store.js';
+import {domainAction} from './domains-d1.js';
 
 const statuses = new Set(['pending', 'ready', 'suspended', 'terminated']);
 const field = /^[A-Za-z0-9_-]{1,100}$/;
+export function validRoute(input) {
+  return !!input && typeof input === 'object' && !Array.isArray(input)
+    && !['id', 'serviceId', 'customerId', 'primary', 'status'].some(key => typeof input[key] !== 'string')
+    && ID.test(input.id) && field.test(input.serviceId) && field.test(input.customerId)
+    && REGIONS.has(input.primary) && statuses.has(input.status)
+    && Number.isSafeInteger(input.lifecycleVersion) && input.lifecycleVersion >= 0;
+}
 
 export class RoutingTenant {
   constructor(ctx) { this.ctx = ctx; }
@@ -52,16 +61,35 @@ export async function routingControl(request, env) {
   let input;
   try { input = body ? JSON.parse(body) : {}; } catch { return json({error: 'invalid_json'}, 400); }
   if (path === '/v1/routing/instances' && request.method === 'POST') {
-    if (!input || !ID.test(input.id || '')) return json({error: 'invalid_route'}, 400);
-    const status = input.status === 'active' ? 'ready' : input.status;
-    return env.TENANTS.getByName(input.id).fetch('https://tenant/register', {method: 'POST', body: JSON.stringify({...input, status})});
+    const record = input && typeof input === 'object' && !Array.isArray(input)
+      ? {...input, status: input.status === 'active' ? 'ready' : input.status} : null;
+    if (!validRoute(record)) return json({error: 'invalid_route'}, 400);
+    const result = await registerRoute(env, {id: record.id, serviceId: record.serviceId, customerId: record.customerId, primary: record.primary, status: record.status, lifecycleVersion: record.lifecycleVersion});
+    if (result.error) return json({error: result.error}, 409);
+    return json(result.record, result.created ? 201 : 200);
   }
   const instance = path.match(/^\/v1\/routing\/instances\/(t-[a-f0-9]{24})$/);
-  if (instance && request.method === 'GET') return env.TENANTS.getByName(instance[1]).fetch('https://tenant/status');
+  if (instance && request.method === 'GET') {
+    const record = await readRoute(env, instance[1]);
+    return record ? json(record) : json({error: 'not_found'}, 404);
+  }
   const domain = path.match(/^\/v1\/routing\/instances\/(t-[a-f0-9]{24})\/domains\/(reserve|verify|status|delete)$/);
   if (domain && request.method === 'POST') {
     if (!input || typeof input.hostname !== 'string') return json({error: 'invalid_hostname'}, 400);
-    return env.DOMAINS.getByName('registry').fetch(`https://domains/${domain[2]}`, {method: 'POST', body: JSON.stringify({tenantId: domain[1], hostname: input.hostname})});
+    return domainAction(env, domain[2], {hostname: input.hostname, tenantId: domain[1]});
+  }
+  // One-shot migration: copies custom-domain registrations out of the legacy Durable
+  // Object into D1. Idempotent, so it can be replayed. Routing records cannot be migrated
+  // this way because a Durable Object namespace cannot be enumerated by name - re-register
+  // those from the master website instead.
+  if (path === '/v1/routing/migrate/domains' && request.method === 'POST') {
+    if (!env.DOMAINS) return json({error: 'legacy_namespace_unavailable'}, 409);
+    const response = await env.DOMAINS.getByName('registry').fetch('https://domains/export', {method: 'POST', body: '{}'});
+    if (!response.ok) return json({error: 'legacy_export_failed'}, 503);
+    const {domains} = await response.json();
+    let imported = 0;
+    for (const record of domains || []) if (record?.hostname && record?.tenantId && await importDomain(env, record)) imported++;
+    return json({found: (domains || []).length, imported});
   }
   return json({error: 'not_found'}, 404);
 }

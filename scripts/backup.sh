@@ -10,44 +10,27 @@ keep="${BACKUP_KEEP:-0}"
 mkdir -p "$backup_root"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 failed=0
+persistent=/var/www/html/database/persistent
 backup_tenant() {
   local name="$1" id="$2" dest="$3"
-  local database="sp_${id#t-}"
+  local inside="$persistent/backup-$stamp.sqlite"
   local status=0
-  # --single-transaction takes a consistent InnoDB snapshot without locking the tenant
-  # out. Each tenant is attempted independently so one failure cannot abort the sweep.
   mkdir -p "$dest" \
-    && mysqldump --protocol=socket --socket="$socket" -uroot --single-transaction --quick \
-         --routines --triggers --events --default-character-set=utf8mb4 "$database" \
-         | gzip -c > "$dest/database.sql.gz" \
-    && test -s "$dest/database.sql.gz" \
-    && gzip -t "$dest/database.sql.gz" \
+    && docker exec "$name" sqlite3 "$persistent/database.sqlite" ".timeout 10000" ".backup '$inside'" \
+    && docker cp "$name:$inside" "$dest/database.sqlite" \
+    && test "$(sqlite3 "$dest/database.sqlite" 'PRAGMA integrity_check;')" = ok \
     && tar -C "$data_root/$id" -czf "$dest/storage.tar.gz" storage \
     && cp "$data_root/$id/app.env" "$dest/app.env" \
     && cp "$data_root/$id/state.json" "$dest/state.json" \
     && touch "$dest/complete" || status=1
+  docker exec "$name" rm -f "$inside" "$persistent/backup.sqlite" >/dev/null 2>&1 || true
   return "$status"
-}
-# Opt-in retention. Unset or 0 keeps everything, which is the previous behaviour.
-prune_tenant() {
-  local id="$1"
-  [ "$keep" -gt 0 ] 2>/dev/null || return 0
-  local completed
-  completed="$(find "$backup_root/$id" -mindepth 2 -maxdepth 2 -name complete -printf '%h\n' 2>/dev/null | sort)"
-  local total
-  total="$(printf '%s\n' "$completed" | grep -c . || true)"
-  [ "$total" -gt "$keep" ] || return 0
-  printf '%s\n' "$completed" | head -n "$((total - keep))" | while read -r old; do
-    [ -n "$old" ] && [ -f "$old/complete" ] && rm -rf "$old"
-  done
 }
 while read -r name; do
   [[ "$name" =~ ^spartan-t-[a-f0-9]{24}$ ]] || continue
   id="${name#spartan-}"
   dest="$backup_root/$id/$stamp"
-  if backup_tenant "$name" "$id" "$dest"; then
-    prune_tenant "$id"
-  else
+  if ! backup_tenant "$name" "$id" "$dest"; then
     failed=$((failed + 1))
     rm -rf "$dest"
     printf 'backup_failed %s\n' "$id" >&2
