@@ -49,6 +49,31 @@ async function save(record) {
   await writeFile(temp, JSON.stringify(record), {mode: 0o600});
   await rename(temp, dest);
 }
+const portChecks = new Map();
+async function refreshPort(id) {
+  if (!validId(id)) return null;
+  const inFlight = portChecks.get(id);
+  if (inFlight) return inFlight;
+  if (jobs.has(id)) return null;
+  const check = (async () => {
+    const record = await load(id);
+    if (!record || record.role !== 'primary' || record.status !== 'ready') return null;
+    let inspect;
+    try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; } catch { return null; }
+    if (!inspect?.State?.Running || inspect.Config?.Labels?.['spartan.fingerprint'] !== record.fingerprint) return null;
+    const assigned = Number(inspect.NetworkSettings?.Ports?.['8080/tcp']?.[0]?.HostPort);
+    if (!assigned) return null;
+    const current = await load(id);
+    if (!current || current.status !== 'ready' || current.fingerprint !== record.fingerprint) return assigned;
+    if (current.port !== assigned) {
+      await save({...current, port: assigned});
+      console.error(JSON.stringify({event: 'tenant_port_resynced', id, port: assigned}));
+    }
+    return assigned;
+  })().finally(() => portChecks.delete(id));
+  portChecks.set(id, check);
+  return check;
+}
 async function provisionOnce(input, progress) {
   progress.stage = 'prepare';
   const {id, primary, appKey, url, fingerprint} = input;
@@ -232,7 +257,11 @@ const server = http.createServer(async (req, res) => {
       response.pipe(res);
     });
     upstream.setTimeout(60000, () => upstream.destroy(new Error('timeout')));
-    upstream.on('error', () => { if (!res.headersSent) reply(res, 503, {error: 'origin_unavailable'}); else res.destroy(); });
+    upstream.on('error', error => {
+      if (res.headersSent) return res.destroy();
+      if (info.local && ['ECONNREFUSED', 'ECONNRESET'].includes(error?.code)) refreshPort(info.record.id).catch(() => {});
+      reply(res, 503, {error: 'origin_unavailable'});
+    });
     req.on('aborted', () => upstream.destroy());
     res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
     req.pipe(upstream);
@@ -257,7 +286,10 @@ server.on('upgrade', async (req, socket, head) => {
       socket.on('close', () => peer.destroy());
     });
     upstream.on('response', res => { res.resume(); socket.end(`HTTP/1.1 ${res.statusCode} Rejected\r\n\r\n`); });
-    upstream.on('error', () => socket.destroy());
+    upstream.on('error', error => {
+      if (info.local && ['ECONNREFUSED', 'ECONNRESET'].includes(error?.code)) refreshPort(info.record.id).catch(() => {});
+      socket.destroy();
+    });
     upstream.setTimeout(15000, () => upstream.destroy());
     upstream.end();
   } catch { socket.destroy(); }
@@ -265,6 +297,10 @@ server.on('upgrade', async (req, socket, head) => {
 server.requestTimeout = 120000;
 server.headersTimeout = 15000;
 server.listen(port, '127.0.0.1');
+(async () => {
+  try { for (const id of (await readdir(root)).filter(validId)) await refreshPort(id).catch(() => {}); }
+  catch { console.error(JSON.stringify({event: 'port_reconcile_failed'})); }
+})();
 let syncing = false;
 setInterval(async () => {
   if (syncing) return;
