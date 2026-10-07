@@ -26,6 +26,9 @@ export default {
       if (controlHost && ['GET', 'HEAD'].includes(request.method) && ['/', '/__routing_status'].includes(url.pathname)) return await statusPage(request, env, url.pathname === '/__routing_status');
       if (controlHost && url.pathname.startsWith('/v1/routing/')) {
         if (url.protocol !== 'https:') return json({error: 'https_required'}, 400);
+        // Deployed from the unconfigured placeholder, or with the binding dropped. Every
+        // other failure here reads as a bad origin, so name this one.
+        if (!env.DB) return json({error: 'database_binding_missing'}, 503);
         return await routingControl(request, env);
       }
       let id;
@@ -36,6 +39,7 @@ export default {
         if (!id) return await missing();
       }
       if (!ID.test(id)) return await missing();
+      if (!env.DB) return json({error: 'database_binding_missing'}, 503);
       if (url.protocol !== 'https:') { url.protocol = 'https:'; return Response.redirect(url.toString(), 308); }
       const record = await readRoute(env, id);
       if (!record) return await missing();
