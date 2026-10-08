@@ -53,7 +53,10 @@ async function harness({image = NEW, status = 'ready', ports, failPull, failRunI
   const listening = [];
   for (const kind of ports) {
     if (kind === 'live') {
-      const server = http.createServer((request, response) => response.end('{"status":"ready"}'));
+      const server = http.createServer((request, response) => {
+        if (request.headers.host !== `${id}.cloud.test`) { response.writeHead(403); response.end('license_domain_mismatch'); return; }
+        response.end('{"status":"ready"}');
+      });
       await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
       servers.push(server);
       listening.push(String(server.address().port));

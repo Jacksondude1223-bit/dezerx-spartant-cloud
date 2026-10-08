@@ -118,9 +118,9 @@ const fingerprint = createHash('sha256').update(JSON.stringify([serviceId, custo
 
 For direct node provisioning, that fingerprint recipe is a recommended stable ownership fingerprint; the node validates its format and equality, not its derivation. Persist `id`, `appKey`, `fingerprint`, `primary`, `licenseKey`, and `lifecycleVersion` in the master website database. Use the same values on both nodes. Generate `appKey` once per service; do not regenerate it for retries or resume operations.
 
-`url` is the tenant's own application URL, and it is the customer's domain: a Spartan licence is issued per domain, and the application identifies itself by `APP_URL`. Send `https://{id}.{BASE_DOMAIN}` while the customer has no domain yet, so the tenant can serve on its routing subdomain until one is pointed at us. Either way routing reaches the tenant through both hostnames, because the Worker forwards the visitor's own `Host`. The node accepts only a bare `https://host` with no port, path, query or credentials, and refuses `BASE_DOMAIN` itself and either node origin.
+`url` must be the HTTPS application URL matching the customer's vendor-issued domain licence. Send that domain from the first deployment. The node refuses the control hostname, either node origin, and URLs containing credentials, ports, paths or queries.
 
-Prefer sending the customer's domain from the start. The vendor's own Docker kit puts no domain in the tenant's runtime environment other than `APP_URL`, so `APP_URL` is the only domain Spartan can present if it verifies its licence at run time. A tenant left on the routing subdomain is therefore running a licence issued for a domain it does not claim, and the vendor may refuse it. The subdomain is a way to get a tenant serving before DNS exists, not a long-term configuration: move it with a re-provision and an upgrade as soon as the customer's domain is verified.
+The container sets `APP_URL` and `ASSET_URL` to this URL. Artisan startup receives the same HTTPS host context before Laravel boots, and local health checks send that host while connecting over loopback. Browser GET/HEAD requests through other accepted tenant hostnames redirect to the active application's canonical domain; other methods and WebSocket upgrades receive HTTP 421. A generated tenant hostname is usable as the application URL only with a licence issued for that hostname. These settings preserve the vendor's licensing checks; they do not transfer or bypass a domain licence.
 
 `primary` is the writable database owner, not the visitor's location. Do not change it on an existing route or node record.
 
@@ -135,7 +135,7 @@ Prefer sending the customer's domain from the start. The vendor's own Docker kit
 5. Wait for the secondary to return `ready`.
 6. Register the routing record as `ready` using `POST /v1/routing/instances`.
 7. Attach the customer's domain with `POST /v1/routing/instances/{id}/domains/reserve`, have them add the CNAME, then the same path with `verify`.
-8. Return the tenant URL to the customer. Until their DNS resolves, the routing subdomain reaches the same tenant.
+8. Return the tenant URL to the customer. The licensed customer domain must have working DNS, ownership verification and TLS before customers use it. Alternate browser hostnames redirect to this domain.
 
 You can register `pending` before provisioning to show the service as unavailable during setup. A node HTTP 200 response is not by itself proof of readiness; check its JSON `status`.
 
@@ -380,7 +380,7 @@ Example create body:
 {"serviceId":"svc_1001","customerId":"cus_42","primary":"us","licenseKey":"SPARTANPROFESSIONAL_replace-with-the-issued-key","domain":"panel.customer.example","initialAdmin":{"displayName":"Customer Owner","email":"owner@customer.example","password":"Replace-this-password!"}}
 ```
 
-`licenseKey` is required and is validated exactly as the node validates it, so an unusable key is refused with `invalid_license_key` before a tenant is reserved. `domain` is an optional bare hostname — no scheme, port or path — and becomes the tenant's `APP_URL`; omit it and the tenant uses `https://{id}.{BASE_DOMAIN}` until the customer has a domain. The control host and both node origins are refused with `invalid_domain`.
+`licenseKey` is required and is validated exactly as the node validates it, so an unusable key is refused with `invalid_license_key` before a tenant is reserved. `domain` is an optional bare hostname — no scheme, port or path — and becomes the tenant's `APP_URL`; omit it and the tenant uses `https://{id}.{BASE_DOMAIN}`, which requires a licence issued for that exact hostname. The control host and both node origins are refused with `invalid_domain`.
 
 Neither the licence nor the domain is part of the ownership fingerprint, because both change over a service's life. That also means a repeated create does not change them: `POST /v1/instances` is idempotent and returns the existing record. Use `POST /v1/instances/{id}/app-url` to move a tenant, which requires a `ready` tenant (`service_not_ready` otherwise), keeps it `ready` throughout, and queues a rewrite plus a single container restart on each node. Reserve and verify the hostname through the domain API as well, so Cloudflare terminates TLS for it.
 

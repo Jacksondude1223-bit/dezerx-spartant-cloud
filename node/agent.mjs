@@ -88,11 +88,19 @@ async function assignedPortOf(id) {
   if (!assigned) throw new Error('missing_port');
   return assigned;
 }
-async function healthy(assignedPort, attempts) {
+function applicationHealth(assignedPort, url) {
+  return new Promise((resolve, reject) => {
+    const request = http.get({hostname: '127.0.0.1', port: assignedPort, path: '/__cloud_health', headers: {host: new URL(url).hostname, 'x-forwarded-host': new URL(url).hostname, 'x-forwarded-proto': 'https', 'x-forwarded-port': '443'}, signal: AbortSignal.timeout(2000)}, response => {
+      response.resume();
+      resolve(response.statusCode >= 200 && response.statusCode < 300);
+    });
+    request.on('error', reject);
+  });
+}
+async function healthy(assignedPort, attempts, url) {
   for (let attempt = 0; attempt < attempts; attempt++) {
     try {
-      const response = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
-      if (response.ok) return true;
+      if (await applicationHealth(assignedPort, url)) return true;
     } catch {}
     await sleep(1000);
   }
@@ -101,9 +109,6 @@ async function healthy(assignedPort, attempts) {
 async function provisionOnce(input, progress) {
   progress.stage = 'prepare';
   const {id, primary, appKey, url, fingerprint, licenseKey} = input;
-  // The tenant's APP_URL is the customer's own domain, because the Spartan licence is
-  // issued per domain; the shared tenant subdomain is accepted too, so a tenant can run
-  // before the customer's DNS is verified.
   const appUrlValue = tenantAppUrl(url);
   if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || !appUrlValue || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
   if (!validLicenseKey(licenseKey)) throw new Error('invalid_license_key');
@@ -144,6 +149,8 @@ async function provisionOnce(input, progress) {
   let inspect;
   try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; }
   catch { inspect = null; }
+  const runningUrl = inspect?.Config?.Env?.find(value => value.startsWith('APP_URL='))?.slice(8);
+  persistedInput.containerUrl = tenantAppUrl(runningUrl) || tenantAppUrl(existing?.containerUrl) || tenantAppUrl(existing?.url) || appUrlValue;
   // Re-provisioning a serving tenant only rewrites app.env — the container keeps running
   // on the old one until an upgrade recreates it. Taking the tenant out of 'ready' would
   // send its live traffic nowhere for the sake of a change that has not happened yet.
@@ -157,6 +164,7 @@ async function provisionOnce(input, progress) {
     progress.stage = 'launch';
     await docker(runArgs({id, role, fingerprint, envFile, directory, image: cfg.SPARTAN_IMAGE}));
     persistedInput.containerEnvHash = persistedInput.envHash;
+    persistedInput.containerUrl = appUrlValue;
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
     if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
@@ -169,8 +177,8 @@ async function provisionOnce(input, progress) {
   progress.stage = 'health';
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
-      const health = await fetch(`http://127.0.0.1:${assignedPort}/__cloud_health`, {signal: AbortSignal.timeout(2000)});
-      if (health.ok) {
+      const health = await applicationHealth(assignedPort, persistedInput.containerUrl);
+      if (health) {
         if (role === 'primary' && initialAdmin && !persistedInput.adminInitialized) {
           progress.stage = 'initial_admin';
           await createInitialAdmin(id, initialAdmin);
@@ -227,7 +235,7 @@ async function upgrade(input) {
   const create = async image => {
     await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
     const assigned = await assignedPortOf(id);
-    await save({...record, image, port: assigned, containerEnvHash: record.envHash});
+    await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerUrl: record.url});
     return assigned;
   };
   let assignedPort;
@@ -241,7 +249,7 @@ async function upgrade(input) {
     console.error(JSON.stringify({event: 'tenant_upgrade_rolled_back', id, reason}));
     return {id, status: 'rolled_back', image: previousImage, attempted: cfg.SPARTAN_IMAGE, reason, role: record.role};
   }
-  if (await healthy(assignedPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60))) {
+  if (await healthy(assignedPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60), record.url)) {
     await recovery.success(id).catch(() => {});
     console.error(JSON.stringify({event: 'tenant_upgraded', id, from: previousImage, to: cfg.SPARTAN_IMAGE}));
     return {id, status: 'upgraded', changed, previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
@@ -283,6 +291,15 @@ async function target(req) {
   if (!record || record.status !== 'ready') return null;
   const host = req.headers['x-spartan-host'];
   if (host !== `${record.id}.${cfg.BASE_DOMAIN}` && (req.headers['x-spartan-custom-domain'] !== '1' || typeof host !== 'string' || host.length > 200 || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(host))) return null;
+  const activeUrl = tenantAppUrl(record.containerUrl || record.url);
+  if (!activeUrl) return null;
+  const canonical = new URL(activeUrl);
+  if (host !== canonical.hostname) {
+    const query = match[2].indexOf('?');
+    canonical.pathname = query === -1 ? match[2] : match[2].slice(0, query);
+    canonical.search = query === -1 ? '' : match[2].slice(query);
+    return {redirect: canonical.toString()};
+  }
   if (record.role === 'primary') return {url: new URL(`http://127.0.0.1:${record.port}${match[2]}`), record, local: true};
   if (req.headers['x-spartan-hop']) return null;
   const origin = record.primary === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN;
@@ -298,6 +315,11 @@ const server = http.createServer(async (req, res) => {
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
     const info = await target(req);
     if (!info) return reply(res, 404, {error: 'not_found'});
+    if (info.redirect) {
+      if (!['GET', 'HEAD'].includes(req.method)) return reply(res, 421, {error: 'canonical_domain_required'});
+      res.writeHead(308, {location: info.redirect, 'cache-control': 'private, no-store'});
+      return res.end();
+    }
     const transport = info.url.protocol === 'https:' ? https : http;
     const upstream = transport.request(info.url, {method: req.method, headers: proxyHeaders(req, info)}, response => {
       const headers = {...response.headers, 'cache-control': 'private, no-store'};
@@ -327,6 +349,7 @@ server.on('upgrade', async (req, socket, head) => {
   try {
     const info = await target(req);
     if (!info) { socket.end('HTTP/1.1 404 Not Found\r\n\r\n'); return; }
+    if (info.redirect) { socket.end('HTTP/1.1 421 Misdirected Request\r\n\r\n'); return; }
     const transport = info.url.protocol === 'https:' ? https : http;
     const upstream = transport.request(info.url, {headers: proxyHeaders(req, info)});
     upstream.on('upgrade', (res, peer, peerHead) => {

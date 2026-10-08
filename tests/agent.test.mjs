@@ -12,8 +12,10 @@ test('node agent authenticates control requests and proxies only the correct ten
   const id = 't-' + '1'.repeat(24);
   const secret = 'b'.repeat(64);
   const requests = [];
+  let licensedHost = `${id}.cloud.test`;
   const backend = http.createServer((req, res) => {
     requests.push({path: req.url, host: req.headers.host, credential: req.headers['x-spartan-origin'], clientIp: req.headers['x-spartan-client-ip'], forwarded: req.headers['x-forwarded-for'], ingress: req.headers['x-spartan-ingress-key']});
+    if (req.url === '/__cloud_health' && req.headers.host !== licensedHost) { res.writeHead(403); res.end('license_domain_mismatch'); return; }
     res.setHeader('set-cookie', 'session=test; Secure; HttpOnly');
     res.end(req.url === '/__cloud_health' ? '{"status":"ready"}' : 'tenant-app');
   });
@@ -104,8 +106,6 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.ok(JSON.parse(state).dbPassword.length >= 16, 'the node owns the database password');
     for (const value of [state, envFile, stderr]) { assert.equal(value.includes('Chosen-password!'), false); assert.equal(value.includes('owner@example.test'), false); }
     assert.equal(stderr.includes(JSON.parse(state).dbPassword), false, 'the database password never reaches the log');
-    // The panel exists so the tenant's own URL is the customer's domain; routing still
-    // reaches it through the shared subdomain, which is why both are accepted here.
     body = JSON.stringify({...input, url: 'https://panel.customer.test'});
     assert.equal((await send()).status, 200, 'a customer domain is a valid application URL');
     const moved = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
@@ -134,9 +134,31 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     headers['x-spartan-host'] = 'billing.customer.test';
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
     headers['x-spartan-custom-domain'] = '1';
-    const alias = await fetch(`${origin}/tenant/${id}/billing`, {headers});
-    assert.equal(await alias.text(), 'tenant-app');
-    assert.equal(requests.at(-1).host, 'billing.customer.test');
+    const alias = await fetch(`${origin}/tenant/${id}/billing`, {headers, redirect: 'manual'});
+    assert.equal(alias.status, 308);
+    assert.equal(alias.headers.get('location'), `https://${id}.cloud.test/billing`);
+    assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {method: 'POST', headers, body: 'payment=data', redirect: 'manual'})).status, 421);
+    body = JSON.stringify({...input, url: 'https://panel.customer.test'});
+    assert.equal((await send()).status, 200);
+    const stagedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
+    assert.equal(stagedState.containerUrl, `https://${id}.cloud.test`);
+    licensedHost = 'panel.customer.test';
+    const upgradeBody = JSON.stringify({id, fingerprint: input.fingerprint});
+    const upgradeStamp = String(Date.now());
+    const upgraded = await fetch(`${origin}/control/upgrade`, {method: 'POST', body: upgradeBody, headers: {'x-spartan-timestamp': upgradeStamp, 'x-spartan-signature': await signature(secret, upgradeStamp, 'POST', '/control/upgrade', upgradeBody)}});
+    assert.equal(upgraded.status, 200);
+    assert.equal((await upgraded.json()).status, 'upgraded');
+    assert.equal(JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8')).containerUrl, 'https://panel.customer.test');
+    headers['x-spartan-host'] = `${id}.cloud.test`;
+    const canonical = await fetch(`${origin}/tenant/${id}/billing?invoice=1`, {headers, redirect: 'manual'});
+    assert.equal(canonical.status, 308);
+    assert.equal(canonical.headers.get('location'), 'https://panel.customer.test/billing?invoice=1');
+    headers['x-spartan-host'] = 'panel.customer.test';
+    const customerRequest = await fetch(`${origin}/tenant/${id}/billing`, {headers});
+    assert.equal(await customerRequest.text(), 'tenant-app');
+    assert.equal(requests.at(-1).host, 'panel.customer.test');
+    assert.equal(requests.filter(req => req.path === '/__cloud_health').some(req => req.host === 'panel.customer.test'), true);
+    body = JSON.stringify(input);
     const lifecycle = async (action, lifecycleVersion) => {
       const payload = JSON.stringify({id, fingerprint: input.fingerprint, action, lifecycleVersion});
       const stamp = String(Date.now());
