@@ -5,8 +5,10 @@
 !runtime/**
 !tests
 !tests/runtime_octane_test.php
+!tests/runtime_domain_test.php
 app/.env
 app/.env.*
+!app/.env.example
 app/.git
 app/node_modules
 app/vendor

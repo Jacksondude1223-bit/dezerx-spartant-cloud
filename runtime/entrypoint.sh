@@ -10,17 +10,17 @@ umask 022
 mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache
 rm -f bootstrap/cache/config.php bootstrap/cache/routes-*.php
-# Containers restart with the host (--restart unless-stopped), so MariaDB may not be
-# accepting connections yet. Probed with PDO so the image needs no mysql client.
-probe='try { new PDO("mysql:unix_socket=".getenv("DB_SOCKET").";dbname=".getenv("DB_DATABASE"), getenv("DB_USERNAME"), getenv("DB_PASSWORD")); } catch (Throwable $e) { exit(1); }'
-waited=0
-until php -r "$probe" 2>/dev/null; do
-  waited=$((waited + 2))
-  [ "$waited" -ge 120 ] && { echo 'database unreachable after 120s' >&2; exit 1; }
-  sleep 2
-done
+case "$CLOUD_ROLE" in
+  primary) RUN_MIGRATIONS=true ;;
+  secondary) RUN_MIGRATIONS=false ;;
+  *) exit 1 ;;
+esac
+export RUN_MIGRATIONS
+/usr/local/bin/dezerx-entrypoint cloud-init
+mkdir -p storage/container/redis
+chown www-data:www-data storage/container/redis
 if [ "$CLOUD_ROLE" = primary ]; then
-  su -s /bin/sh www-data -c 'php artisan package:discover --ansi && php artisan migrate --force && php artisan config:cache && php artisan view:cache'
+  su -s /bin/sh www-data -c 'php artisan package:discover --ansi && php artisan config:cache && php artisan view:cache'
 else
   su -s /bin/sh www-data -c 'php artisan package:discover --ansi && php artisan config:cache'
 fi

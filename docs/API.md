@@ -463,3 +463,12 @@ $reservation = $router->domain($tenantId, 'billing.customer.com', 'reserve');
 ```
 
 The provisioning helper is for the optional Worker, not for direct node calls. There is currently no node tenant-list API, per-tenant node status API, data-purge API, primary migration API, or administrator password-reset API.
+
+
+## Vendor Docker image integration
+
+The cloud image builds the supplied DezerX PHP 8.4, Node 22 and RoadRunner stages from the licensed application source under `app/`. It includes the vendor's environment synchronisation and persisted branding/email-template directories. Laravel commands run only when the container has its customer's configured URL and licence, rather than during the image build under a placeholder hostname.
+
+The cloud adapter exposes nginx on port 8080 and keeps RoadRunner on loopback port 8000. Node agents continue checking `/__cloud_health`. Docker health checks send the licensed `APP_URL` hostname and accept only 2xx responses. The adapter runs Octane, Redis, queue workers and the scheduler under supervisor; stopping the managed tenant container stops all of them. Redis binds to loopback and stores its AOF under the tenant's backed-up storage directory. Queue workers and the scheduler run only on the primary. The primary runs vendor migrations and first-image seed/cleanup on startup; the secondary skips migrations and seeders.
+
+Build with the existing `scripts/build-image.sh` using `SPARTAN_IMAGE_TAG` and `IONCUBE_SHA256`, then configure both nodes with the resulting immutable image digest. The uploaded Docker support files do not include the licensed application source; a complete build still requires that source in `app/`. Cloud and Cloud+ product IDs in the vendor README are 8 and 9, but their licence-key prefixes have not been provided and are not inferred by this integration.
