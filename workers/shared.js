@@ -33,6 +33,23 @@ export async function nodeCall(env, location, path, payload) {
 import {validInitialAdmin} from '../node/admin-validation.mjs';
 export {validInitialAdmin};
 
+// One definition of a licence key and of a tenant's application URL, shared with the node
+// agent, so the control plane refuses what the node would refuse instead of queueing a
+// provision that cannot succeed.
+import {validLicenseKey} from '../node/license.mjs';
+export {validLicenseKey};
+import {appUrl} from '../node/app-url.mjs';
+export {appUrl};
+export function tenantAppUrl(env, id, domain) {
+  const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
+  const context = {baseDomain: env.BASE_DOMAIN, originHostnames: origins};
+  // No domain yet means the tenant calls itself by its routing subdomain, so it can serve
+  // before the customer has pointed any DNS at us.
+  if (domain === undefined || domain === null || domain === '') return appUrl(`https://${id}.${env.BASE_DOMAIN}`, context);
+  if (typeof domain !== 'string' || domain.includes('/') || domain.includes(':')) return null;
+  return appUrl(`https://${domain}`, context);
+}
+
 export async function sealAdmin(admin, secret) {
   if (!secret) throw new Error('admin_secret_missing');
   const key = await crypto.subtle.importKey('raw', await crypto.subtle.digest('SHA-256', new TextEncoder().encode(secret)), 'AES-GCM', false, ['encrypt']);

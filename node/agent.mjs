@@ -3,7 +3,7 @@ import {isIP} from 'node:net';
 import {applyLifecycle} from './service-lifecycle.mjs';
 import {proxyHeaders} from './client-ip.mjs';
 import https from 'node:https';
-import {createHmac, timingSafeEqual} from 'node:crypto';
+import {createHash, createHmac, timingSafeEqual} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {mkdir, readFile, writeFile, rename, chmod, readdir} from 'node:fs/promises';
@@ -11,6 +11,8 @@ import path from 'node:path';
 import {createInitialAdmin, validInitialAdmin} from './initial-admin.mjs';
 import {createRecovery} from './recovery.mjs';
 import {createMysql, newPassword, SOCKET} from './mysql.mjs';
+import {productId, validLicenseKey} from './license.mjs';
+import {appUrl} from './app-url.mjs';
 
 const run = promisify(execFile);
 const cfg = process.env;
@@ -27,6 +29,9 @@ const jobs = new Map();
 const socketPath = cfg.MYSQL_SOCKET || SOCKET;
 const socketDirectory = path.dirname(socketPath);
 const validId = id => /^t-[a-f0-9]{24}$/.test(id || '');
+// Hostnames a tenant must never claim as its own: the control host and the node tunnels.
+const reservedHostnames = [cfg.BASE_DOMAIN, new URL(cfg.US_ORIGIN).hostname, new URL(cfg.DE_ORIGIN).hostname];
+const tenantAppUrl = value => appUrl(value, {baseDomain: cfg.BASE_DOMAIN, originHostnames: reservedHostnames});
 const container = id => `spartan-${id}`;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const equal = (left, right) => typeof left === 'string' && typeof right === 'string' && Buffer.byteLength(left) === Buffer.byteLength(right) && timingSafeEqual(Buffer.from(left), Buffer.from(right));
@@ -95,10 +100,16 @@ async function healthy(assignedPort, attempts) {
 }
 async function provisionOnce(input, progress) {
   progress.stage = 'prepare';
-  const {id, primary, appKey, url, fingerprint} = input;
-  if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || url !== `https://${id}.${cfg.BASE_DOMAIN}` || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
+  const {id, primary, appKey, url, fingerprint, licenseKey} = input;
+  // The tenant's APP_URL is the customer's own domain, because the Spartan licence is
+  // issued per domain; the shared tenant subdomain is accepted too, so a tenant can run
+  // before the customer's DNS is verified.
+  const appUrlValue = tenantAppUrl(url);
+  if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || !appUrlValue || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
+  if (!validLicenseKey(licenseKey)) throw new Error('invalid_license_key');
   if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) throw new Error('invalid_initial_admin');
   const {initialAdmin, ...persistedInput} = input;
+  persistedInput.url = appUrlValue;
   const existing = await load(id);
   persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
   persistedInput.image = cfg.SPARTAN_IMAGE;
@@ -119,7 +130,7 @@ async function provisionOnce(input, progress) {
   const dbPassword = existing?.dbPassword || newPassword();
   persistedInput.dbPassword = dbPassword;
   const {database, user} = await mysql.ensureTenant(id, dbPassword);
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: url, ASSET_URL: url, LOG_CHANNEL: 'stderr', DB_CONNECTION: 'mysql', DB_SOCKET: socketPath, DB_HOST: '127.0.0.1', DB_PORT: '3306', DB_DATABASE: database, DB_USERNAME: user, DB_PASSWORD: dbPassword, SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', DB_CONNECTION: 'mysql', DB_SOCKET: socketPath, DB_HOST: '127.0.0.1', DB_PORT: '3306', DB_DATABASE: database, DB_USERNAME: user, DB_PASSWORD: dbPassword, SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');
@@ -128,10 +139,16 @@ async function provisionOnce(input, progress) {
   const envFile = path.join(directory, 'app.env');
   await writeFile(envFile, Object.entries(env).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', {mode: 0o600});
   await chmod(envFile, 0o600);
-  await save({...persistedInput, role, status: 'provisioning'});
+  persistedInput.envHash = createHash('sha256').update(await readFile(envFile)).digest('hex');
+  persistedInput.containerEnvHash = existing?.containerEnvHash;
   let inspect;
   try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; }
   catch { inspect = null; }
+  // Re-provisioning a serving tenant only rewrites app.env — the container keeps running
+  // on the old one until an upgrade recreates it. Taking the tenant out of 'ready' would
+  // send its live traffic nowhere for the sake of a change that has not happened yet.
+  const interim = existing?.status === 'ready' && inspect?.State?.Running ? 'ready' : 'provisioning';
+  await save({...persistedInput, role, status: interim});
   if (!inspect) {
     const count = (await readdir(root)).filter(validId).length;
     if (count > Number(cfg.MAX_TENANTS || 100)) throw new Error('node_capacity');
@@ -139,6 +156,7 @@ async function provisionOnce(input, progress) {
     await docker(['pull', cfg.SPARTAN_IMAGE]);
     progress.stage = 'launch';
     await docker(runArgs({id, role, fingerprint, envFile, directory, image: cfg.SPARTAN_IMAGE}));
+    persistedInput.containerEnvHash = persistedInput.envHash;
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
     if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
@@ -147,7 +165,7 @@ async function provisionOnce(input, progress) {
   inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
   const assignedPort = Number(inspect.NetworkSettings.Ports['8080/tcp']?.[0]?.HostPort);
   if (!assignedPort) throw new Error('missing_port');
-  await save({...persistedInput, role, port: assignedPort, status: 'provisioning'});
+  await save({...persistedInput, role, port: assignedPort, status: interim});
   progress.stage = 'health';
   for (let attempt = 0; attempt < 30; attempt++) {
     try {
@@ -177,7 +195,7 @@ async function provision(input) {
       if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
       if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
     } catch (error) {
-      if (['invalid_input', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
+      if (['invalid_input', 'invalid_license_key', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
       if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
     }
   }
@@ -196,7 +214,9 @@ async function upgrade(input) {
   const labels = inspect.Config?.Labels || {};
   if (labels['spartan.fingerprint'] !== fingerprint || labels['spartan.tenant'] !== id || labels['spartan.managed'] !== 'true') throw new Error('container_conflict');
   const previousImage = inspect.Config?.Image || record.image;
-  if (previousImage === cfg.SPARTAN_IMAGE) return {id, status: 'current', image: previousImage, role: record.role};
+  const staleEnvironment = !!record.envHash && record.envHash !== record.containerEnvHash;
+  if (previousImage === cfg.SPARTAN_IMAGE && !staleEnvironment) return {id, status: 'current', image: previousImage, role: record.role};
+  const changed = previousImage === cfg.SPARTAN_IMAGE ? 'environment' : staleEnvironment ? 'image_and_environment' : 'image';
   // Pull before touching the running container, so an unreachable or wrong digest fails
   // while the tenant is still serving.
   await docker(['pull', cfg.SPARTAN_IMAGE]);
@@ -207,7 +227,7 @@ async function upgrade(input) {
   const create = async image => {
     await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
     const assigned = await assignedPortOf(id);
-    await save({...record, image, port: assigned});
+    await save({...record, image, port: assigned, containerEnvHash: record.envHash});
     return assigned;
   };
   let assignedPort;
@@ -224,7 +244,7 @@ async function upgrade(input) {
   if (await healthy(assignedPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60))) {
     await recovery.success(id).catch(() => {});
     console.error(JSON.stringify({event: 'tenant_upgraded', id, from: previousImage, to: cfg.SPARTAN_IMAGE}));
-    return {id, status: 'upgraded', previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
+    return {id, status: 'upgraded', changed, previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
   }
   // It started, so migrations may already have applied. Rolling back now could leave the
   // schema ahead of the code, so report and let the operator decide.

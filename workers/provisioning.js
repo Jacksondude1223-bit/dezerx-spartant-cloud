@@ -1,4 +1,4 @@
-import {ID, REGIONS, json, digest, verify, nodeCall, validInitialAdmin, sealAdmin, openAdmin} from './shared.js';
+import {ID, REGIONS, json, digest, verify, nodeCall, validInitialAdmin, validLicenseKey, tenantAppUrl, sealAdmin, openAdmin} from './shared.js';
 export {Recovery} from './recovery.js';
 export {Domains} from './domains.js';
 
@@ -30,6 +30,20 @@ export class Tenant {
     const record = await this.ctx.storage.get('record');
     if (!record) return json({error: 'not_found'}, 404);
     if (path === '/internal') return json(record);
+    if (path === '/reconfigure' && request.method === 'POST') {
+      const input = await request.json();
+      if ((record.desiredStatus || 'active') !== 'active') return json({error: 'service_terminated'}, 409);
+      // Only a serving tenant can be reconfigured: the node rewrites app.env and then
+      // recreates the container, which needs a container to be there already.
+      if (record.status !== 'ready') return json({error: 'service_not_ready'}, 409);
+      if (input.url === record.url && input.licenseKey === record.licenseKey) return json(this.public(record));
+      const updated = {...record, url: input.url, licenseKey: input.licenseKey};
+      await this.ctx.storage.put('record', updated);
+      // The status stays 'ready' throughout, so routing never takes the tenant offline for
+      // a domain change; the queue applies the new environment to both nodes.
+      await this.env.PROVISION_QUEUE.send({id: record.id, action: 'reconfigure'});
+      return json(this.public(updated), 202);
+    }
     if (path === '/lifecycle' && request.method === 'POST') {
       const input = await request.json();
       if (!['active', 'suspended', 'terminated'].includes(input.status)) return json({error: 'invalid_service_status'}, 400);
@@ -99,6 +113,15 @@ export default {
       }
       const lifecycle = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/lifecycle$/);
       if (request.method === 'POST' && lifecycle) return env.TENANTS.getByName(lifecycle[1]).fetch('https://tenant/lifecycle', {method: 'POST', body});
+      const appUrlPath = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/app-url$/);
+      if (request.method === 'POST' && appUrlPath) {
+        const input = JSON.parse(body);
+        // A licence is issued per domain, so a new domain needs the licence issued for it.
+        if (!validLicenseKey(input.licenseKey)) return json({error: 'invalid_license_key'}, 400);
+        const next = tenantAppUrl(env, appUrlPath[1], input.domain);
+        if (!next) return json({error: 'invalid_domain'}, 400);
+        return env.TENANTS.getByName(appUrlPath[1]).fetch('https://tenant/reconfigure', {method: 'POST', body: JSON.stringify({url: next, licenseKey: input.licenseKey})});
+      }
       const domain = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})\/domains\/(reserve|verify|status|delete)$/);
       if (request.method === 'POST' && domain) {
         const input = JSON.parse(body);
@@ -107,10 +130,17 @@ export default {
       if (request.method === 'POST' && url.pathname === '/v1/instances') {
         const input = JSON.parse(body);
         if (!/^[A-Za-z0-9_-]{1,100}$/.test(input.serviceId || '') || !/^[A-Za-z0-9_-]{1,100}$/.test(input.customerId || '') || !REGIONS.has(input.primary)) return json({error: 'invalid_input'}, 400);
+        if (!validLicenseKey(input.licenseKey)) return json({error: 'invalid_license_key'}, 400);
         if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) return json({error: 'invalid_initial_admin'}, 400);
         const id = `t-${(await digest(input.serviceId)).slice(0, 24)}`;
+        // The tenant's own URL is the customer's domain, because that is the domain the
+        // licence was issued for. Routing still reaches it through the shared subdomain.
+        const url = tenantAppUrl(env, id, input.domain);
+        if (!url) return json({error: 'invalid_domain'}, 400);
+        // The licence and the domain are deliberately outside the fingerprint: both are
+        // expected to change over a service's life, and neither changes who owns it.
         const fingerprint = await digest(JSON.stringify([input.serviceId, input.customerId, input.primary, ...(input.initialAdmin ? [input.initialAdmin.displayName, input.initialAdmin.email, input.initialAdmin.password, env.BILLING_WEBHOOK_SECRET] : [])]));
-        const record = {id, fingerprint, ...(input.initialAdmin ? {initialAdminEncrypted: await sealAdmin(input.initialAdmin, env.NODE_CONTROL_SECRET)} : {}), serviceId: input.serviceId, customerId: input.customerId, primary: input.primary, url: `https://${id}.${env.BASE_DOMAIN}`};
+        const record = {id, fingerprint, ...(input.initialAdmin ? {initialAdminEncrypted: await sealAdmin(input.initialAdmin, env.NODE_CONTROL_SECRET)} : {}), serviceId: input.serviceId, customerId: input.customerId, primary: input.primary, licenseKey: input.licenseKey, url};
         return env.TENANTS.getByName(id).fetch('https://tenant/reserve', {method: 'POST', body: JSON.stringify(record)});
       }
       const match = url.pathname.match(/^\/v1\/instances\/(t-[a-f0-9]{24})$/);
@@ -136,6 +166,20 @@ export default {
         if (!response.ok) { message.ack(); continue; }
         const record = await response.json();
         operationVersion = record.lifecycleVersion || 0;
+        if (message.body.action === 'reconfigure') {
+          if (record.status !== 'ready' || ['suspended', 'terminated'].includes(record.desiredStatus)) { message.ack(); continue; }
+          const {initialAdminEncrypted, ...current} = record;
+          // Provisioning rewrites app.env without touching the running container, and the
+          // upgrade then recreates it, so the tenant only restarts once per node.
+          for (const location of [record.primary, record.primary === 'us' ? 'de' : 'us']) {
+            const provisioned = await nodeCall(env, location, '/control/provision', current);
+            if (provisioned.status !== 'ready') throw new Error('reconfigure_not_ready');
+            const applied = await nodeCall(env, location, '/control/upgrade', {id, fingerprint: record.fingerprint});
+            if (!['upgraded', 'current'].includes(applied.status)) throw new Error('reconfigure_failed');
+          }
+          message.ack();
+          continue;
+        }
         if (['ready', 'suspended', 'terminated'].includes(record.status)) { message.ack(); continue; }
         if (['suspended', 'terminated'].includes(record.desiredStatus)) {
           const input = {id, fingerprint: record.fingerprint, lifecycleVersion: record.lifecycleVersion || 0, action: record.desiredStatus};

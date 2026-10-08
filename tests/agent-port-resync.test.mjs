@@ -84,7 +84,7 @@ if(args[0]==='run'){
 
   try {
     let agent = await start();
-    const body = JSON.stringify({id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64)});
+    const body = JSON.stringify({id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64), licenseKey: 'SPARTANULTIMATE_kkkkkkkkkkkkkkkkkkkkkkkk'});
     const stamp = String(Date.now());
     const provision = await fetch(`${agent.origin}/control/provision`, {method: 'POST', body, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', '/control/provision', body)}});
     assert.equal(provision.status, 200, agent.stderr());

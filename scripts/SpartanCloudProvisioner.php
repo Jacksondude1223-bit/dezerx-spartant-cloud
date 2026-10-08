@@ -10,12 +10,32 @@ final class SpartanCloudProvisioner
         }
     }
 
-    public function provision(string $paidServiceId, string $customerId, string $primary = 'us', ?array $initialAdmin = null): array
+    // $licenseKey is the licence DezerX issued for $domain, and $domain becomes the
+    // tenant's APP_URL. Pass no domain to start the tenant on its routing subdomain.
+    public function provision(string $paidServiceId, string $customerId, string $licenseKey, string $primary = 'us', ?string $domain = null, ?array $initialAdmin = null): array
     {
         if (!in_array($primary, ['us', 'de'], true)) {
             throw new InvalidArgumentException('invalid_region');
         }
-        return $this->request('POST', '/v1/instances', json_encode(['serviceId' => $paidServiceId, 'customerId' => $customerId, 'primary' => $primary, ...($initialAdmin === null ? [] : ['initialAdmin' => $initialAdmin])], JSON_THROW_ON_ERROR));
+        $this->assertLicenseKey($licenseKey);
+        return $this->request('POST', '/v1/instances', json_encode(['serviceId' => $paidServiceId, 'customerId' => $customerId, 'primary' => $primary, 'licenseKey' => $licenseKey, ...($domain === null ? [] : ['domain' => $domain]), ...($initialAdmin === null ? [] : ['initialAdmin' => $initialAdmin])], JSON_THROW_ON_ERROR));
+    }
+
+    // Moves a ready tenant to the customer's own domain, with the licence issued for it.
+    public function appUrl(string $id, string $domain, string $licenseKey): array
+    {
+        if (!preg_match('/^t-[a-f0-9]{24}$/', $id)) {
+            throw new InvalidArgumentException('invalid_id');
+        }
+        $this->assertLicenseKey($licenseKey);
+        return $this->request('POST', '/v1/instances/'.$id.'/app-url', json_encode(['domain' => $domain, 'licenseKey' => $licenseKey], JSON_THROW_ON_ERROR));
+    }
+
+    private function assertLicenseKey(string $licenseKey): void
+    {
+        if (!preg_match('/^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$/', $licenseKey) || strlen($licenseKey) < 16 || strlen($licenseKey) > 256) {
+            throw new InvalidArgumentException('invalid_license_key');
+        }
     }
 
     public function setServiceStatus(string $paidServiceId, string $status): array

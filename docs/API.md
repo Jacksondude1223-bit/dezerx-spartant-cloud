@@ -116,7 +116,11 @@ const appKey = 'base64:' + randomBytes(32).toString('base64');
 const fingerprint = createHash('sha256').update(JSON.stringify([serviceId, customerId, primary])).digest('hex');
 ```
 
-For direct node provisioning, that fingerprint recipe is a recommended stable ownership fingerprint; the node validates its format and equality, not its derivation. Persist `id`, `appKey`, `fingerprint`, `primary`, and `lifecycleVersion` in the master website database. Use the same values on both nodes. Generate `appKey` once per service; do not regenerate it for retries or resume operations. The application URL must be exactly `https://{id}.{BASE_DOMAIN}` even when a custom domain is attached.
+For direct node provisioning, that fingerprint recipe is a recommended stable ownership fingerprint; the node validates its format and equality, not its derivation. Persist `id`, `appKey`, `fingerprint`, `primary`, `licenseKey`, and `lifecycleVersion` in the master website database. Use the same values on both nodes. Generate `appKey` once per service; do not regenerate it for retries or resume operations.
+
+`url` is the tenant's own application URL, and it is the customer's domain: a Spartan licence is issued per domain, and the application identifies itself by `APP_URL`. Send `https://{id}.{BASE_DOMAIN}` while the customer has no domain yet, so the tenant can serve on its routing subdomain until one is pointed at us. Either way routing reaches the tenant through both hostnames, because the Worker forwards the visitor's own `Host`. The node accepts only a bare `https://host` with no port, path, query or credentials, and refuses `BASE_DOMAIN` itself and either node origin.
+
+Prefer sending the customer's domain from the start. The vendor's own Docker kit puts no domain in the tenant's runtime environment other than `APP_URL`, so `APP_URL` is the only domain Spartan can present if it verifies its licence at run time. A tenant left on the routing subdomain is therefore running a licence issued for a domain it does not claim, and the vendor may refuse it. The subdomain is a way to get a tenant serving before DNS exists, not a long-term configuration: move it with a re-provision and an upgrade as soon as the customer's domain is verified.
 
 `primary` is the writable database owner, not the visitor's location. Do not change it on an existing route or node record.
 
@@ -124,13 +128,14 @@ For direct node provisioning, that fingerprint recipe is a recommended stable ow
 
 ### Create a service
 
-1. Confirm payment in the master website and create persistent provisioning state.
-2. Call `POST /control/provision` on the primary node, including the initial administrator details.
+1. Confirm payment in the master website, ask the customer which domain the panel will run on, obtain the Spartan licence DezerX issues for that domain, and create persistent provisioning state.
+2. Call `POST /control/provision` on the primary node with that domain as `url`, including the initial administrator details.
 3. Wait for `status: ready`. If the response is `provisioning`, retry the same persisted request until ready or escalate the failure.
 4. Call `POST /control/provision` on the other node with the same identity, key, fingerprint, and version. Omit `initialAdmin` on the secondary.
 5. Wait for the secondary to return `ready`.
 6. Register the routing record as `ready` using `POST /v1/routing/instances`.
-7. Return the tenant URL to the customer; optionally attach a custom domain.
+7. Attach the customer's domain with `POST /v1/routing/instances/{id}/domains/reserve`, have them add the CNAME, then the same path with `verify`.
+8. Return the tenant URL to the customer. Until their DNS resolves, the routing subdomain reaches the same tenant.
 
 You can register `pending` before provisioning to show the service as unavailable during setup. A node HTTP 200 response is not by itself proof of readiness; check its JSON `status`.
 
@@ -145,6 +150,10 @@ Increase the version again. Reuse `POST /control/provision` on both nodes with t
 ### Terminate a service
 
 Detach custom domains while the routing record is still ready; the domain API requires a ready tenant even for deletion. Then increase the version, publish `terminated`, and send `action: terminated` to both nodes. Containers are removed, but the tenant's MariaDB database, its `storage/` directory and its backups remain. Termination is irreversible for that tenant ID; it is not a full data-erasure API. If already suspended, the current domain API rejects deletion because the tenant is not ready; termination still blocks customer access, but retained domain records need separate reconciliation.
+
+### Change the tenant's domain, rotate a licence, or change tenant environment
+
+Docker reads an environment file once, when it creates a container, so rewriting it changes nothing by itself. Send `POST /control/provision` with the new `url` and the licence issued for it (or the new `licenseKey` alone, or after editing the node's `LARAVEL_ENV_FILE`) to rewrite `app.env`, then `POST /control/upgrade` to recreate the container so it takes effect. Re-provisioning a tenant that is already `ready` leaves it `ready` and leaves its container serving the old environment, so routing is not interrupted until the upgrade restarts it. The upgrade reports `changed: "environment"`. The tenant's database and `storage/` are untouched.
 
 ### Update Spartan
 
@@ -165,6 +174,7 @@ Example request to the primary node:
   "appKey": "base64:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
   "url": "https://t-111111111111111111111111.cloud.yourdomain.com",
   "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "licenseKey": "SPARTANPROFESSIONAL_replace-with-the-issued-key",
   "lifecycleVersion": 0,
   "initialAdmin": {
     "displayName": "Customer Owner",
@@ -179,12 +189,15 @@ Example request to the primary node:
 | `id` | Required tenant ID |
 | `primary` | Required, `us` or `de`; identical on both nodes |
 | `appKey` | Required, `base64:` followed by a base64-encoded 32-byte key |
-| `url` | Required, exact generated tenant URL |
+| `url` | Required; the customer's domain as a bare `https://host`, or the tenant's `https://{id}.{BASE_DOMAIN}` subdomain before they have one |
 | `fingerprint` | Required, 64 lowercase hexadecimal characters |
+| `licenseKey` | Required; the Spartan licence issued for this service |
 | `lifecycleVersion` | Nonnegative safe integer; defaults to zero if omitted |
 | `initialAdmin` | Optional; supply on the primary when creating the first user |
 
-The illustrated key and fingerprint are placeholders, not values to deploy.
+The illustrated key, fingerprint and licence are placeholders, not values to deploy.
+
+A Spartan licence is issued per domain, so each service needs its own. The master website obtains it from DezerX when the service is purchased and passes it here; the node does not mint, derive or share licences. It must begin with `SPARTANSTARTER_`, `SPARTANPROFESSIONAL_`, `SPARTANULTIMATE_` or `SPARTANDEV_` and otherwise contain only letters, digits, `_` and `-`, which is what the vendor's own download client accepts. `PRODUCT_ID` is derived from that prefix. The key is written only into the tenant's `app.env` and its state file, both mode 600, and is never logged or returned. Anything else is refused with `invalid_license_key`, which is not retried.
 
 `initialAdmin` accepts exactly `displayName`, `email`, and `password`. Display name: nonblank, maximum 100 characters. Email: valid basic email format, maximum 254 characters. Password: 8–128 characters. Control characters are rejected. Do not include a `role` field. The container creates this user as **superadmin** using `php artisan dx:user:create`. Creation occurs only on the primary and is not repeated after initialization; this endpoint is not a password-reset API.
 
@@ -226,14 +239,14 @@ HTTP 200 response:
 
 Moves an existing tenant onto the image the node is configured with. `POST /control/provision` deliberately will not do this: it reuses a container that already exists, so a new `SPARTAN_IMAGE` otherwise reaches new tenants only.
 
-Both fields are required. The call compares the running container's image to the node's `SPARTAN_IMAGE` and, when they differ, pulls the new image, stops and removes the container, and recreates it with the same labels, limits, environment file and mounts. The tenant's database and `storage/` are untouched, and the recreated container's entrypoint runs `migrate --force`, so a release's migrations apply as part of the upgrade.
+Both fields are required. The call compares the running container's image to the node's `SPARTAN_IMAGE`, and the tenant's current `app.env` to the one its container was created from. When either differs it pulls the image, stops and removes the container, and recreates it with the same labels, limits, environment file and mounts. The tenant's database and `storage/` are untouched, and the recreated container's entrypoint runs `migrate --force`, so a release's migrations apply as part of the upgrade.
 
 The pull happens **before** the container is stopped, so an unreachable or wrong digest fails while the tenant is still serving. Recreating a container assigns it a new host port; the agent re-reads and persists it.
 
 | Response `status` | Meaning |
 | --- | --- |
 | `current` | Already on that image. Nothing was pulled, stopped or recreated. |
-| `upgraded` | Recreated and healthy. `previousImage` names what it replaced. |
+| `upgraded` | Recreated and healthy. `previousImage` names what it replaced, and `changed` is `image`, `environment` or `image_and_environment`. |
 | `rolled_back` | The replacement would not start, so the previous image was put back and the tenant is serving again. `attempted` and `reason` say what failed. |
 | `provisioning` | Recreated and started, but not healthy within the wait. **Not** rolled back: its entrypoint reached `migrate`, so reverting could leave the schema ahead of the code. Investigate before retrying. |
 
@@ -352,10 +365,11 @@ The optional Worker stores provisioning state and asynchronously provisions the 
 
 | Method | Path | Body / purpose |
 | --- | --- | --- |
-| POST | `/v1/instances` | `{serviceId, customerId, primary, initialAdmin?}`; reserve and queue provisioning |
+| POST | `/v1/instances` | `{serviceId, customerId, primary, licenseKey, domain?, initialAdmin?}`; reserve and queue provisioning |
 | GET | `/v1/instances/{id}` | Empty body; inspect provisioning status |
 | POST | `/v1/services/status` | `{serviceId, status}`; desired status `active`, `suspended`, or `terminated` |
 | POST | `/v1/instances/{id}/lifecycle` | `{status, serviceId?}`; same lifecycle operation by tenant ID |
+| POST | `/v1/instances/{id}/app-url` | `{domain, licenseKey}`; move a ready tenant to a new domain and the licence issued for it |
 | POST | `/v1/instances/{id}/domains/{action}` | `{hostname}`; the same four domain actions using this Worker's own registry |
 
 Sign these requests with `BILLING_WEBHOOK_SECRET`. Request bodies are limited to 16,384 as enforced by Content-Length and the Worker's decoded body-length check. `primary` is required in raw create requests; the PHP helper defaults it to `us`.
@@ -363,8 +377,12 @@ Sign these requests with `BILLING_WEBHOOK_SECRET`. Request bodies are limited to
 Example create body:
 
 ```json
-{"serviceId":"svc_1001","customerId":"cus_42","primary":"us","initialAdmin":{"displayName":"Customer Owner","email":"owner@customer.example","password":"Replace-this-password!"}}
+{"serviceId":"svc_1001","customerId":"cus_42","primary":"us","licenseKey":"SPARTANPROFESSIONAL_replace-with-the-issued-key","domain":"panel.customer.example","initialAdmin":{"displayName":"Customer Owner","email":"owner@customer.example","password":"Replace-this-password!"}}
 ```
+
+`licenseKey` is required and is validated exactly as the node validates it, so an unusable key is refused with `invalid_license_key` before a tenant is reserved. `domain` is an optional bare hostname — no scheme, port or path — and becomes the tenant's `APP_URL`; omit it and the tenant uses `https://{id}.{BASE_DOMAIN}` until the customer has a domain. The control host and both node origins are refused with `invalid_domain`.
+
+Neither the licence nor the domain is part of the ownership fingerprint, because both change over a service's life. That also means a repeated create does not change them: `POST /v1/instances` is idempotent and returns the existing record. Use `POST /v1/instances/{id}/app-url` to move a tenant, which requires a `ready` tenant (`service_not_ready` otherwise), keeps it `ready` throughout, and queues a rewrite plus a single container restart on each node. Reserve and verify the hostname through the domain API as well, so Cloudflare terminates TLS for it.
 
 Example HTTP 202 response:
 

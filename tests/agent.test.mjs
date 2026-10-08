@@ -64,13 +64,16 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     const nodeHealth = await fetch(`${origin}/__cloud_node_health`, {headers: {'x-spartan-origin': secret}});
     assert.equal(nodeHealth.status, 200);
     assert.deepEqual(await nodeHealth.json(), {status: 'ready', region: 'us'});
-    const input = {initialAdmin: {displayName: 'Owner', email: 'owner@example.test', password: 'Chosen-password!'}, id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64)};
+    const license = 'SPARTANULTIMATE_kkkkkkkkkkkkkkkkkkkkkkkk';
+    const input = {initialAdmin: {displayName: 'Owner', email: 'owner@example.test', password: 'Chosen-password!'}, id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64), licenseKey: license};
     let body = JSON.stringify(input);
     assert.equal((await fetch(`${origin}/control/provision`, {method: 'POST', body})).status, 401);
     const send = async () => {
       const stamp = String(Date.now());
       return fetch(`${origin}/control/provision`, {method: 'POST', body, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', '/control/provision', body)}});
     };
+    body = JSON.stringify({...input, licenseKey: 'NOTASPARTANKEY_aaaaaaaaaaaaaaaa'});
+    assert.equal((await send()).status, 503, 'an unrecognised licence tier is refused');
     body = JSON.stringify({...input, initialAdmin: {...input.initialAdmin, password: 'Different-password!'}});
     assert.equal((await send()).status, 503);
     const failedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
@@ -89,6 +92,11 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.match(sqlCalls, /CREATE USER IF NOT EXISTS 'sp_1{24}'@'localhost'/);
     assert.match(sqlCalls, /GRANT ALL PRIVILEGES ON `sp_1{24}`\.\* TO/);
     assert.match(sqlCalls, /MAX_USER_CONNECTIONS 20/);
+    assert.ok(envFile.includes(`LICENSE_KEY=${license}`), 'the tenant carries the licence the vendor issued for it');
+    assert.ok(envFile.includes('PRODUCT_ID=6'), 'the product id follows the licence tier');
+    assert.equal(stderr.includes(license), false, 'the licence never reaches the log');
+    assert.ok(JSON.parse(state).envHash, 'the environment is fingerprinted so a renewed licence can be detected');
+    assert.equal(JSON.parse(state).envHash, JSON.parse(state).containerEnvHash, 'a freshly created container matches its environment');
     assert.ok(envFile.includes('DB_CONNECTION=mysql'), 'tenant runs on mysql');
     assert.ok(envFile.includes('DB_SOCKET=/run/mysqld/mysqld.sock'));
     assert.ok(envFile.includes(`DB_DATABASE=sp_${'1'.repeat(24)}`));
@@ -96,6 +104,23 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.ok(JSON.parse(state).dbPassword.length >= 16, 'the node owns the database password');
     for (const value of [state, envFile, stderr]) { assert.equal(value.includes('Chosen-password!'), false); assert.equal(value.includes('owner@example.test'), false); }
     assert.equal(stderr.includes(JSON.parse(state).dbPassword), false, 'the database password never reaches the log');
+    // The panel exists so the tenant's own URL is the customer's domain; routing still
+    // reaches it through the shared subdomain, which is why both are accepted here.
+    body = JSON.stringify({...input, url: 'https://panel.customer.test'});
+    assert.equal((await send()).status, 200, 'a customer domain is a valid application URL');
+    const moved = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
+    assert.ok(moved.includes('APP_URL=https://panel.customer.test'), 'APP_URL is the customer domain');
+    assert.ok(moved.includes('ASSET_URL=https://panel.customer.test'));
+    const movedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
+    assert.equal(movedState.status, 'ready', 'a serving tenant is not taken offline to rewrite its environment');
+    assert.equal(movedState.url, 'https://panel.customer.test');
+    assert.notEqual(movedState.envHash, movedState.containerEnvHash, 'the new environment waits for an upgrade to recreate the container');
+    for (const refused of ['https://cloud.test', 'https://us.origin.test', 'http://panel.customer.test', 'https://panel.customer.test/app', 'https://panel.customer.test:8443', 'panel.customer.test']) {
+      body = JSON.stringify({...input, url: refused});
+      assert.equal((await send()).status, 503, `refused application URL: ${refused}`);
+    }
+    body = JSON.stringify(input);
+    assert.equal((await send()).status, 200, 'the routing subdomain stays a valid application URL');
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`)).status, 404);
     const headers = {'x-spartan-client-ip': '198.51.100.42', 'x-forwarded-for': 'attacker', 'cf-connecting-ip': 'attacker', 'x-real-ip': 'attacker', 'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
     for (const clientIp of ['', '198.51.100.42, 203.0.113.9', 'invalid']) assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers: {...headers, 'x-spartan-client-ip': clientIp}})).status, 404);

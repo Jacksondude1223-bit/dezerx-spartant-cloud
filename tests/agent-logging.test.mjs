@@ -38,7 +38,7 @@ test('a failed provision logs a usable cause without leaking the database passwo
   const origin = `http://127.0.0.1:${agentPort}`;
   try {
     for (let i = 0; i < 200; i++) { try { await fetch(`${origin}/__cloud_node_health`); break; } catch { await wait(20); } }
-    const body = JSON.stringify({id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'c'.repeat(64)});
+    const body = JSON.stringify({id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'c'.repeat(64), licenseKey: 'SPARTANULTIMATE_kkkkkkkkkkkkkkkkkkkkkkkk'});
     const stamp = String(Date.now());
     const response = await fetch(`${origin}/control/provision`, {method: 'POST', body, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', '/control/provision', body)}});
     assert.equal(response.status, 503, 'provisioning fails when the database cannot be prepared');
