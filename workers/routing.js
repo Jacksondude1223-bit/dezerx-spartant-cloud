@@ -2,6 +2,7 @@ import {ID, json, region, visitorIp} from './shared.js';
 import {routingControl} from './routing-registry.js';
 import {readRoute, resolveHostname} from './store.js';
 import {monitorDomains} from './domains-d1.js';
+import {sensitivePath} from './security.js';
 import {statusPage} from './status-page.js';
 
 export default {
@@ -29,6 +30,7 @@ export default {
         if (!env.DB) return json({error: 'database_binding_missing'}, 503);
         return await routingControl(request, env);
       }
+      if (sensitivePath(url.pathname)) return json({error: 'not_found'}, 404);
       let id;
       if (url.hostname.endsWith(`.${env.BASE_DOMAIN}`)) id = url.hostname.slice(0, -env.BASE_DOMAIN.length - 1);
       else {

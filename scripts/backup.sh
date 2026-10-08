@@ -10,21 +10,21 @@ keep="${BACKUP_KEEP:-0}"
 mkdir -p "$backup_root"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
 failed=0
+crypto="$(dirname "$0")/backup-crypto.mjs"
+if [ ! -f "$crypto" ]; then crypto="$(dirname "$0")/../node/backup-crypto.mjs"; fi
+export BACKUP_KEY_FILE="${BACKUP_KEY_FILE:-/etc/spartan-cloud/backup.key}"
+test -s "$BACKUP_KEY_FILE"
 backup_tenant() {
   local name="$1" id="$2" dest="$3"
   local database="sp_${id#t-}"
   local status=0
-  # --single-transaction takes a consistent InnoDB snapshot without locking the tenant
-  # out. Each tenant is attempted independently so one failure cannot abort the sweep.
   mkdir -p "$dest" \
     && mysqldump --protocol=socket --socket="$socket" -uroot --single-transaction --quick \
          --routines --triggers --events --default-character-set=utf8mb4 "$database" \
-         | gzip -c > "$dest/database.sql.gz" \
-    && test -s "$dest/database.sql.gz" \
-    && gzip -t "$dest/database.sql.gz" \
-    && tar -C "$data_root/$id" -czf "$dest/storage.tar.gz" storage \
-    && cp "$data_root/$id/app.env" "$dest/app.env" \
-    && cp "$data_root/$id/state.json" "$dest/state.json" \
+         | gzip -c | node "$crypto" encrypt "$dest/database.sql.gz.enc" \
+    && tar -C "$data_root/$id" -czf - storage | node "$crypto" encrypt "$dest/storage.tar.gz.enc" \
+    && node "$crypto" encrypt "$dest/app.env.enc" < "$data_root/$id/app.env" \
+    && node "$crypto" encrypt "$dest/state.json.enc" < "$data_root/$id/state.json" \
     && touch "$dest/complete" || status=1
   return "$status"
 }

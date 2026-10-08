@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {createSecurity, sensitivePath} from './security.mjs';
 import {isIP} from 'node:net';
 import {applyLifecycle} from './service-lifecycle.mjs';
 import {proxyHeaders} from './client-ip.mjs';
@@ -26,6 +27,8 @@ for (const key of ['US_ORIGIN', 'DE_ORIGIN']) if (new URL(cfg[key]).protocol !==
 const root = cfg.DATA_ROOT || '/srv/spartan-cloud';
 const port = Number(cfg.AGENT_PORT || 8788);
 const jobs = new Map();
+const security = createSecurity();
+let pendingControls = 0;
 const socketPath = cfg.MYSQL_SOCKET || SOCKET;
 const socketDirectory = path.dirname(socketPath);
 const validId = id => /^t-[a-f0-9]{24}$/.test(id || '');
@@ -272,21 +275,33 @@ async function control(req, res, url) {
   const payload = await body(req);
   const timestamp = req.headers['x-spartan-timestamp'];
   const expected = createHmac('sha256', cfg.NODE_CONTROL_SECRET).update(`${timestamp}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex');
-  if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) return reply(res, 401, {error: 'unauthorized'});
+  if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) {
+    const withinLimit = security.denied();
+    return reply(res, withinLimit ? 401 : 429, {error: withinLimit ? 'unauthorized' : 'rate_limited'});
+  }
+  if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
   if (!['/control/provision', '/control/lifecycle', '/control/upgrade'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
+  if (pendingControls >= 50) return reply(res, 429, {error: 'control_capacity'});
+  pendingControls++;
+  const operation = url.pathname.slice('/control/'.length);
+  security.audit('control_authorized', {id: input.id, operation});
   const previous = jobs.get(input.id) || Promise.resolve();
   const job = previous.catch(() => {}).then(() => url.pathname === '/control/lifecycle' ? applyLifecycle(input, {root, load, save, docker})
     : url.pathname === '/control/upgrade' ? upgrade(input) : provision(input));
   jobs.set(input.id, job);
-  try { const result = await job; reply(res, 200, result); }
-  finally { if (jobs.get(input.id) === job) jobs.delete(input.id); }
+  try {
+    const result = await job;
+    security.audit('control_completed', {id: input.id, operation, status: result.status});
+    reply(res, 200, result);
+  } catch (error) { security.audit('control_failed', {id: input.id, operation}); throw error; }
+  finally { pendingControls--; if (jobs.get(input.id) === job) jobs.delete(input.id); }
 }
 async function target(req) {
   if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET) || typeof req.headers['x-spartan-client-ip'] !== 'string' || !isIP(req.headers['x-spartan-client-ip'])) return null;
   const match = req.url.match(/^\/tenant\/(t-[a-f0-9]{24})(\/.*)$/);
-  if (!match) return null;
+  if (!match || sensitivePath(match[2])) return null;
   const record = await load(match[1]);
   if (!record || record.status !== 'ready') return null;
   const host = req.headers['x-spartan-host'];

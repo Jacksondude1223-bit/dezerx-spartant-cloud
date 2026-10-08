@@ -127,6 +127,7 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`)).status, 404);
     const headers = {'x-spartan-client-ip': '198.51.100.42', 'x-forwarded-for': 'attacker', 'cf-connecting-ip': 'attacker', 'x-real-ip': 'attacker', 'x-spartan-origin': secret, 'x-spartan-host': `${id}.cloud.test`};
     for (const clientIp of ['', '198.51.100.42, 203.0.113.9', 'invalid']) assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers: {...headers, 'x-spartan-client-ip': clientIp}})).status, 404);
+    assert.equal((await fetch(`${origin}/tenant/${id}/%2eenv`, {headers})).status, 404);
     const proxy = await fetch(`${origin}/tenant/${id}/billing?invoice=1`, {headers});
     assert.equal(await proxy.text(), 'tenant-app');
     assert.equal(proxy.headers.get('set-cookie'), 'session=test; Secure; HttpOnly');
