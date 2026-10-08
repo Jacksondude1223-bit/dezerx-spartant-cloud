@@ -1,13 +1,3 @@
-// Moves routing state onto D1.
-//
-// Custom-domain registrations are copied straight out of the legacy Durable Object by the
-// Worker. Routing records cannot be: a Durable Object namespace cannot be enumerated by
-// name, so every tenant is re-registered from a list exported by the master website.
-//
-//   SPARTAN_ROUTING_URL=... ROUTING_CONTROL_SECRET=... node scripts/migrate-routing.mjs routes.json
-//
-// routes.json is an array of {id, serviceId, customerId, primary, status, lifecycleVersion}.
-// Pass no file to migrate custom domains only. Re-running is safe.
 import {readFile} from 'node:fs/promises';
 import {signature} from '../workers/shared.js';
 
@@ -23,13 +13,9 @@ async function send(path, payload) {
   return {status: response.status, body: await response.text()};
 }
 
-const domains = await send('/v1/routing/migrate/domains', {});
-console.log(`custom domains: ${domains.status} ${domains.body}`);
-if (domains.status >= 500) process.exitCode = 1;
-
 const file = process.argv[2];
 if (!file) {
-  console.log('no route file given; skipping routing records');
+  throw new Error('route_file_required');
 } else {
   const routes = JSON.parse(await readFile(file, 'utf8'));
   if (!Array.isArray(routes)) throw new Error('route_file_must_be_an_array');

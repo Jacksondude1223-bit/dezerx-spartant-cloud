@@ -1,12 +1,3 @@
-// D1-backed store for routing records and custom-domain registrations.
-//
-// This replaces the RoutingTenant and Domains Durable Objects on the request hot path.
-// A Durable Object is billed for the wall-clock time it stays awake, so consulting one
-// per request kept one object warm per tenant (and one global object warm for every
-// custom domain). D1 bills per row read, so the same lookups cost essentially nothing.
-//
-// The Durable Object classes are still exported for migration; see exportLegacy.
-
 const ROUTE_COLUMNS = 'id, serviceId, customerId, primaryRegion, status, lifecycleVersion';
 const DOMAIN_COLUMNS = 'hostname, tenantId, token, status, cloudflareId, createAttempted, certificateMethod, certificateStatus, cloudflareOwnership, certificateValidation, checkedAt, nextCheckAt, lastError';
 const json = value => (value === null || value === undefined ? undefined : (() => { try { return JSON.parse(value); } catch { return undefined; } })());
@@ -104,18 +95,3 @@ export async function dueDomains(env, now, limit = 3) {
   return (result.results || []).map(domain);
 }
 
-// Migration only: writes a legacy Durable Object record verbatim. Existing rows win, so
-// replaying the export is safe.
-export async function importDomain(env, record) {
-  const result = await env.DB.prepare(
-    `INSERT INTO domains (hostname, tenantId, token, status, cloudflareId, createAttempted, certificateMethod, certificateStatus, cloudflareOwnership, certificateValidation, checkedAt, nextCheckAt, lastError)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) ON CONFLICT(hostname) DO NOTHING`
-  ).bind(
-    record.hostname, record.tenantId, record.token, record.status, record.cloudflareId ?? null,
-    record.createAttempted || record.slotReserved ? 1 : 0, record.certificateMethod ?? null, record.certificateStatus ?? null,
-    record.cloudflareOwnership === undefined ? null : JSON.stringify(record.cloudflareOwnership),
-    record.certificateValidation === undefined ? null : JSON.stringify(record.certificateValidation),
-    record.checkedAt ?? null, record.nextCheckAt ?? 0, record.lastError ?? null
-  ).run();
-  return (result.meta?.changes ?? 0) === 1;
-}

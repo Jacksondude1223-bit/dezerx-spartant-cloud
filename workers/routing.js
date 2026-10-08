@@ -3,8 +3,6 @@ import {routingControl} from './routing-registry.js';
 import {readRoute, resolveHostname} from './store.js';
 import {monitorDomains} from './domains-d1.js';
 import {statusPage} from './status-page.js';
-export {RoutingTenant} from './routing-registry.js';
-export {Domains} from './domains.js';
 
 export default {
   async scheduled(event, env) {

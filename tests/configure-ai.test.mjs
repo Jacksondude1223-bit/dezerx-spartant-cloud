@@ -39,10 +39,10 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     }
     const secrets = JSON.parse(await readFile(path.join(directory, 'generated/provisioning.secrets.json'), 'utf8'));
     const routeWorker = JSON.parse(await readFile(path.join(directory, 'generated/routing.json'), 'utf8'));
-    assert.equal(routeWorker.durable_objects.bindings.some(binding => binding.script_name), false);
+    assert.equal('durable_objects' in routeWorker, false);
     assert.ok(routeWorker.routes.some(route => route.pattern === 'cloud.spartan.test/*'));
     assert.ok(routeWorker.routes.some(route => route.pattern === '*.cloud.spartan.test/*'));
-    assert.deepEqual(routeWorker.migrations[0].new_sqlite_classes, ['RoutingTenant', 'Domains']);
+    assert.deepEqual(routeWorker.migrations, [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}, {tag: 'routing-v2-d1-only', deleted_classes: ['RoutingTenant', 'Domains']}]);
     assert.deepEqual(routeWorker.d1_databases, [{binding: 'DB', database_name: 'spartan-routing-cloud-spartan-test', database_id: 'd1-uuid'}]);
     assert.deepEqual(routeWorker.triggers.crons, ['*/5 * * * *'], 'the cron now drives the certificate sweep that the Durable Object alarm used to');
     const routeSecrets = JSON.parse(await readFile(path.join(directory, 'generated/routing.secrets.json'), 'utf8'));

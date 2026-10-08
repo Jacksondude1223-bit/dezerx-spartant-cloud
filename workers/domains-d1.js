@@ -1,5 +1,5 @@
 import {ID, json} from './shared.js';
-import {hostname, api, dns, txt} from './domains.js';
+import {hostname, api, dns, txt} from './domain-utils.js';
 import {readRoute, readDomain, insertDomain, updateDomain, deleteDomain, countDomains, countCloudflareSlots, claimCreateAttempt, dueDomains} from './store.js';
 
 function limit(env) {

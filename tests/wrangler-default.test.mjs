@@ -15,8 +15,10 @@ test('default Cloudflare build selects routing and does not force a placeholder 
   assert.equal(routing.workers_dev, true);
   assert.deepEqual(routing.assets, {directory: 'public', binding: 'ASSETS', run_worker_first: true});
   assert.deepEqual(routing.routes.map(route => route.pattern), ['load.dezerx.cloud/*', '*.load.dezerx.cloud/*']);
-  assert.deepEqual(routing.durable_objects.bindings, [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]);
-  assert.deepEqual(routing.migrations, [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}]);
+  assert.equal('durable_objects' in routing, false);
+  assert.deepEqual(routing.migrations, [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}, {tag: 'routing-v2-d1-only', deleted_classes: ['RoutingTenant', 'Domains']}]);
+  assert.equal(routing.d1_databases[0].binding, 'DB');
+  assert.equal(routing.d1_databases[0].database_id, '2551e490-663e-4fb7-b7b5-0fe468eca54a');
   assert.equal('queues' in routing, false);
   assert.equal('ai' in routing, false);
   const provisioning = configs['wrangler.provisioning.toml'];

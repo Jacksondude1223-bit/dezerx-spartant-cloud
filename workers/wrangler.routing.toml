@@ -16,19 +16,13 @@ SAAS_ZONE_DOMAIN = "dezerx.cloud"
 SAAS_CNAME_TARGET = "load.dezerx.cloud"
 
 
-[durable_objects]
-
-[[durable_objects.bindings]]
-name = "TENANTS"
-class_name = "RoutingTenant"
-
-[[durable_objects.bindings]]
-name = "DOMAINS"
-class_name = "Domains"
-
 [[migrations]]
 tag = "routing-v1"
 new_sqlite_classes = ["RoutingTenant", "Domains"]
+
+[[migrations]]
+tag = "routing-v2-d1-only"
+deleted_classes = ["RoutingTenant", "Domains"]
 
 [triggers]
 crons = ["*/5 * * * *"]
