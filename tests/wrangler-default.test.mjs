@@ -14,7 +14,7 @@ test('default Cloudflare build selects routing and does not force a placeholder 
   assert.equal('account_id' in routing, false);
   assert.equal(routing.workers_dev, true);
   assert.deepEqual(routing.assets, {directory: 'public', binding: 'ASSETS', run_worker_first: true});
-  assert.equal('routes' in routing, false);
+  assert.deepEqual(routing.routes.map(route => route.pattern), ['load.dezerx.cloud/*', '*.load.dezerx.cloud/*']);
   assert.deepEqual(routing.durable_objects.bindings, [{name: 'TENANTS', class_name: 'RoutingTenant'}, {name: 'DOMAINS', class_name: 'Domains'}]);
   assert.deepEqual(routing.migrations, [{tag: 'routing-v1', new_sqlite_classes: ['RoutingTenant', 'Domains']}]);
   assert.equal('queues' in routing, false);

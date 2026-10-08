@@ -22,6 +22,8 @@ test('status refresh recovers original IPv6 and never trusts supplied forwarding
   const response = await routing.fetch(request('/__routing_status', {'cf-connecting-ip': '240.0.0.2', 'cf-connecting-ipv6': '2001:db8::15'}, {country: 'DE'}), env);
   const status = await response.json();
   assert.equal(status.ip, '2001:db8::15');
+  assert.equal(status.database, 'Missing DB binding');
+  assert.equal((await routingStatus(request(), {...env, DB: d1()})).database, 'Bound');
   assert.equal(status.node, 'Germany');
   const unavailable = await routingStatus(request('/', {'x-forwarded-for': '1.2.3.4'}), env);
   assert.equal(unavailable.ip, 'Unavailable');

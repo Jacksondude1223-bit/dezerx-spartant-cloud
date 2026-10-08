@@ -6,6 +6,9 @@ import path from 'node:path';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
 import {signature} from '../workers/shared.js';
+import routing from '../workers/routing.js';
+import {d1} from './d1.mjs';
+import {registerRoute, insertDomain, updateDomain} from '../workers/store.js';
 
 test('node agent authenticates control requests and proxies only the correct tenant', async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'spartan-test-'));
@@ -158,6 +161,42 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.equal(await customerRequest.text(), 'tenant-app');
     assert.equal(requests.at(-1).host, 'panel.customer.test');
     assert.equal(requests.filter(req => req.path === '/__cloud_health').some(req => req.host === 'panel.customer.test'), true);
+    const workerEnv = {BASE_DOMAIN: 'cloud.test', US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', ORIGIN_SECRET: secret, DB: d1()};
+    await registerRoute(workerEnv, {id, serviceId: 'service_1', customerId: 'customer_1', primary: 'us', status: 'ready', lifecycleVersion: 0});
+    await insertDomain(workerEnv, {hostname: licensedHost, tenantId: id, token: 'verified', status: 'active', nextCheckAt: 0});
+    const actualFetch = globalThis.fetch;
+    const nodeRequests = [];
+    globalThis.fetch = async request => {
+      nodeRequests.push({url: request.url, host: request.headers.get('x-spartan-host')});
+      const nodeUrl = new URL(request.url);
+      return actualFetch(`${origin}${nodeUrl.pathname}${nodeUrl.search}`, {method: request.method, headers: request.headers, body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body, duplex: 'half', redirect: 'manual'});
+    };
+    try {
+      for (const [country, node] of [['US', 'us'], ['DE', 'de'], ['BR', 'us'], ['FR', 'de']]) {
+        const request = new Request('https://panel.customer.test/billing?invoice=7', {headers: {'cf-connecting-ip': '198.51.100.42', 'x-spartan-host': 'attacker.test', 'x-forwarded-host': 'attacker.test', authorization: 'Bearer customer-token'}});
+        Object.defineProperty(request, 'cf', {value: {country}});
+        const result = await routing.fetch(request, workerEnv);
+        assert.equal(result.status, 200);
+        assert.equal(await result.text(), 'tenant-app');
+        assert.equal(nodeRequests.at(-1).url, `https://${node}.origin.test/tenant/${id}/billing?invoice=7`);
+        assert.equal(nodeRequests.at(-1).host, 'panel.customer.test');
+        assert.equal(requests.at(-1).host, 'panel.customer.test');
+        assert.equal(requests.at(-1).clientIp, '198.51.100.42');
+        assert.equal(result.headers.get('set-cookie'), 'session=test; Secure; HttpOnly');
+      }
+      const alternate = await routing.fetch(new Request(`https://${id}.cloud.test/billing?invoice=8`, {headers: {'cf-connecting-ip': '198.51.100.42'}}), workerEnv);
+      assert.equal(alternate.status, 308);
+      assert.equal(alternate.headers.get('location'), 'https://panel.customer.test/billing?invoice=8');
+      const rejectedPost = await routing.fetch(new Request(`https://${id}.cloud.test/billing`, {method: 'POST', body: 'payment=data', headers: {'cf-connecting-ip': '198.51.100.42'}}), workerEnv);
+      assert.equal(rejectedPost.status, 421);
+      const forwardedCount = nodeRequests.length;
+      await registerRoute(workerEnv, {id, serviceId: 'service_1', customerId: 'customer_1', primary: 'us', status: 'suspended', lifecycleVersion: 1});
+      assert.equal((await routing.fetch(new Request('https://panel.customer.test/billing', {headers: {'cf-connecting-ip': '198.51.100.42'}}), workerEnv)).status, 403);
+      assert.equal(nodeRequests.length, forwardedCount);
+      await updateDomain(workerEnv, licensedHost, {status: 'pending_certificate'});
+      assert.equal((await routing.fetch(new Request('https://panel.customer.test/billing', {method: 'POST', body: 'payment=data', headers: {'cf-connecting-ip': '198.51.100.42'}}), workerEnv)).status, 404);
+      assert.equal(nodeRequests.length, forwardedCount);
+    } finally { globalThis.fetch = actualFetch; }
     body = JSON.stringify(input);
     const lifecycle = async (action, lifecycleVersion) => {
       const payload = JSON.stringify({id, fingerprint: input.fingerprint, action, lifecycleVersion});
