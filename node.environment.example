@@ -1,0 +1,6 @@
+BASE_DOMAIN=load.dezerx.cloud
+US_ORIGIN=https://us-node.dezerx.cloud
+DE_ORIGIN=https://de-node.dezerx.cloud
+SPARTAN_IMAGE=registry.example.com/spartan@sha256:CHANGE_ME
+NODE_CONTROL_SECRET=CHANGE_ME
+ORIGIN_SECRET=CHANGE_ME
