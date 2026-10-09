@@ -109,7 +109,7 @@ COPY runtime/rr.yaml /etc/spartan/rr.yaml
 COPY runtime/SpartanCloudServiceProvider.php /usr/local/lib/spartan-cloud/SpartanCloudServiceProvider.php
 COPY runtime/domain-context.php /usr/local/lib/spartan-cloud/domain-context.php
 COPY runtime/bootstrap.php /usr/local/lib/spartan-cloud/bootstrap.php
-RUN test ! -e bootstrap/spartan-app.php && mv bootstrap/app.php bootstrap/spartan-app.php && cp /usr/local/lib/spartan-cloud/bootstrap.php bootstrap/app.php && rm -f .env bootstrap/cache/config.php bootstrap/cache/packages.php bootstrap/cache/services.php && php -l bootstrap/app.php && php -l /usr/local/lib/spartan-cloud/domain-context.php && php -l /usr/local/lib/spartan-cloud/SpartanCloudServiceProvider.php && ./rr --version
+RUN test ! -e bootstrap/spartan-app.php && mv bootstrap/app.php bootstrap/spartan-app.php && cp /usr/local/lib/spartan-cloud/bootstrap.php bootstrap/app.php && rm -f .env bootstrap/cache/config.php bootstrap/cache/packages.php bootstrap/cache/services.php && php -d opcache.enable_cli=0 -l bootstrap/app.php && php -d opcache.enable_cli=0 -l /usr/local/lib/spartan-cloud/domain-context.php && php -d opcache.enable_cli=0 -l /usr/local/lib/spartan-cloud/SpartanCloudServiceProvider.php && ./rr --version
 COPY tests/runtime_domain_test.php /tmp/runtime_domain_test.php
 RUN php /tmp/runtime_domain_test.php && rm /tmp/runtime_domain_test.php
 COPY tests/runtime_octane_test.php /tmp/runtime_octane_test.php
