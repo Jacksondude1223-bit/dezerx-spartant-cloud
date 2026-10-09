@@ -48,6 +48,8 @@ test('configure generates Workers AI binding, shared secret, migration and signe
     assert.deepEqual(routeWorker.triggers.crons, ['*/5 * * * *'], 'the cron now drives the certificate sweep that the Durable Object alarm used to');
     const routeSecrets = JSON.parse(await readFile(path.join(directory, 'generated/routing.secrets.json'), 'utf8'));
     assert.match(routeSecrets.ROUTING_CONTROL_SECRET, /^[a-f0-9]{64}$/);
+    assert.equal(routeSecrets.ROUTING_CONTROL_SECRET, routeSecrets.ORIGIN_SECRET);
+    assert.equal(secrets.NODE_CONTROL_SECRET, routeSecrets.ORIGIN_SECRET);
     assert.deepEqual(worker.ai, {binding: 'AI'});
     assert.equal(worker.vars.MAX_CUSTOM_HOSTNAMES, '30');
     assert.deepEqual(worker.triggers.crons, ['0 */6 * * *']);

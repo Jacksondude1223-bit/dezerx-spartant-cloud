@@ -1,11 +1,30 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {signature, verify, digest, region} from '../workers/shared.js';
+import {signature, verify, digest, region, nodeCall} from '../workers/shared.js';
 import provisioning, {Tenant} from '../workers/provisioning.js';
 import routing from '../workers/routing.js';
 import {d1, setRoute} from './d1.mjs';
 
 const secret = 'a'.repeat(64);
+test('Worker node calls use the shared key and preserve explicit legacy keys', async t => {
+  const original = globalThis.fetch;
+  t.after(() => { globalThis.fetch = original; });
+  const env = {US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: secret};
+  let received;
+  globalThis.fetch = async (url, options) => {
+    received = new Request(url, options);
+    return Response.json({status: 'ready'});
+  };
+  await nodeCall(env, 'us', '/control/provision', {id: 'test'});
+  assert.equal(await verify(received, await received.clone().text(), secret), true);
+  env.NODE_CONTROL_SECRET = 'legacy-key-'.repeat(4);
+  await nodeCall(env, 'us', '/control/provision', {id: 'test'});
+  assert.equal(await verify(received, await received.clone().text(), env.NODE_CONTROL_SECRET), true);
+  assert.equal(await verify(received, await received.clone().text(), secret), false);
+  delete env.NODE_CONTROL_SECRET;
+  delete env.ORIGIN_SECRET;
+  await assert.rejects(nodeCall(env, 'us', '/control/provision', {id: 'test'}), /node_secret_missing/);
+});
 async function signed(method, path, payload = '', stamp = String(Date.now())) {
   return new Request(`https://provision.example${path}`, {method, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, method, path, payload)}, body: method === 'GET' ? undefined : payload});
 }

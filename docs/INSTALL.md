@@ -23,7 +23,7 @@ For public repositories, omit `--private`. If running inside an already download
 
 Private container images require separate registry authentication before installation, for example `sudo docker login ghcr.io`. Repository access does not grant access to Docker images.
 
-For node installation, copy `node.environment.example` to a private `node.env` file and supply `--env /absolute/path/node.env`. The six entries are the required node settings. Replace the image with your published image digest and provide the existing shared secrets. `NODE_CONTROL_SECRET` must match both nodes and the master website; `ORIGIN_SECRET` must match both nodes and the routing Worker. The installer chooses the region from `us` or `de` and supplies port, storage paths, and resource defaults automatically. Tunnel tokens stay in their separate protected files or hidden prompts.
+For node installation, copy `node.environment.example` to a private `node.env` file and supply `--env /absolute/path/node.env`. The five entries are the required node settings. Replace the image with your published image digest. Set the same `ORIGIN_SECRET` on both nodes, the routing Worker and the master website. This key authenticates Worker origin requests and signs master website node and routing API requests. Existing `NODE_CONTROL_SECRET` and `ROUTING_CONTROL_SECRET` overrides still take priority; remove them to enable the shared-key setup. The installer chooses the region from `us` or `de` and supplies port, storage paths, and resource defaults automatically. Tunnel tokens stay in their separate protected files or hidden prompts.
 
 `environment.example` is for the separate Cloudflare configuration command (`node scripts/configure.mjs`), not the node installer. It keeps the enabled custom hostname and Llama recovery options; default worker names, resource limits, and limits on hostnames or AI calls need no entries. The node example uses default recovery disabled. To enable an already deployed recovery service on a node, add `AI_RECOVERY_ENABLED=true`, `AI_RECOVERY_URL`, and `AI_RECOVERY_SECRET` to its input file.
 
@@ -66,3 +66,9 @@ View the schedule and logs:
 systemctl list-timers spartan-update-check.timer
 sudo journalctl -u spartan-update-check.service
 ```
+
+## Use one shared API and origin key
+
+After updating the node code, keep your existing `ORIGIN_SECRET` value on both nodes and in the routing Worker secret. Remove `NODE_CONTROL_SECRET` from `/etc/spartan-cloud/node.env` on both nodes and remove `ROUTING_CONTROL_SECRET` from the routing Worker secrets. Configure the master website to sign both node and routing requests with that same `ORIGIN_SECRET` value, following `docs/API.md`. Restart the node agents to load the environment changes and deploy the Worker. Coordinate this switch with the master website because requests signed with the previous separate keys will stop authenticating. The repository update command preserves node environment files, so it does not remove these overrides for you.
+
+Origin endpoints still use `X-Spartan-Origin`; API endpoints still require timestamped HMAC signatures. A raw bearer key does not replace those signatures. HTTPS encrypts network traffic. This change does not rotate tenant `APP_KEY` values or the backup encryption key. Existing configure state and optional provisioning Worker encrypted administrator records retain their existing keys. If using that optional Worker, keep its existing `NODE_CONTROL_SECRET` to decrypt older records and match its node-call key to the nodes before switching. Never put this shared key into frontend JavaScript or a tenant environment.

@@ -31,8 +31,7 @@ const fields = {
   US_ORIGIN: {label: 'US node origin (https://node-us.yourdomain.com)', valid: origin},
   DE_ORIGIN: {label: 'Germany node origin (https://node-de.yourdomain.com)', valid: origin},
   SPARTAN_IMAGE: {label: 'Published Spartan image (registry/name@sha256:digest)', valid: value => /^\S+@sha256:[a-f0-9]{64}$/.test(value || '') && !value.includes('example.com')},
-  NODE_CONTROL_SECRET: {label: 'Shared node API secret (same on both nodes and master website)', valid: secret, hidden: true},
-  ORIGIN_SECRET: {label: 'Shared origin secret (same on both nodes and routing Worker)', valid: secret, hidden: true},
+  ORIGIN_SECRET: {label: 'Shared API and origin secret (same on both nodes, routing Worker and master website)', valid: secret, hidden: true},
   TENANT_CPUS: {label: 'CPU limit per tenant', default: '1', valid: value => /^(?:\d+)(?:\.\d+)?$/.test(value) && Number(value) > 0 && Number(value) <= 256},
   TENANT_MEMORY: {label: 'Memory limit per tenant', default: '512m', valid: value => /^[1-9]\d*[mg]$/i.test(value)},
   MAX_TENANTS: {label: 'Maximum tenants on this node', default: '100', valid: value => /^[1-9]\d*$/.test(value) && Number(value) <= 100000},
@@ -48,6 +47,7 @@ function origin(value) {
 export function validateNodeEnvironment(env, region) {
   if (!['us', 'de'].includes(region) || env.NODE_REGION !== region) throw new Error('Node region mismatch');
   for (const [key, field] of Object.entries(fields)) if (!field.valid(env[key] || '')) throw new Error(`Invalid ${key}`);
+  if (env.NODE_CONTROL_SECRET !== undefined && !secret(env.NODE_CONTROL_SECRET)) throw new Error('Invalid NODE_CONTROL_SECRET');
   const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
   if (origins[0] === origins[1] || origins.some(host => host === env.BASE_DOMAIN || host.endsWith(`.${env.BASE_DOMAIN}`))) throw new Error('Origin hostnames must differ and be outside the tenant base domain');
   if (env.AGENT_PORT !== '8788' || env.DATA_ROOT !== '/srv/spartan-cloud' || env.MYSQL_SOCKET !== '/run/mysqld/mysqld.sock' || env.LARAVEL_ENV_FILE !== '/etc/spartan-cloud/laravel-env.json') throw new Error('Invalid node paths or port');
@@ -129,6 +129,8 @@ async function main(args) {
   };
   try {
     for (const [key, field] of Object.entries(fields)) env[key] = await ask(key, field);
+    const legacyControlSecret = supplied.NODE_CONTROL_SECRET ?? process.env.NODE_CONTROL_SECRET;
+    if (legacyControlSecret !== undefined && legacyControlSecret !== '') env.NODE_CONTROL_SECRET = legacyControlSecret;
     if (env.AI_RECOVERY_ENABLED === 'true') {
       env.AI_RECOVERY_URL = await ask('AI_RECOVERY_URL', {label: 'Existing recovery Worker URL (https://worker.workers.dev/v1/recovery)', valid: value => { try { const url = new URL(value); return url.protocol === 'https:' && url.pathname === '/v1/recovery'; } catch { return false; } }});
       env.AI_RECOVERY_SECRET = await ask('AI_RECOVERY_SECRET', {label: 'Shared recovery Worker secret', valid: secret, hidden: true});

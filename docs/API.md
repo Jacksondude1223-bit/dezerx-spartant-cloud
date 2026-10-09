@@ -2,7 +2,7 @@
 
 Powered by Costal Cloud
 
-Based on the implementation at repository commit `0d60c324f84b4dceab6308f9290ce8474c5505d8`, reviewed October 7, 2026.
+Shared API and origin authentication updated October 9, 2026.
 
 ## Deployment model
 
@@ -12,9 +12,9 @@ The routing Worker keeps its routing records and custom-domain registrations in 
 
 | API | Example base URL | Authentication |
 | --- | --- | --- |
-| Routing Worker | `https://dezerx-spartant-cloud.ACCOUNT.workers.dev` | HMAC using `ROUTING_CONTROL_SECRET` |
-| US node | `https://node-us.yourdomain.com` | Control HMAC using `NODE_CONTROL_SECRET`; origin endpoints use `ORIGIN_SECRET` |
-| Germany node | `https://node-de.yourdomain.com` | Same shared node and origin secrets |
+| Routing Worker | `https://dezerx-spartant-cloud.ACCOUNT.workers.dev` | HMAC using `ORIGIN_SECRET` (legacy `ROUTING_CONTROL_SECRET` overrides it) |
+| US node | `https://node-us.yourdomain.com` | Control HMAC and origin authentication using `ORIGIN_SECRET` (legacy `NODE_CONTROL_SECRET` overrides control HMAC) |
+| Germany node | `https://node-de.yourdomain.com` | Same shared `ORIGIN_SECRET` as the US node |
 | Optional provisioning Worker | `https://spartan-provisioning.ACCOUNT.workers.dev` | HMAC using `BILLING_WEBHOOK_SECRET` |
 | Optional recovery endpoint | Provisioning Worker base URL | HMAC using `AI_RECOVERY_SECRET` |
 
@@ -50,7 +50,7 @@ Signing verifies authenticity and freshness; it is not a one-time nonce system. 
 
 ### Runnable Python request client
 
-Save this as `api-request.py`. It uses Python's standard library. Set `SPARTAN_API_URL` and `SPARTAN_API_SECRET` in the environment of the master website or your terminal. Use the secret appropriate to the target API.
+Save this as `api-request.py`. It uses Python's standard library. Set `SPARTAN_API_URL` and `SPARTAN_API_SECRET` in the environment of the master website or your terminal. Use your shared `ORIGIN_SECRET` for both node and routing APIs when no legacy overrides are configured.
 
 ```python
 import hashlib
@@ -161,7 +161,7 @@ Build and push a new image, then take the digest from `scripts/build-image.sh`. 
 
 ## Node API
 
-Node control bodies are limited to 16,384 bytes. Sign control requests with `NODE_CONTROL_SECRET`.
+Node control bodies are limited to 16,384 bytes. Sign control requests with `ORIGIN_SECRET`. An explicitly configured `NODE_CONTROL_SECRET` takes priority for compatibility.
 
 ### POST /control/provision
 
@@ -276,7 +276,7 @@ Internal proxy ingress used by the routing Worker. Required headers include `X-S
 
 ## Routing Worker API
 
-Bodies are limited to 65,536 bytes. Sign all `/v1/routing/*` requests with `ROUTING_CONTROL_SECRET`.
+Bodies are limited to 65,536 bytes. Sign all `/v1/routing/*` requests with `ORIGIN_SECRET`. An explicitly configured `ROUTING_CONTROL_SECRET` takes priority for compatibility.
 
 ### POST /v1/routing/instances
 
@@ -386,7 +386,7 @@ Example HTTP 202 response:
 
 The ID shown is illustrative; real IDs are derived from the service ID. Poll GET status until `ready`. Intermediate states include `pending`, `suspending`, and `terminating`; terminal operation states include `ready`, `suspended`, and `terminated`. `readyAt` is returned once available. Repeated identical requests reuse the record; conflicting customer, primary, or initial-administrator details return `service_conflict`. Changing the original administrator credentials is not a retry mechanism.
 
-After create or a lifecycle operation finishes, publish the resulting state to the default routing Worker using `ROUTING_CONTROL_SECRET`. Maintain domain registrations in the routing Worker when using it as your customer-facing router; creating a domain only in the optional controller does not populate the standalone router's domain registry.
+After create or a lifecycle operation finishes, publish the resulting state to the default routing Worker using `ORIGIN_SECRET` (or the configured legacy `ROUTING_CONTROL_SECRET`). Maintain domain registrations in the routing Worker when using it as your customer-facing router; creating a domain only in the optional controller does not populate the standalone router's domain registry.
 
 ## Optional Llama recovery API
 
@@ -451,7 +451,7 @@ The repository contains `scripts/SpartanCloudRouter.php` for routing and domain 
 
 ```php
 require 'scripts/SpartanCloudRouter.php';
-$router = new SpartanCloudRouter(getenv('SPARTAN_ROUTING_URL'), getenv('ROUTING_CONTROL_SECRET'));
+$router = new SpartanCloudRouter(getenv('SPARTAN_ROUTING_URL'), getenv('ORIGIN_SECRET'));
 $record = $router->register($tenantId, $serviceId, $customerId, 'us', 'ready', 0);
 $reservation = $router->domain($tenantId, 'billing.customer.com', 'reserve');
 ```

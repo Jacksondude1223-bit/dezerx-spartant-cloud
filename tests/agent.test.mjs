@@ -54,7 +54,7 @@ const sql=process.argv[process.argv.length-1];
 fs.appendFileSync(process.env.MYSQL_CALLS, sql + '\\n');
 if (/^SELECT 1$/.test(sql)) console.log('1');
 `, {mode: 0o755});
-  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_MAINTENANCE_FILE: path.join(dir,'maintenance'), NODE_REGION: 'us', NODE_CONTROL_SECRET: secret, ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
+  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_MAINTENANCE_FILE: path.join(dir,'maintenance'), NODE_REGION: 'us', NODE_CONTROL_SECRET: '', ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
   let stderr = '';
   agent.stderr.on('data', value => { stderr += value; });
   const origin = `http://127.0.0.1:${agentPort}`;

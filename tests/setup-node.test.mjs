@@ -73,6 +73,20 @@ test('invalid node inputs fail before producing configuration files', async () =
   } finally { await rm(dir, {recursive: true, force: true}); }
 });
 
+test('new node setup requires only the shared origin key and does not create a separate API key', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'spartan-shared-key-'));
+  try {
+    const env = fixture('us');
+    delete env.NODE_CONTROL_SECRET;
+    assert.equal(validateNodeEnvironment(env, 'us'), env);
+    await writeFile(path.join(dir, 'source.env'), serializeEnvironment(env));
+    await writeFile(path.join(dir, 'token'), 'synthetic-tunnel-token-for-offline-tests\n');
+    const output = await run(process.execPath, ['scripts/setup-node.mjs', 'us', '--non-interactive', '--env', path.join(dir, 'source.env'), '--token', path.join(dir, 'token'), '--output', path.join(dir, 'config')], {env: {...process.env, NODE_CONTROL_SECRET: ''}});
+    assert.equal(output.stdout.includes(env.ORIGIN_SECRET), false);
+    assert.deepEqual(parseEnvironment(await readFile(path.join(dir, 'config/node.env'), 'utf8')), env);
+  } finally { await rm(dir, {recursive: true, force: true}); }
+});
+
 test('readiness requires the correct authenticated agent and a connected tunnel', async () => {
   const env = fixture('us');
   const calls = [];

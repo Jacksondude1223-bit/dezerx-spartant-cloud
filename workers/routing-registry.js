@@ -33,7 +33,7 @@ async function bodyText(request) {
 export async function routingControl(request, env) {
   let body;
   try { body = await bodyText(request); } catch { return json({error: 'body_too_large'}, 413); }
-  if (!await verify(request, body, env.ROUTING_CONTROL_SECRET)) return json({error: 'unauthorized'}, 401);
+  if (!await verify(request, body, env.ROUTING_CONTROL_SECRET || env.ORIGIN_SECRET)) return json({error: 'unauthorized'}, 401);
   const path = new URL(request.url).pathname;
   let input;
   try { input = body ? JSON.parse(body) : {}; } catch { return json({error: 'invalid_json'}, 400); }

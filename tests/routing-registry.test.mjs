@@ -29,6 +29,19 @@ test('standalone registry rejects unsigned or wrong-secret updates and invalid m
   assert.equal((await register(env, {customerId: ['customer_1']})).status, 400);
   assert.equal((await register(env, {lifecycleVersion: -1})).status, 400);
 });
+test('shared origin key signs routing API requests unless a legacy override is configured', async () => {
+  const {env} = fixture();
+  env.ORIGIN_SECRET = 'shared-origin-key-'.repeat(4);
+  delete env.ROUTING_CONTROL_SECRET;
+  assert.equal((await routing.fetch(await signed('/v1/routing/instances', input, env.ORIGIN_SECRET), env)).status, 201);
+  assert.equal((await routing.fetch(await signed(`/v1/routing/instances/${id}`, undefined, 'wrong'), env)).status, 401);
+  env.ROUTING_CONTROL_SECRET = secret;
+  assert.equal((await routing.fetch(await signed(`/v1/routing/instances/${id}`, undefined, env.ORIGIN_SECRET), env)).status, 401);
+  assert.equal((await routing.fetch(await signed(`/v1/routing/instances/${id}`), env)).status, 200);
+  delete env.ROUTING_CONTROL_SECRET;
+  delete env.ORIGIN_SECRET;
+  assert.equal((await routing.fetch(await signed(`/v1/routing/instances/${id}`), env)).status, 401);
+});
 test('registered instances persist locally and route without another Worker', async t => {
   const {env} = fixture();
   assert.equal((await register(env)).status, 201);

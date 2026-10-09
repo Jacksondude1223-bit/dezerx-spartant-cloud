@@ -25,10 +25,10 @@ await mkdir(directory, {recursive: true, mode: 0o700});
 const write = async (file, value) => { const dest = path.join(directory, file); await writeFile(dest, value, {mode: 0o600}); await chmod(dest, 0o600); };
 let state;
 try { state = JSON.parse(await readFile(path.join(directory, 'state.json'), 'utf8')); }
-catch (error) { if (error.code !== 'ENOENT') throw error; state = {accountId: cfg.CLOUDFLARE_ACCOUNT_ID, zoneId: cfg.CLOUDFLARE_ZONE_ID, baseDomain: cfg.BASE_DOMAIN, BILLING_WEBHOOK_SECRET: randomBytes(32).toString('hex'), NODE_CONTROL_SECRET: randomBytes(32).toString('hex'), ORIGIN_SECRET: randomBytes(32).toString('hex'), tunnels: {}}; }
+catch (error) { if (error.code !== 'ENOENT') throw error; const sharedSecret = randomBytes(32).toString('hex'); state = {accountId: cfg.CLOUDFLARE_ACCOUNT_ID, zoneId: cfg.CLOUDFLARE_ZONE_ID, baseDomain: cfg.BASE_DOMAIN, BILLING_WEBHOOK_SECRET: randomBytes(32).toString('hex'), NODE_CONTROL_SECRET: sharedSecret, ORIGIN_SECRET: sharedSecret, tunnels: {}}; }
 if (state.accountId !== cfg.CLOUDFLARE_ACCOUNT_ID || state.zoneId !== cfg.CLOUDFLARE_ZONE_ID || state.baseDomain !== cfg.BASE_DOMAIN) throw new Error('configuration_conflict');
 state.AI_RECOVERY_SECRET ||= randomBytes(32).toString('hex');
-state.ROUTING_CONTROL_SECRET ||= randomBytes(32).toString('hex');
+state.ROUTING_CONTROL_SECRET ||= state.ORIGIN_SECRET;
 await write('state.json', JSON.stringify(state));
 const api = async (method, resource, body) => {
   const response = await fetch(`https://api.cloudflare.com/client/v4${resource}`, {method, headers: {authorization: `Bearer ${cfg.CLOUDFLARE_API_TOKEN}`, 'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body)});

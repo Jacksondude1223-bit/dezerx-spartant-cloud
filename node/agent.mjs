@@ -17,7 +17,7 @@ import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
 
 const run = promisify(execFile);
-const cfg = process.env;
+const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRET || process.env.ORIGIN_SECRET};
 for (const key of ['NODE_REGION', 'NODE_CONTROL_SECRET', 'ORIGIN_SECRET', 'BASE_DOMAIN', 'SPARTAN_IMAGE', 'US_ORIGIN', 'DE_ORIGIN']) {
   if (!cfg[key] || cfg[key].includes('CHANGE_ME')) throw new Error(`missing_${key}`);
 }

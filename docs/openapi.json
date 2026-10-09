@@ -129,7 +129,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "requestBody": {
           "required": true,
           "content": {
@@ -216,7 +217,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "parameters": [
           {
             "name": "id",
@@ -326,7 +328,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "parameters": [
           {
             "name": "id",
@@ -583,7 +586,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "parameters": [
           {
             "name": "id",
@@ -830,7 +834,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "parameters": [
           {
             "name": "id",
@@ -1077,7 +1082,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "ROUTING_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
         "parameters": [
           {
             "name": "id",
@@ -1337,7 +1343,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "NODE_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
         "servers": [
           {
             "url": "https://node-us.yourdomain.com",
@@ -1439,7 +1446,8 @@
             "Signature": []
           }
         ],
-        "x-hmac-secret": "NODE_CONTROL_SECRET",
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
         "servers": [
           {
             "url": "https://node-us.yourdomain.com",
