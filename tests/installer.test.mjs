@@ -41,6 +41,9 @@ INSTALL
     assert.equal(readFileSync(join(dir, 'args'), 'utf8'), 'de\n--env\nnode.env\n--token\ntunnel-token\n--non-interactive\n');
     const authPath = readFileSync(join(dir, 'auth-path'), 'utf8');
     assert.throws(() => readFileSync(authPath));
+    const piped = spawnSync('bash', ['-s', '--', 'us', '--github-token-file', token], {input:source, encoding:'utf8', env:{...process.env, TEST_RESULT:dir}});
+    assert.equal(piped.status, 0, piped.stderr);
+    assert.ok(!piped.stderr.includes('unbound variable'));
     chmodSync(token, 0o644);
     const rejected = spawnSync('bash', [join(dir, 'install.sh'), 'us', '--github-token-file', token], {encoding:'utf8', env:{...process.env, TEST_RESULT:dir}});
     assert.notEqual(rejected.status, 0);

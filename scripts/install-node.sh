@@ -29,13 +29,23 @@ command -v flock >/dev/null || { apt-get update; DEBIAN_FRONTEND=noninteractive 
 exec 9>/run/spartan-install.lock
 flock -n 9 || { printf 'Another node installation is running.\n' >&2; exit 1; }
 if [ "$skip_dependencies" = false ]; then bash scripts/install-dependencies.sh; fi
+printf 'Dependencies ready. Checking Docker daemon (30-second timeout).\n'
 node -e 'if(Number(process.versions.node.split(".")[0])<22)process.exit(1)'
-docker info >/dev/null
+timeout 30s docker info >/dev/null || { printf 'Docker daemon readiness check failed or timed out. Check: sudo systemctl status docker\n' >&2; exit 1; }
 command -v cloudflared >/dev/null
 command -v mysqldump >/dev/null
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
-node scripts/setup-node.mjs "$location" "${setup_args[@]}" --output "$staging"
+printf 'Configuring %s node. Missing settings will be prompted below.\n' "$location"
+interactive_setup=true
+for setup_arg in "${setup_args[@]}"; do
+  if [ "$setup_arg" = --non-interactive ]; then interactive_setup=false; fi
+done
+if [ "$interactive_setup" = true ] && [ -t 1 ] && [ -r /dev/tty ]; then
+  node scripts/setup-node.mjs "$location" "${setup_args[@]}" --output "$staging" </dev/tty
+else
+  node scripts/setup-node.mjs "$location" "${setup_args[@]}" --output "$staging"
+fi
 image="$(cat "$staging/image")"
 printf 'Checking Spartan image availability.\n'
 docker pull "$image" || { printf 'Image pull failed. For private images run sudo docker login REGISTRY, then retry.\n' >&2; exit 1; }

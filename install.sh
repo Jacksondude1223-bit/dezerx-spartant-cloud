@@ -27,8 +27,11 @@ while [ "$#" -gt 0 ]; do
     *) printf 'Unknown installer option.\n' >&2; exit 1 ;;
   esac
 done
-script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$script_root/scripts/install-node.sh" ]; then
+script_root=""
+if [ -n "${BASH_SOURCE[0]:-}" ]; then
+  script_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+fi
+if [ -n "$script_root" ] && [ -f "$script_root/scripts/install-node.sh" ]; then
   exec bash "$script_root/scripts/install-node.sh" "${install_args[@]}"
 fi
 [ -d /run/systemd/system ] || { printf 'A systemd host is required.\n' >&2; exit 1; }
