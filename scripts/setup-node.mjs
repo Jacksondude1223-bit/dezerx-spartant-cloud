@@ -118,9 +118,10 @@ async function main(args) {
     if (field.valid(value)) return value;
     if (!rl) throw new Error(`Missing or invalid ${key}; supply --env and --token files or use an interactive terminal`);
     while (!field.valid(value)) {
-      process.stdout.write(`${field.label || key}: `);
+      const prompt = `${field.label || key}: `;
+      if (field.hidden) process.stdout.write(prompt);
       muted = Boolean(field.hidden);
-      try { value = (await rl.question('')).trim(); }
+      try { value = (await rl.question(field.hidden ? '' : prompt)).trim(); }
       finally { muted = false; if (field.hidden) process.stdout.write('\n'); }
       if (!field.valid(value)) process.stdout.write(`Invalid ${key}.\n`);
     }
