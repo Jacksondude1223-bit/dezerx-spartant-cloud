@@ -8,5 +8,7 @@
   },
   "devDependencies": {
     "wrangler": "^4.0.0"
-  }
+  },
+  "license": "UNLICENSED",
+  "author": "JimJam Software"
 }

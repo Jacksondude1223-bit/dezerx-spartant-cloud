@@ -1,1 +1,15 @@
-{"name":"spartan-cloud","private":true,"type":"module","scripts":{"test":"node --test tests/*.test.mjs","configure":"node scripts/configure.mjs","deploy":"bash scripts/deploy.sh"},"devDependencies":{"wrangler":"^4.0.0"}}
+{
+  "name": "spartan-cloud",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "configure": "node scripts/configure.mjs",
+    "deploy": "bash scripts/deploy.sh"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  },
+  "license": "UNLICENSED",
+  "author": "JimJam Software"
+}

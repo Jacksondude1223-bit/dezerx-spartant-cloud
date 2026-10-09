@@ -1,0 +1,47 @@
+JIMJAM SOFTWARE — DEZERX PROPRIETARY LICENSE
+
+Copyright (c) 2026 JimJam Software. All rights reserved.
+Developed by JimJam Software for Dezerx.
+
+1. Scope
+
+This license covers the original provisioning, routing, node management, deployment,
+and related infrastructure code in this repository (the Software). It does not
+license the Spartan application, third-party libraries, container base images,
+media, or other separately licensed components. Their respective licenses apply.
+
+2. Authorized use
+
+Dezerx may use, copy, deploy, operate, maintain, and modify the Software for its
+own services, including operating a commercial hosted SaaS service for customers.
+Dezerx may provide access to its employees and contractors as necessary to operate
+and maintain those services, provided they comply with these terms. Customers may
+access the hosted service; this does not grant them rights to the source code.
+
+3. Restrictions
+
+Except as permitted above or by a separate written agreement, the Software may
+not be redistributed, sublicensed, sold as software, published as open source,
+or used by another party to operate an independent service. Copies and permitted
+modifications must retain this license and the developer attribution.
+
+4. Ownership and agreements
+
+This license does not transfer copyright ownership. Any separate written agreement
+between JimJam Software and Dezerx concerning ownership, licensing, warranties,
+or support takes precedence where it conflicts with this license. No ownership
+is claimed over Dezerx customer data or separately licensed third-party components.
+
+5. Warranty and liability
+
+To the extent permitted by applicable law, the Software is provided "AS IS",
+without warranties of any kind, including merchantability, fitness for a particular
+purpose, or noninfringement. To the extent permitted by applicable law, the
+copyright holders are not liable for damages arising from use of the Software.
+This provision does not limit obligations expressly accepted in a separate
+written agreement or liabilities that cannot lawfully be excluded.
+
+6. Other permissions
+
+Uses outside the permissions above require prior written authorization from the
+applicable rights holder.
