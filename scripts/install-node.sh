@@ -77,6 +77,7 @@ chmod 600 /etc/spartan-cloud/laravel-env.json
 for module in node/*.mjs; do install -m 644 "$module" "/opt/spartan-cloud/$(basename "$module")"; done
 install -m 755 scripts/backup.sh /opt/spartan-cloud/backup.sh
 node /opt/spartan-cloud/backup-crypto.mjs init
+SPARTAN_INSTALL_LOCK_HELD=1 bash scripts/install-node-updates.sh
 node_path="$(command -v node)"
 cloudflared_path="$(command -v cloudflared)"
 cat > /etc/systemd/system/spartan-agent.service <<EOF
@@ -94,6 +95,7 @@ UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
+TimeoutStopSec=150
 [Install]
 WantedBy=multi-user.target
 EOF

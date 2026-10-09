@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {existsSync} from 'node:fs';
 import {createSecurity, sensitivePath} from './security.mjs';
 import {isIP} from 'node:net';
 import {applyLifecycle} from './service-lifecycle.mjs';
@@ -29,6 +30,8 @@ const port = Number(cfg.AGENT_PORT || 8788);
 const jobs = new Map();
 const security = createSecurity();
 let pendingControls = 0;
+let shuttingDown = false;
+const maintenance = () => shuttingDown || existsSync(cfg.NODE_MAINTENANCE_FILE || '/run/spartan-cloud/node-maintenance');
 const socketPath = cfg.MYSQL_SOCKET || SOCKET;
 const socketDirectory = path.dirname(socketPath);
 const validId = id => /^t-[a-f0-9]{24}$/.test(id || '');
@@ -283,6 +286,7 @@ async function control(req, res, url) {
   if (!['/control/provision', '/control/lifecycle', '/control/upgrade'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
+  if (maintenance()) return reply(res, 503, {error: 'node_update_in_progress'});
   if (pendingControls >= 50) return reply(res, 429, {error: 'control_capacity'});
   pendingControls++;
   const operation = url.pathname.slice('/control/'.length);
@@ -325,7 +329,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/__cloud_node_health' && req.method === 'GET') {
       if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET)) return reply(res, 401, {error: 'unauthorized'});
-      return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION});
+      return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION, updateSafety: 1, pendingControls, maintenance: maintenance()});
     }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
     const info = await target(req);
@@ -387,6 +391,15 @@ server.on('upgrade', async (req, socket, head) => {
 });
 server.requestTimeout = 120000;
 server.headersTimeout = 15000;
+const connections = new Set();
+server.on('connection', socket => { connections.add(socket); socket.on('close', () => connections.delete(socket)); });
+process.once('SIGTERM', async () => {
+  shuttingDown = true;
+  await Promise.allSettled([...jobs.values()]);
+  const deadline = setTimeout(() => { for (const socket of connections) socket.destroy(); process.exit(0); }, 15000);
+  deadline.unref();
+  server.close(() => { clearTimeout(deadline); process.exit(0); });
+});
 server.listen(port, '127.0.0.1');
 (async () => {
   try { for (const id of (await readdir(root)).filter(validId)) await refreshPort(id).catch(() => {}); }
