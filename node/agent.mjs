@@ -15,6 +15,7 @@ import {createRecovery} from './recovery.mjs';
 import {createMysql, newPassword, SOCKET} from './mysql.mjs';
 import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
+import {createManagement, validImage, apiError} from './management.mjs';
 
 const run = promisify(execFile);
 const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRET || process.env.ORIGIN_SECRET};
@@ -48,6 +49,7 @@ const recovery = createRecovery({config: cfg, root, docker: async args => {
   return args[0] === 'logs' ? `${result.stdout}\n${result.stderr}` : result.stdout.trim();
 }, run});
 const mysql = createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20});
+const management = createManagement({cfg, root, load, save, docker, mysql, applicationHealth});
 const stateFile = id => path.join(root, id, 'state.json');
 async function load(id) {
   if (!validId(id)) throw new Error('invalid_id');
@@ -123,7 +125,7 @@ async function provisionOnce(input, progress) {
   persistedInput.url = appUrlValue;
   const existing = await load(id);
   persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
-  persistedInput.image = cfg.SPARTAN_IMAGE;
+  persistedInput.image = existing?.image || cfg.SPARTAN_IMAGE;
   const version = input.lifecycleVersion || 0;
   if (!Number.isSafeInteger(version) || version < 0) throw new Error('invalid_input');
   if (existing?.status === 'terminated') throw new Error('service_terminated');
@@ -166,9 +168,9 @@ async function provisionOnce(input, progress) {
     const count = (await readdir(root)).filter(validId).length;
     if (count > Number(cfg.MAX_TENANTS || 100)) throw new Error('node_capacity');
     progress.stage = 'pull';
-    await docker(['pull', cfg.SPARTAN_IMAGE]);
+    await docker(['pull', persistedInput.image]);
     progress.stage = 'launch';
-    await docker(runArgs({id, role, fingerprint, envFile, directory, image: cfg.SPARTAN_IMAGE}));
+    await docker(runArgs({id, role, fingerprint, envFile, directory, image: persistedInput.image}));
     persistedInput.containerEnvHash = persistedInput.envHash;
     persistedInput.containerUrl = appUrlValue;
   } else {
@@ -220,6 +222,8 @@ async function upgrade(input) {
   if (!validId(id) || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
   const record = await load(id);
   if (!record) throw new Error('not_provisioned');
+  const targetImage = input.image === undefined ? cfg.SPARTAN_IMAGE : input.image;
+  if (!validImage(targetImage)) throw apiError('image_digest_required');
   if (record.fingerprint !== fingerprint) throw new Error('tenant_conflict');
   if (record.status === 'terminated') throw new Error('service_terminated');
   if (record.status !== 'ready') throw new Error('service_not_ready');
@@ -229,11 +233,11 @@ async function upgrade(input) {
   if (labels['spartan.fingerprint'] !== fingerprint || labels['spartan.tenant'] !== id || labels['spartan.managed'] !== 'true') throw new Error('container_conflict');
   const previousImage = inspect.Config?.Image || record.image;
   const staleEnvironment = !!record.envHash && record.envHash !== record.containerEnvHash;
-  if (previousImage === cfg.SPARTAN_IMAGE && !staleEnvironment) return {id, status: 'current', image: previousImage, role: record.role};
-  const changed = previousImage === cfg.SPARTAN_IMAGE ? 'environment' : staleEnvironment ? 'image_and_environment' : 'image';
+  if (previousImage === targetImage && !staleEnvironment) return {id, status: 'current', image: previousImage, role: record.role};
+  const changed = previousImage === targetImage ? 'environment' : staleEnvironment ? 'image_and_environment' : 'image';
   // Pull before touching the running container, so an unreachable or wrong digest fails
   // while the tenant is still serving.
-  await docker(['pull', cfg.SPARTAN_IMAGE]);
+  await docker(['pull', targetImage]);
   const directory = path.join(root, id);
   const envFile = path.join(directory, 'app.env');
   await docker(['stop', '--time', '30', container(id)]);
@@ -241,41 +245,59 @@ async function upgrade(input) {
   const create = async image => {
     await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
     const assigned = await assignedPortOf(id);
-    await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerUrl: record.url});
+    await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerUrl: record.url, status: 'provisioning'});
     return assigned;
   };
   let assignedPort;
-  try { assignedPort = await create(cfg.SPARTAN_IMAGE); }
+  try { assignedPort = await create(targetImage); }
   catch (error) {
     // The replacement never started, so its entrypoint never reached migrate and the
     // previous image is still safe to put back.
     const reason = String(error.message).slice(0, 100);
-    try { await create(previousImage); }
+    let failed;
+    try { failed = JSON.parse(await docker(['inspect', container(id)]))[0]; }
+    catch (inspectError) {
+      if (!/No such (object|container)/i.test(String(inspectError.stderr || inspectError.message))) throw new Error('upgrade_failed');
+    }
+    if (failed) {
+      const labels = failed.Config?.Labels || {};
+      if (labels['spartan.managed'] !== 'true' || labels['spartan.tenant'] !== id || labels['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
+      if (failed.State?.Running || failed.State?.StartedAt && !failed.State.StartedAt.startsWith('0001-')) {
+        await save({...record, image: targetImage, status: 'provisioning', port: Number(failed.NetworkSettings?.Ports?.['8080/tcp']?.[0]?.HostPort) || record.port});
+        return {id, status: 'provisioning', previousImage, image: targetImage, role: record.role};
+      }
+      await docker(['rm', '--force', container(id)]);
+    }
+    try {
+      const restoredPort = await create(previousImage);
+      if (await healthy(restoredPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60), record.url)) await save({...await load(id), status: 'ready'});
+    }
     catch { throw new Error('upgrade_failed'); }
     console.error(JSON.stringify({event: 'tenant_upgrade_rolled_back', id, reason}));
-    return {id, status: 'rolled_back', image: previousImage, attempted: cfg.SPARTAN_IMAGE, reason, role: record.role};
+    return {id, status: 'rolled_back', image: previousImage, attempted: targetImage, reason, role: record.role};
   }
   if (await healthy(assignedPort, Number(cfg.UPGRADE_HEALTH_ATTEMPTS || 60), record.url)) {
+    await save({...await load(id), status: 'ready'});
     await recovery.success(id).catch(() => {});
-    console.error(JSON.stringify({event: 'tenant_upgraded', id, from: previousImage, to: cfg.SPARTAN_IMAGE}));
-    return {id, status: 'upgraded', changed, previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
+    console.error(JSON.stringify({event: 'tenant_upgraded', id, from: previousImage, to: targetImage}));
+    return {id, status: 'upgraded', changed, previousImage, image: targetImage, role: record.role};
   }
   // It started, so migrations may already have applied. Rolling back now could leave the
   // schema ahead of the code, so report and let the operator decide.
-  return {id, status: 'provisioning', previousImage, image: cfg.SPARTAN_IMAGE, role: record.role};
+  return {id, status: 'provisioning', previousImage, image: targetImage, role: record.role};
 }
-async function body(req) {
+async function body(req, limit = 16384) {
   let length = 0;
   const chunks = [];
   for await (const chunk of req) {
     length += chunk.length;
-    if (length > 16384) throw new Error('too_large');
+    if (length > limit) throw new Error('too_large');
     chunks.push(chunk);
   }
   return Buffer.concat(chunks).toString('utf8');
 }
 async function control(req, res, url) {
-  const payload = await body(req);
+  const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
   const timestamp = req.headers['x-spartan-timestamp'];
   const expected = createHmac('sha256', cfg.NODE_CONTROL_SECRET).update(`${timestamp}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex');
   if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) {
@@ -283,22 +305,49 @@ async function control(req, res, url) {
     return reply(res, withinLimit ? 401 : 429, {error: withinLimit ? 'unauthorized' : 'rate_limited'});
   }
   if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
-  if (!['/control/provision', '/control/lifecycle', '/control/upgrade'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(res, 400, {error: 'invalid_input'});
+  if (url.pathname === '/control/node-health') return reply(res, 200, await management.nodeHealth());
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
+  if (!/^[a-f0-9]{64}$/.test(input.fingerprint || '')) return reply(res, 400, {error: 'invalid_fingerprint'});
   if (maintenance()) return reply(res, 503, {error: 'node_update_in_progress'});
   if (pendingControls >= 50) return reply(res, 429, {error: 'control_capacity'});
   pendingControls++;
   const operation = url.pathname.slice('/control/'.length);
   security.audit('control_authorized', {id: input.id, operation});
   const previous = jobs.get(input.id) || Promise.resolve();
-  const job = previous.catch(() => {}).then(() => url.pathname === '/control/lifecycle' ? applyLifecycle(input, {root, load, save, docker})
-    : url.pathname === '/control/upgrade' ? upgrade(input) : provision(input));
+  const job = previous.catch(() => {}).then(async () => {
+    if (url.pathname === '/control/lifecycle') return applyLifecycle(input, {root, load, save, docker});
+    if (url.pathname === '/control/upgrade') return upgrade(input);
+    if (url.pathname === '/control/instance') return management.information(input);
+    if (url.pathname === '/control/health') return management.information(input, true);
+    if (url.pathname === '/control/version') return management.version(input);
+    if (url.pathname === '/control/files') return management.files(input);
+    if (url.pathname === '/control/database/download') {await management.sqlDownload(input, res); return null;}
+    if (url.pathname === '/control/domain') {
+      const record = await load(input.id);
+      if (!record) throw apiError('not_provisioned', 404);
+      if (record.fingerprint !== input.fingerprint) throw apiError('tenant_conflict', 409);
+      if (record.status !== 'ready') throw apiError('service_not_ready', 409);
+      if (!tenantAppUrl(input.url) || !validLicenseKey(input.licenseKey)) throw apiError('invalid_domain_or_license');
+      await provision({...record, url: input.url, licenseKey: input.licenseKey});
+      return upgrade({id: record.id, fingerprint: record.fingerprint, image: record.image});
+    }
+    if (url.pathname === '/control/reload') {
+      const info = await management.information(input);
+      if (!info.running || info.status !== 'ready') throw apiError('service_not_ready', 409);
+      await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'optimize:clear', '--no-interaction']);
+      await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'octane:reload', '--no-interaction']);
+      return {id: input.id, reloaded: true};
+    }
+    return provision(input);
+  });
   jobs.set(input.id, job);
   try {
     const result = await job;
-    security.audit('control_completed', {id: input.id, operation, status: result.status});
-    reply(res, 200, result);
+    security.audit('control_completed', {id: input.id, operation, status: result?.status});
+    if (!res.headersSent) reply(res, 200, result);
   } catch (error) { security.audit('control_failed', {id: input.id, operation}); throw error; }
   finally { pendingControls--; if (jobs.get(input.id) === job) jobs.delete(input.id); }
 }
@@ -361,7 +410,7 @@ const server = http.createServer(async (req, res) => {
     const safe = text => String(text || '').replace(/IDENTIFIED BY '[^']*'/g, "IDENTIFIED BY '<redacted>'").trim().replace(/\s+/g, ' ').slice(0, 300);
     const detail = error.stderr ? safe(error.stderr) : safe(String(error.message || '').replace(/^Command failed:[\s\S]*$/, 'command failed'));
     console.error(JSON.stringify({event: 'request_failed', code: String(error.code ?? error.message ?? '').slice(0, 60), detail}));
-    if (!res.headersSent) reply(res, error instanceof SyntaxError ? 400 : 503, {error: error instanceof SyntaxError ? 'invalid_json' : 'operation_failed'});
+    if (!res.headersSent) reply(res, error.apiStatus || (error instanceof SyntaxError ? 400 : error.message === 'too_large' ? 413 : 503), {error: error.apiStatus ? error.message : error instanceof SyntaxError ? 'invalid_json' : error.message === 'too_large' ? 'body_too_large' : 'operation_failed'});
   }
 });
 server.on('upgrade', async (req, socket, head) => {

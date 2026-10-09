@@ -4,6 +4,7 @@ import {readRoute, resolveHostname} from './store.js';
 import {monitorDomains} from './domains-d1.js';
 import {sensitivePath} from './security.js';
 import {statusPage} from './status-page.js';
+import {resolveInstanceHostname} from './instance-hostnames.js';
 
 export default {
   async scheduled(event, env) {
@@ -35,7 +36,7 @@ export default {
       if (url.hostname.endsWith(`.${env.BASE_DOMAIN}`)) id = url.hostname.slice(0, -env.BASE_DOMAIN.length - 1);
       else {
         if (!env.DB) return await missing();
-        id = await resolveHostname(env, url.hostname);
+        id = await resolveInstanceHostname(env, url.hostname) || await resolveHostname(env, url.hostname);
         if (!id) return await missing();
       }
       if (!ID.test(id)) return await missing();

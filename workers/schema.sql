@@ -24,3 +24,8 @@ CREATE TABLE IF NOT EXISTS domains (
 );
 CREATE INDEX IF NOT EXISTS domains_due ON domains(nextCheckAt);
 CREATE INDEX IF NOT EXISTS domains_tenant ON domains(tenantId);
+CREATE TABLE IF NOT EXISTS instance_hostnames (
+  hostname TEXT PRIMARY KEY,
+  tenantId TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL
+);

@@ -6,7 +6,7 @@ export function createSecurity({now = Date.now, log = value => console.error(JSO
   const audit = (event, fields = {}) => {
     const record = {event, timestamp: new Date(now()).toISOString()};
     if (/^t-[a-f0-9]{24}$/.test(fields.id || '')) record.id = fields.id;
-    if (['provision', 'lifecycle', 'upgrade'].includes(fields.operation)) record.operation = fields.operation;
+    if (['provision', 'lifecycle', 'upgrade', 'node-health', 'instance', 'health', 'version', 'database/download', 'files', 'domain', 'reload'].includes(fields.operation)) record.operation = fields.operation;
     if (['ready', 'provisioning', 'suspended', 'terminated', 'current', 'upgraded', 'rolled_back'].includes(fields.status)) record.status = fields.status;
     log(record);
   };

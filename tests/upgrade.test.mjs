@@ -36,7 +36,10 @@ if (args[0] === 'stop' && fs.existsSync(file)) {
 if (args[0] === 'rm' && fs.existsSync(file)) fs.unlinkSync(file);
 if (args[0] === 'run') {
   const image = args[args.length - 1];
-  if (process.env.FAIL_RUN_IMAGE === image) { console.error('oci runtime create failed'); process.exit(1); }
+  if (process.env.FAIL_RUN_IMAGE === image) {
+    if (process.env.FAIL_RUN_CREATES === 'true') fs.writeFileSync(file, JSON.stringify([{Config: {Image: image, Labels: {'spartan.managed':'true','spartan.tenant':process.env.FAKE_TENANT,'spartan.fingerprint':process.env.FAKE_FINGERPRINT}},State:{Running:false,StartedAt:'0001-01-01T00:00:00Z'}}]));
+    console.error('oci runtime create failed'); process.exit(1);
+  }
   const ports = process.env.FAKE_PORTS.split(',');
   const used = fs.existsSync(process.env.PORT_CURSOR) ? Number(fs.readFileSync(process.env.PORT_CURSOR, 'utf8')) : 0;
   fs.writeFileSync(process.env.PORT_CURSOR, String(used + 1));
@@ -47,7 +50,7 @@ if (args[0] === 'run') {
 }
 `;
 
-async function harness({image = NEW, status = 'ready', ports, failPull, failRunImage, containerImage = OLD, container = true, envHash = 'e1', containerEnvHash = 'e1'} = {}) {
+async function harness({image = NEW, status = 'ready', ports, failPull, failRunImage, failRunCreates = false, containerImage = OLD, container = true, envHash = 'e1', containerEnvHash = 'e1'} = {}) {
   const dir = await mkdtemp(path.join(tmpdir(), 'spartan-upgrade-'));
   const servers = [];
   const listening = [];
@@ -81,7 +84,7 @@ async function harness({image = NEW, status = 'ready', ports, failPull, failRunI
   const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {
     ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: state, FAKE_PORTS: listening.join(','),
     FAKE_TENANT: id, FAKE_FINGERPRINT: fingerprint, PORT_CURSOR: path.join(dir, 'cursor'), DOCKER_CALLS: path.join(dir, 'calls'),
-    ...(failPull ? {FAIL_PULL: failPull} : {}), ...(failRunImage ? {FAIL_RUN_IMAGE: failRunImage} : {}),
+    ...(failPull ? {FAIL_PULL: failPull} : {}), ...(failRunImage ? {FAIL_RUN_CREATES: String(failRunCreates), FAIL_RUN_IMAGE: failRunImage} : {}),
     NODE_REGION: 'us', NODE_CONTROL_SECRET: secret, ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test',
     SPARTAN_IMAGE: image, US_ORIGIN: 'https://us.test', DE_ORIGIN: 'https://de.test',
     DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort), UPGRADE_HEALTH_ATTEMPTS: '3'}});
@@ -182,7 +185,7 @@ test('upgrade refuses anything it cannot safely recreate', async () => {
   try {
     assert.equal((await harnessed.upgrade({id, fingerprint: 'b'.repeat(64)})).status, 503, 'wrong fingerprint');
     assert.equal((await harnessed.upgrade({id: `t-${'9'.repeat(24)}`, fingerprint})).status, 503, 'unknown tenant');
-    assert.equal((await harnessed.upgrade({id, fingerprint: 'nope'})).status, 503, 'malformed fingerprint');
+    assert.equal((await harnessed.upgrade({id, fingerprint: 'nope'})).status, 400, 'malformed fingerprint');
     const unsigned = await fetch(`${harnessed.origin}/control/upgrade`, {method: 'POST', body: JSON.stringify({id, fingerprint})});
     assert.equal(unsigned.status, 401, 'unsigned');
     assert.equal(await harnessed.liveImage(), OLD);
@@ -245,4 +248,42 @@ test('a container already matching both its image and its environment is left al
     assert.equal(result.body.status, 'current');
     assert.equal((await harnessed.calls()).some(call => /^(pull|stop|rm|run)/.test(call)), false);
   } finally { await harnessed.stop(); }
+});
+
+
+test('per-tenant image selection updates and reverts without changing the node default', async () => {
+  const requested = `ghcr.io/dezer-x/dezerx-spartan@sha256:${'3'.repeat(64)}`;
+  const h = await harness({ports: ['live', 'live']});
+  try {
+    const result = await h.upgrade({id, fingerprint, image: requested});
+    assert.equal(result.status, 200);
+    assert.equal(result.body.image, requested);
+    assert.equal(await h.liveImage(), requested);
+    const reverted = await h.upgrade({id, fingerprint, image: OLD});
+    assert.equal(reverted.body.image, OLD);
+    assert.equal(await h.liveImage(), OLD);
+  } finally { await h.stop(); }
+});
+
+test('mutable image tags and malformed image input are rejected without stopping the container', async () => {
+  const h = await harness({ports: ['live']});
+  try {
+    for (const image of ['ghcr.io/dezer-x/dezerx-spartan:latest', 'bad; rm -rf /', null]) {
+      assert.equal((await h.upgrade({id, fingerprint, image})).status, 400);
+    }
+    assert.equal((await h.calls()).some(call => /^(pull|stop|rm|run)/.test(call)), false);
+    assert.equal(await h.liveImage(), OLD);
+  } finally { await h.stop(); }
+});
+
+
+test('a failed run that leaves a never-started container is cleaned up before rollback', async () => {
+  const h = await harness({ports: ['live'], failRunImage: NEW, failRunCreates: true});
+  try {
+    const result = await h.upgrade();
+    assert.equal(result.body.status, 'rolled_back');
+    assert.equal(await h.liveImage(), OLD);
+    assert.equal((await h.state()).status, 'ready');
+    assert.equal((await h.calls()).filter(call => call.startsWith('rm')).length, 2);
+  } finally { await h.stop(); }
 });

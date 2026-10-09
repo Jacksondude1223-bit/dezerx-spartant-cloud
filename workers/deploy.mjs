@@ -1,10 +1,11 @@
 import {execFileSync} from 'node:child_process';
-import {readdirSync} from 'node:fs';
+import {readdirSync, readFileSync, writeFileSync, unlinkSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 export const tables = {
+  instance_hostnames: {hostname: ['TEXT', 0, 1], tenantId: ['TEXT', 1, 0], status: ['TEXT', 1, 0]},
   routes: {
     id: ['TEXT', 0, 1], serviceId: ['TEXT', 1, 0], customerId: ['TEXT', 1, 0],
     primaryRegion: ['TEXT', 1, 0], status: ['TEXT', 1, 0], lifecycleVersion: ['INTEGER', 1, 0], updatedAt: ['TEXT', 0, 0]
@@ -20,7 +21,9 @@ const indexes = {domains_due: 'nextCheckAt', domains_tenant: 'tenantId'};
 export const verificationSql = [
   ...Object.keys(tables).map(table => `SELECT 'column' AS kind, '${table}' AS object, name, type, "notnull" AS required, pk, dflt_value AS defaultValue FROM pragma_table_info('${table}')`),
   ...Object.keys(indexes).map(index => `SELECT 'index' AS kind, '${index}' AS object, name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM pragma_index_info('${index}') WHERE EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = '${index}' AND tbl_name = 'domains')`),
-  `SELECT 'migration' AS kind, '' AS object, name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM d1_migrations`
+  `SELECT 'constraint' AS kind, 'instance_hostnames' AS object, c.name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM pragma_index_list('instance_hostnames') AS i JOIN pragma_index_info(i.name) AS c WHERE i."unique" = 1 AND c.name = 'tenantId' AND (SELECT COUNT(*) FROM pragma_index_info(i.name)) = 1`,
+  `SELECT 'migration' AS kind, '' AS object, name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM d1_migrations`,
+  `SELECT 'hostname' AS kind, '' AS object, hostname AS name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM instance_hostnames WHERE status = 'active'`
 ].join(' UNION ALL ');
 
 export function verifyDatabase(payload, migrations) {
@@ -37,6 +40,7 @@ export function verifyDatabase(payload, migrations) {
     if (entries.length !== 1 || entries[0].name !== column) throw new Error(`D1 index missing or invalid: ${index}`);
   }
   for (const migration of migrations) if (!rows.some(row => row.kind === 'migration' && row.name === migration)) throw new Error(`D1 migration not recorded: ${migration}`);
+  if (rows.filter(row => row.kind === 'constraint' && row.object === 'instance_hostnames' && row.name === 'tenantId').length !== 1) throw new Error('D1 instance hostname tenant uniqueness missing');
 }
 
 function wrangler(args, capture = false) {
@@ -59,7 +63,17 @@ export function deployRouting({run = wrangler, verifyOnly = false, log = console
   const payload = JSON.parse(run(['d1', 'execute', 'DB', '--remote', '--json', '--command', verificationSql, ...config], true));
   verifyDatabase(payload, migrations);
   log(`D1 verified: ${migrations.length} migration(s), required columns and indexes present.`);
-  if (!verifyOnly) run(['deploy', ...config]);
+  if (!verifyOnly) {
+    const hostnames = payload.flatMap(result => result.results).filter(row => row.kind === 'hostname').map(row => row.name);
+    if (hostnames.some(name => !/^instance-[1-9]\d{3}\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(name))) throw new Error('Invalid managed instance hostname');
+    if (!hostnames.length) return run(['deploy', ...config]);
+    const filename = path.join(directory, `.routing-deploy-${process.pid}.toml`);
+    try {
+      const text = readFileSync(path.join(directory, 'wrangler.toml'), 'utf8');
+      writeFileSync(filename, text + hostnames.map(name => `\n[[routes]]\npattern = ${JSON.stringify(name)}\ncustom_domain = true\n`).join(''), {mode: 0o600});
+      run(['deploy', '--config', filename]);
+    } finally { try {unlinkSync(filename);} catch {} }
+  }
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -1,6 +1,7 @@
 import {ID, REGIONS, json, verify} from './shared.js';
 import {readRoute, registerRoute} from './store.js';
 import {domainAction} from './domains-d1.js';
+import {allocateHostname} from './instance-hostnames.js';
 
 const statuses = new Set(['pending', 'ready', 'suspended', 'terminated']);
 const field = /^[A-Za-z0-9_-]{1,100}$/;
@@ -37,6 +38,8 @@ export async function routingControl(request, env) {
   const path = new URL(request.url).pathname;
   let input;
   try { input = body ? JSON.parse(body) : {}; } catch { return json({error: 'invalid_json'}, 400); }
+  const hostname = path.match(/^\/v1\/routing\/instances\/(t-[a-f0-9]{24})\/hostname$/);
+  if (hostname && request.method === 'POST') return allocateHostname(env, hostname[1]);
   if (path === '/v1/routing/instances' && request.method === 'POST') {
     const record = input && typeof input === 'object' && !Array.isArray(input)
       ? {...input, status: input.status === 'active' ? 'ready' : input.status} : null;

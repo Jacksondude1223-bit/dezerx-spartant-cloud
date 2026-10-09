@@ -14,6 +14,9 @@ DE_ORIGIN = "https://node-de.dezerx.cloud"
 CLOUDFLARE_ZONE_ID = "9709025acf2bfa1c3d8a513c923a5f94"
 SAAS_ZONE_DOMAIN = "dezerx.cloud"
 SAAS_CNAME_TARGET = "load.dezerx.cloud"
+INSTANCE_DOMAIN = "dezerx.cloud"
+CLOUDFLARE_ACCOUNT_ID = "fd777f8c55d9f6151ce6dae30d9f96ec"
+ROUTING_WORKER_NAME = "dezerx-spartant-cloud"
 
 
 [[migrations]]

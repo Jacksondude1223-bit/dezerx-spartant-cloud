@@ -9,7 +9,7 @@ IMAGE_BUILD_FILE=/etc/dezerx-image-build
 OCTANE_PORT=8000
 OCTANE_RPC_PORT=6001
 DEFAULT_QUEUES=critical,high,medium,default,low
-PERSISTED_DIRS=(public/meta public/images/profiles resources/views/emails)
+PERSISTED_DIRS=(public/meta public/images/profiles resources/views/emails Modules Themes)
 PERSISTED_FILES=(public/favicon.ico public/favicon.svg)
 
 log() {
@@ -154,6 +154,9 @@ drop_empty_app_variables() {
 }
 
 prepare_container() {
+    if is_root; then
+        chown --no-dereference "$APP_USER:$APP_USER" "$APP_DIR"
+    fi
     prepare_storage
 
     local path

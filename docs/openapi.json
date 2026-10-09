@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Spartan Cloud APIs",
-    "version": "1.0.0",
-    "description": "Powered by Costal Cloud. Current master-to-node provisioning and standalone routing APIs, plus optional provisioning and recovery Worker endpoints. HMAC-SHA256 signs timestamp + newline + uppercase method + newline + pathname + newline + raw body. Timestamps are milliseconds within five minutes; GET signs an empty body. Credentials are literal strings. Exact raw bytes must be sent; do not follow redirects. Header auth controls cannot calculate signatures automatically. See API.md for full integration flow and current regional-routing limitations."
+    "version": "2026-10-09",
+    "description": "Powered by Costal Cloud. Current master-to-node provisioning and standalone routing APIs, plus optional provisioning and recovery Worker endpoints. HMAC-SHA256 signs timestamp + newline + uppercase method + newline + pathname + newline + raw body. Timestamps are milliseconds within five minutes; GET signs an empty body. Credentials are literal strings. Exact raw bytes must be sent; do not follow redirects. Header auth controls cannot calculate signatures automatically. See API.md for full integration flow and current regional-routing limitations. Management APIs and instance hostname allocation are described in docs/MANAGEMENT-API.md."
   },
   "servers": [
     {
@@ -1373,7 +1373,8 @@
                   "displayName": "Customer Owner",
                   "email": "owner@customer.example",
                   "password": "Replace-this-password!"
-                }
+                },
+                "licenseKey": "SPARTANPROFESSIONAL_replace-with-the-issued-key"
               }
             }
           }
@@ -2288,7 +2289,7 @@
           "Nodes"
         ],
         "summary": "Move an existing tenant onto the node's configured image",
-        "description": "Compares the running container's image to SPARTAN_IMAGE and recreates the container when they differ. The pull happens before the container is stopped. Responds with status current, upgraded, rolled_back or provisioning. Refused for suspended or terminated tenants and when no container exists.",
+        "description": "Recreate only this tenant with the requested immutable image digest. Pull first, then stop. Preserves app key, SQL and storage; may apply migrations. See docs/MANAGEMENT-API.md.",
         "operationId": "upgradeTenant",
         "servers": [
           {
@@ -2325,6 +2326,11 @@
                   "fingerprint": {
                     "type": "string",
                     "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "image": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9.:-]*/[a-z0-9][a-z0-9._/-]*@sha256:[a-f0-9]{64}$",
+                    "description": "Optional per-tenant image digest; omit to use node default. Code rollback does not undo migrations."
                   }
                 }
               }
@@ -2386,6 +2392,1321 @@
             "description": "Refused or failed; the node log carries the reason"
           }
         }
+      }
+    },
+    "/control/node-health": {
+      "post": {
+        "operationId": "manage_node_health",
+        "summary": "Get this node readiness and host resources",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/instance": {
+      "post": {
+        "operationId": "manage_instance",
+        "summary": "Get instance URL, state and image",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/health": {
+      "post": {
+        "operationId": "manage_health",
+        "summary": "Get this container health and resource usage",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/version": {
+      "post": {
+        "operationId": "manage_version",
+        "summary": "Read versions.json from this container",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/database/download": {
+      "post": {
+        "operationId": "manage_database_download",
+        "summary": "Download this primary tenant database as SQL",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Completed SQL export from primary only; size and timeout limits apply",
+            "content": {
+              "application/sql": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/files": {
+      "post": {
+        "operationId": "manage_files",
+        "summary": "Manage only Modules, Themes and the managed environment",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint",
+                  "action",
+                  "path"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "list",
+                      "download",
+                      "upload",
+                      "mkdir",
+                      "delete",
+                      "rename"
+                    ]
+                  },
+                  "path": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "destination": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "contentBase64": {
+                    "type": "string",
+                    "format": "byte",
+                    "maxLength": 6291456
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/domain": {
+      "post": {
+        "operationId": "manage_domain",
+        "summary": "Change canonical domain with a domain-bound licence",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint",
+                  "url",
+                  "licenseKey"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "licenseKey": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/control/reload": {
+      "post": {
+        "operationId": "manage_reload",
+        "summary": "Clear Laravel caches and reload Octane workers",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "See docs/MANAGEMENT-API.md for limits, examples and operational requirements.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/routing/instances/{id}/hostname": {
+      "post": {
+        "operationId": "allocateInstanceHostname",
+        "summary": "Allocate instance-NNNN.dezerx.cloud and attach to routing Worker",
+        "servers": [
+          {
+            "url": "https://{worker}.{account}.workers.dev",
+            "description": "Default routing-only Worker",
+            "variables": {
+              "worker": {
+                "default": "dezerx-spartant-cloud"
+              },
+              "account": {
+                "default": "YOUR_ACCOUNT_SUBDOMAIN"
+              }
+            }
+          }
+        ],
+        "tags": [
+          "Routing"
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "ROUTING_CONTROL_SECRET",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^t-[a-f0-9]{24}$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Stable hostname allocated and Worker Custom Domain attached; TLS may be pending"
+          },
+          "401": {
+            "description": "Invalid signature"
+          },
+          "409": {
+            "description": "Tenant unavailable, hostname conflict or capacity exceeded"
+          },
+          "503": {
+            "description": "Configuration missing or retryable Cloudflare attachment failure"
+          }
+        },
+        "description": "Register a pending route first; requires CF_INSTANCE_API_TOKEN. Keep hostname allocations paused during Worker deployments. See docs/MANAGEMENT-API.md."
       }
     }
   },

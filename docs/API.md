@@ -18,7 +18,7 @@ The routing Worker keeps its routing records and custom-domain registrations in 
 | Optional provisioning Worker | `https://spartan-provisioning.ACCOUNT.workers.dev` | HMAC using `BILLING_WEBHOOK_SECRET` |
 | Optional recovery endpoint | Provisioning Worker base URL | HMAC using `AI_RECOVERY_SECRET` |
 
-Each tenant's application data lives in its own MariaDB database on the node, named `sp_` followed by the tenant ID's 24 hexadecimal characters, with a matching user restricted to that database. Containers reach MariaDB over its unix socket, whose directory is bind-mounted read-only; MariaDB never listens on a public interface and no root password is stored on the node. Per-tenant uploads stay on disk under `storage/`, which is the only per-tenant bind mount.
+Each tenant's application data lives in its own MariaDB database on the node, named `sp_` followed by the tenant ID's 24 hexadecimal characters, with a matching user restricted to that database. Containers reach MariaDB over its unix socket, whose directory is bind-mounted read-only; MariaDB never listens on a public interface and no root password is stored on the node. Per-tenant uploads stay on disk under `storage/`, including persistent module/theme edits.
 
 Replace every example hostname and credential. Secrets belong in server-side configuration; never send them to customer browsers. Use HTTPS for all public calls. Node tunnels forward HTTP internally to `127.0.0.1:8788`.
 
@@ -157,11 +157,13 @@ Docker reads an environment file once, when it creates a container, so rewriting
 
 ### Update Spartan
 
-Build and push a new image, then take the digest from `scripts/build-image.sh`. Set it as `SPARTAN_IMAGE` on each node and restart the agent. New services pick it up automatically; existing ones need `POST /control/upgrade` per tenant. Run them one at a time and inspect each response, and keep the previous digest so you can set it back and upgrade again to roll a bad release forward.
+Build and push a new image, then take the digest from `scripts/build-image.sh`. Pass it as `image` to `/control/upgrade` for each selected tenant, or set it as `SPARTAN_IMAGE` on each node and restart the agent to change the default. New services pick it up automatically; existing ones need `POST /control/upgrade` per tenant. Run them one at a time and inspect each response, and keep the previous digest so you can set it back and upgrade again to roll a bad release forward.
 
 ## Node API
 
-Node control bodies are limited to 16,384 bytes. Sign control requests with `ORIGIN_SECRET`. An explicitly configured `NODE_CONTROL_SECRET` takes priority for compatibility.
+Health, resource usage, versions, per-tenant image selection, SQL downloads, restricted files and domain changes are documented in [MANAGEMENT-API.md](MANAGEMENT-API.md).
+
+Node control bodies are limited to 16,384 bytes, except `/control/files`, which accepts up to 6 MiB plus 16 KiB of JSON overhead. Sign control requests with `ORIGIN_SECRET`. An explicitly configured `NODE_CONTROL_SECRET` takes priority for compatibility.
 
 ### POST /control/provision
 

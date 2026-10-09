@@ -34,6 +34,9 @@ test('node agent authenticates control requests and proxies only the correct ten
 const fs=require('node:fs');
 const args=process.argv.slice(2);
 const file=process.env.FAKE_STATE;
+if(args[0]==='info'){console.log('29.0');}
+if(args[0]==='stats'){console.log(JSON.stringify({CPUPerc:'10.5%',MemUsage:'50MiB / 512MiB',MemPerc:'9.7%',PIDs:'5'}));}
+if(args[0]==='exec' && args.includes('python3')){console.log('{"version":"1.2.3"}');}
 if(args[0]==='inspect'){if(!fs.existsSync(file)){console.error('No such object');process.exit(1);} console.log(fs.readFileSync(file,'utf8'));}
 if(args[0]==='exec' && args.some(x=>x.endsWith('/cloud-create-admin'))){ process.stdin.resume(); let value=''; process.stdin.on('data', chunk=>value+=chunk); process.stdin.on('end', ()=>{const admin=JSON.parse(value); if(admin.email!=='owner@example.test'||admin.password!=='Chosen-password!') process.exit(1); fs.appendFileSync(process.env.ADMIN_CALLS,'created\\n');}); }
 if(args[0]==='stop'||args[0]==='start'){const state=JSON.parse(fs.readFileSync(file,'utf8'));state[0].State.Running=args[0]==='start';fs.writeFileSync(file,JSON.stringify(state));}
@@ -54,6 +57,7 @@ const sql=process.argv[process.argv.length-1];
 fs.appendFileSync(process.env.MYSQL_CALLS, sql + '\\n');
 if (/^SELECT 1$/.test(sql)) console.log('1');
 `, {mode: 0o755});
+  await writeFile(path.join(bin, 'mariadb-dump'), "#!/bin/sh\nprintf 'CREATE TABLE test (id INT);\\n'\n", {mode: 0o755});
   const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_MAINTENANCE_FILE: path.join(dir,'maintenance'), NODE_REGION: 'us', NODE_CONTROL_SECRET: '', ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
   let stderr = '';
   agent.stderr.on('data', value => { stderr += value; });
@@ -88,6 +92,34 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     const response = await send();
     assert.equal(response.status, 200, stderr);
     assert.equal((await response.json()).status, 'ready');
+    const managedCall = async (pathname, value) => {
+      const text = JSON.stringify(value);
+      const stamp = String(Date.now());
+      return fetch(`${origin}${pathname}`, {method: 'POST', body: text, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', pathname, text)}});
+    };
+    for (const endpoint of ['node-health', 'instance', 'health', 'version', 'files', 'database/download', 'domain', 'reload']) {
+      assert.equal((await fetch(`${origin}/control/${endpoint}`, {method: 'POST', body: '{}'})).status, 401);
+    }
+    const nodeMetrics = await managedCall('/control/node-health', {});
+    assert.equal(nodeMetrics.status, 200);
+    assert.equal((await nodeMetrics.json()).resources.memory.totalBytes > 0, true);
+    const instanceRequest = {id, fingerprint: input.fingerprint};
+    const instanceInfo = await (await managedCall('/control/instance', instanceRequest)).json();
+    assert.equal(instanceInfo.url, input.url);
+    assert.equal('appKey' in instanceInfo, false);
+    assert.equal((await managedCall('/control/instance', {...instanceRequest, fingerprint: 'c'.repeat(64)})).status, 409);
+    const containerMetrics = await (await managedCall('/control/health', instanceRequest)).json();
+    assert.equal(containerMetrics.resources.cpuPercent, 10.5);
+    assert.equal(containerMetrics.applicationHealthy, true);
+    assert.equal((await (await managedCall('/control/version', instanceRequest)).json()).versions.version, '1.2.3');
+    const dump = await managedCall('/control/database/download', instanceRequest);
+    assert.equal(dump.status, 200);
+    assert.equal(dump.headers.get('content-type'), 'application/sql');
+    assert.equal(await dump.text(), 'CREATE TABLE test (id INT);\n');
+    assert.equal((await managedCall('/control/files', {...instanceRequest, action: 'download', path: '/etc/passwd'})).status, 400);
+    const envContent = await (await managedCall('/control/files', {...instanceRequest, action: 'download', path: '/.env'})).json();
+    assert.ok(Buffer.from(envContent.contentBase64, 'base64').toString().includes('APP_KEY='));
+
     await writeFile(path.join(dir,'maintenance'),'');
     assert.equal((await send()).status,503,'new provisioning is blocked during node updates');
     const preserved = await fetch(`${origin}/tenant/${id}/billing`,{headers:{'x-spartan-origin':secret,'x-spartan-host':`${id}.cloud.test`,'x-spartan-client-ip':'203.0.113.1'}});
