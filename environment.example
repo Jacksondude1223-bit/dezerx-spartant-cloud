@@ -4,6 +4,6 @@ CLOUDFLARE_API_TOKEN=CHANGE_ME
 BASE_DOMAIN=load.dezerx.cloud
 US_HOSTNAME=node-us.dezerx.cloud
 DE_HOSTNAME=node-de.dezerx.cloud
-SPARTAN_IMAGE=registry.example.com/spartan@sha256:CHANGE_ME
+SPARTAN_IMAGE=ghcr.io/dezer-x/dezerx-spartan@sha256:b681836d7bb0bae11e26891d3431f50ce5f35daf9a5efbf0bb45ffa10924ea9a
 ENABLE_CUSTOM_DOMAINS=true
 AI_RECOVERY_ENABLED=true
