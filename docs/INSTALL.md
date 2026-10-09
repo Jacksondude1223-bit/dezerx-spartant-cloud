@@ -27,4 +27,4 @@ For node installation, copy `node.environment.example` to a private `node.env` f
 
 `environment.example` is for the separate Cloudflare configuration command (`node scripts/configure.mjs`), not the node installer. It keeps the enabled custom hostname and Llama recovery options; default worker names, resource limits, and limits on hostnames or AI calls need no entries. The node example uses default recovery disabled. To enable an already deployed recovery service on a node, add `AI_RECOVERY_ENABLED=true`, `AI_RECOVERY_URL`, and `AI_RECOVERY_SECRET` to its input file.
 
-Both examples use `us-node.dezerx.cloud` and `de-node.dezerx.cloud`. The routing Worker's `US_ORIGIN` and `DE_ORIGIN` must use those same tunnel hostnames when deploying these settings.
+Both examples use `node-us.dezerx.cloud` and `node-de.dezerx.cloud`. The routing Worker's `US_ORIGIN` and `DE_ORIGIN` must use those same tunnel hostnames when deploying these settings.
