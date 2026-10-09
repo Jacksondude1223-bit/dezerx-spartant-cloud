@@ -1,0 +1,12 @@
+{
+  "name": "spartan-routing-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "deploy": "node deploy.mjs",
+    "db:verify": "node deploy.mjs --verify-only"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
