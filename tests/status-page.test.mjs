@@ -9,14 +9,15 @@ function request(path = '/', headers = {}, cf = {}) {
   Object.defineProperty(req, 'cf', {value: cf});
   return req;
 }
-test('Worker landing page displays the joke, current hostname and trusted visitor IP', async () => {
+test('Worker landing page displays professional branding, current hostname and trusted visitor IP', async () => {
   const response = await routing.fetch(request('/', {'cf-connecting-ip': '198.51.100.15', 'x-forwarded-for': '1.2.3.4'}, {country: 'US', colo: 'BOS'}), env);
   assert.equal(response.status, 200);
   assert.match(response.headers.get('content-type'), /text\/html/);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
   const html = await response.text();
-  for (const text of ['/__spartan_meme/meme.mp4', 'autoplay muted loop playsinline', 'free server', 'Jokes on you', '198.51.100.15', 'routing.workers.dev', 'Cloudflare edge', 'Not configured', 'BOS']) assert.ok(html.includes(text), text);
+  for (const text of ['Provisioning for the <span>next generation of hosts.</span>', 'Costal Cloud', 'Your connection overview', '198.51.100.15', 'routing.workers.dev', 'Cloudflare edge', 'Not configured', 'BOS']) assert.ok(html.includes(text), text);
   assert.equal(html.includes('1.2.3.4'), false);
+  assert.equal(/meme|<video|Jokes on you|free server/i.test(html), false);
 });
 test('status refresh recovers original IPv6 and never trusts supplied forwarding headers', async () => {
   const response = await routing.fetch(request('/__routing_status', {'cf-connecting-ip': '240.0.0.2', 'cf-connecting-ipv6': '2001:db8::15'}, {country: 'DE'}), env);
@@ -59,11 +60,11 @@ test('unmapped custom hostnames display the landing page instead of raw JSON', a
   const unmapped = {...env, DOMAINS: {getByName() { return {async fetch() { return Response.json({error: 'not_found'}, {status: 404}); }}; }}};
   const response = await routing.fetch(new Request('https://custom.provider.test/', {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.22'}}), unmapped);
   assert.equal(response.status, 404);
-  assert.equal(response.headers.get('x-spartan-page'), 'routing-status-v1');
+  assert.equal(response.headers.get('x-spartan-page'), 'routing-status-v2');
   const html = await response.text();
   assert.ok(html.includes('custom.provider.test'));
   assert.ok(html.includes('198.51.100.22'));
-  assert.ok(html.includes('Jokes on you'));
+  assert.ok(html.includes('This hostname is not connected to an active instance.'));
   const refresh = await routing.fetch(new Request('https://custom.provider.test/__routing_status', {headers: {'cf-connecting-ip': '198.51.100.22'}}), unmapped);
   assert.equal((await refresh.json()).hostname, 'custom.provider.test');
   const api = await routing.fetch(new Request('https://custom.provider.test/unknown-api', {method: 'POST', body: '{}'}), unmapped);
@@ -83,26 +84,13 @@ test('browser requests for registered customer homepages still reach their own p
   assert.equal(response.headers.has('x-spartan-page'), false);
 });
 
-test('meme video requests use the asset binding and preserve range requests', async () => {
-  let observed;
-  const assets = {async fetch(request) { observed = request; return new Response('video-bytes', {status: 206, headers: {'content-type': 'video/mp4', 'content-range': 'bytes 0-10/874215'}}); }};
-  const response = await routing.fetch(new Request('https://routing.workers.dev/__spartan_meme/meme.mp4', {headers: {range: 'bytes=0-10'}}), {...env, ASSETS: assets});
-  assert.equal(response.status, 206);
-  assert.equal(response.headers.get('content-type'), 'video/mp4');
-  assert.equal(observed.headers.get('range'), 'bytes=0-10');
-  const unmapped = {...env, ASSETS: assets, DB: d1()};
-  const custom = await routing.fetch(new Request('https://custom.provider.test/__spartan_meme/meme.mp4'), unmapped);
-  assert.equal(custom.status, 206);
-  assert.equal(observed.url, 'https://custom.provider.test/__spartan_meme/meme.mp4');
-});
-
 test('registered customer media paths continue to their own application', async t => {
   const original = globalThis.fetch;
   t.after(() => { globalThis.fetch = original; });
   const id = 't-' + 'd'.repeat(24);
   const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', ASSETS: {async fetch() { throw new Error('customer_asset_intercepted'); }}, DB: d1()};
   setRoute(configured, {id, status: 'ready'});
-  globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/__spartan_meme/meme.mp4`); return new Response('customer-media'); };
-  const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/__spartan_meme/meme.mp4`, {headers: {'cf-connecting-ip': '198.51.100.22'}}), configured);
+  globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/media/customer.mp4`); return new Response('customer-media'); };
+  const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/media/customer.mp4`, {headers: {'cf-connecting-ip': '198.51.100.22'}}), configured);
   assert.equal(await response.text(), 'customer-media');
 });

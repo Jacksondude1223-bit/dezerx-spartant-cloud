@@ -117,5 +117,5 @@ test('a Worker deployed without its database binding says so instead of blaming 
   // A visitor on a hostname the router cannot resolve still gets the landing page, which
   // is what it would show on a correctly configured deployment too.
   const unmapped = await routing.fetch(new Request('https://unknown.customer.test/', {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.5'}}), env);
-  assert.equal(unmapped.headers.get('x-spartan-page'), 'routing-status-v1');
+  assert.equal(unmapped.headers.get('x-spartan-page'), 'routing-status-v2');
 });

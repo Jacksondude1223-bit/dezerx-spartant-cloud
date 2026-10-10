@@ -30,10 +30,6 @@ deleted_classes = ["RoutingTenant", "Domains"]
 [triggers]
 crons = ["*/5 * * * *"]
 
-[assets]
-directory = "public"
-binding = "ASSETS"
-run_worker_first = true
 
 
 [[routes]]

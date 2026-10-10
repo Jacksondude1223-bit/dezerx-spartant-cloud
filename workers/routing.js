@@ -14,17 +14,13 @@ export default {
   },
   async fetch(request, env) {
     const url = new URL(request.url);
-    const memeAsset = ['GET', 'HEAD'].includes(request.method) && url.pathname === '/__spartan_meme/meme.mp4';
-    const asset = () => env.ASSETS ? env.ASSETS.fetch(request) : json({error: 'not_found'}, 404);
     const missing = async () => {
-      if (memeAsset) return asset();
       const browser = ['GET', 'HEAD'].includes(request.method) && (['/', '/__routing_status'].includes(url.pathname) || (request.headers.get('accept') || '').includes('text/html'));
       return browser ? statusPage(request, env, url.pathname === '/__routing_status', 404) : json({error: 'not_found'}, 404);
     };
     try {
       if (url.pathname === PROBE_PATH) return await domainProbe(request, env);
       const controlHost = url.hostname === env.BASE_DOMAIN || url.hostname === env.ROUTING_API_HOSTNAME || url.hostname.endsWith('.workers.dev');
-      if (controlHost && memeAsset) return await asset();
       if (controlHost && ['GET', 'HEAD'].includes(request.method) && ['/', '/__routing_status'].includes(url.pathname)) return await statusPage(request, env, url.pathname === '/__routing_status');
       if (controlHost && url.pathname.startsWith('/v1/routing/')) {
         if (url.protocol !== 'https:') return json({error: 'https_required'}, 400);

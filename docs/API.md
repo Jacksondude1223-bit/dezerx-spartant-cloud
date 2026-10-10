@@ -343,7 +343,7 @@ Two verify calls for the same hostname cannot both register it: only the caller 
 
 ### GET /__routing_status
 
-Public JSON diagnostics on the routing control hostname. No signature is required. Returns the request hostname, visitor IP, country, Cloudflare location, selected node, connection state, and check timestamp. Root `/` serves the meme/status page. This is not a tenant enumeration endpoint.
+Public JSON diagnostics on the routing control hostname. No signature is required. Returns the request hostname, visitor IP, country, Cloudflare location, selected node, connection state, and check timestamp. Root `/` serves the Spartan Cloud connection overview with live connection details. This is not a tenant enumeration endpoint.
 
 ## Routing behavior and current limits
 
