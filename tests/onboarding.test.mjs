@@ -44,7 +44,7 @@ test('domain permit rejects tampering, expiry, another tenant or another hostnam
 test('onboarding prepares without containers and verifies ownership, SSL and routing before issuing a permit', async () => {
   const env = fixture();
   const oldFetch = globalThis.fetch;
-  let proof = false, ssl = 'pending_validation', created = false, pointed = true, route = null;
+  let proof = false, ssl = 'pending_validation', created = false, pointed = true, routes = [];
   const calls = [];
   globalThis.fetch = async (url, options = {}) => {
     url = new URL(url);
@@ -56,8 +56,8 @@ test('onboarding prepares without containers and verifies ownership, SSL and rou
         : pointed ? [{type: 5, name, data: 'cloud.provider.test.'}] : []});
     }
     if (url.pathname.endsWith('/workers/routes')) {
-      if (options.method === 'POST') { route = JSON.parse(options.body); return Response.json({success: true, result: route}); }
-      return Response.json({success: true, result: route ? [route] : []});
+      if (options.method === 'POST') { const route = JSON.parse(options.body); routes.push(route); return Response.json({success: true, result: route}); }
+      return Response.json({success: true, result: routes});
     }
     if (url.pathname.endsWith('/quota')) return Response.json({success: true, result: {used: 0}});
     if (url.searchParams.has('hostname')) return Response.json({success: true, result: created ? [{id: 'cf1', hostname: name}] : []});
@@ -92,12 +92,12 @@ test('onboarding prepares without containers and verifies ownership, SSL and rou
     assert.equal(verified.readyToProvision, true);
     assert.equal(verified.required, false);
     assert.equal(await verifyDomainPermit(verified.domainVerificationToken, secret, id, name), true);
-    assert.deepEqual(route, {pattern: `${name}/*`, script: 'router'});
+    assert.deepEqual(routes, [{pattern: 'cloud.provider.test/*', script: 'router'}, {pattern: `${name}/*`, script: 'router'}]);
     assert.equal((await readRoute(env, id)).status, 'pending');
     const status = await (await onboardingAction(env, 'status', input)).json();
     assert.equal(status.readyToProvision, true);
     assert.equal(status.domainVerificationToken, undefined);
-    route.script = 'another-worker';
+    routes.find(route => route.pattern === `${name}/*`).script = 'another-worker';
     const conflict = await (await onboardingAction(env, 'verify', input)).json();
     assert.equal(conflict.readyToProvision, false);
     assert.equal(conflict.error, 'customer_route_conflict');

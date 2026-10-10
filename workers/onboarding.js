@@ -36,7 +36,8 @@ export async function onboardingAction(env, action, input, now = Date.now()) {
   const domain = await response.json();
   if (!domain.hostname) return json(domain, response.status);
   const dnsReady = domain.status === 'active' && domain.ssl?.status === 'active';
-  const routing = dnsReady ? await customerRoute(env, name, action === 'verify') : {ready: false};
+  let routing = dnsReady ? await customerRoute(env, name, action === 'verify') : {ready: false};
+  if (routing.ready) routing = await customerRoute(env, env.SAAS_CNAME_TARGET, action === 'verify');
   if (routing.error) return json({...domain, error: routing.error, required: true, readyToProvision: false, stage: 'routing_setup', dnsRecords: records(domain)}, 503);
   const ready = dnsReady && routing.ready === true;
   const permit = ready && action === 'verify' ? await issueDomainPermit(env.ORIGIN_SECRET, input.id, name, now) : null;

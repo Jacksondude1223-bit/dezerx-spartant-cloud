@@ -60,6 +60,8 @@ Example initial response fields:
       "name": "billing.customer.com",
       "target": "load.dezerx.cloud",
       "proxied": false,
+      "proxySupported": true,
+      "proxyModes": ["dns_only", "cloudflare_proxied"],
       "purpose": "routing"
     },
     {
@@ -72,7 +74,7 @@ Example initial response fields:
 }
 ```
 
-After Spartan ownership is proven, verify registers the Cloudflare custom hostname using TXT certificate validation. Subsequent responses can include `_cf-custom-hostname` ownership records and `_acme-challenge` certificate records with purposes `cloudflare_ownership` and `certificate_validation`. Keep the original records displayed. Preserve the CNAME as DNS-only. Cloudflare may complete certificate validation automatically after the CNAME points to the SaaS target, so show whatever records it actually returns.
+After Spartan ownership is proven, verify registers the Cloudflare custom hostname using TXT certificate validation. Subsequent responses can include `_cf-custom-hostname` ownership records and `_acme-challenge` certificate records with purposes `cloudflare_ownership` and `certificate_validation`. Keep the original records displayed. The routing CNAME supports DNS-only and Cloudflare proxied (orange cloud / O2O) modes. `proxied: false` is the default recommendation, not a requirement; `proxySupported: true` and `proxyModes` describe the available choices. Certificate-validation CNAMEs must remain DNS-only; TXT records are never proxied. For a proxied routing CNAME, verification checks a fresh signed response from the routing Worker through the customer hostname because public DNS hides the CNAME target. Redirects, challenges, wrong destinations and cached responses fail this check. Customer WAF/Access rules must allow HTTPS GET `/__spartan_domain_probe` without authentication, challenges or caching. Both the SaaS target route and customer hostname route must belong to this Worker; verification refuses conflicting routes. Cloudflare may complete certificate validation automatically after the CNAME points to the SaaS target, so show whatever records it actually returns.
 
 ## Module sequence
 

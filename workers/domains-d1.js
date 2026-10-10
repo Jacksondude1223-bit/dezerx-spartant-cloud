@@ -1,3 +1,5 @@
+import {reachesRouter} from './domain-probe.js';
+import {customerRoute} from './customer-routes.js';
 import {ID, json} from './shared.js';
 import {hostname, api, dns, txt} from './domain-utils.js';
 import {readRoute, readDomain, insertDomain, updateDomain, deleteDomain, countDomains, countCloudflareSlots, claimCreateAttempt, dueDomains} from './store.js';
@@ -8,7 +10,7 @@ function limit(env) {
   return value;
 }
 export function publicDomain(record, env) {
-  return {hostname: record.hostname, tenantId: record.tenantId, status: record.status, cname: {type: 'CNAME', name: record.hostname, target: env.SAAS_CNAME_TARGET, proxied: false}, ownership: {type: 'TXT', name: `_spartan-verification.${record.hostname}`, value: record.token}, certificateStatus: record.certificateStatus, cloudflareOwnership: record.cloudflareOwnership, certificateValidation: record.certificateValidation, ssl: {provider: 'cloudflare', managed: true, automaticRenewal: true, method: record.certificateMethod || 'http', status: record.certificateStatus || 'pending', checkedAt: record.checkedAt, nextCheckAt: record.nextCheckAt, lastError: record.lastError}};
+  return {hostname: record.hostname, tenantId: record.tenantId, status: record.status, cname: {type: 'CNAME', name: record.hostname, target: env.SAAS_CNAME_TARGET, proxied: false, proxySupported: true, proxyModes: ['dns_only', 'cloudflare_proxied']}, ownership: {type: 'TXT', name: `_spartan-verification.${record.hostname}`, value: record.token}, certificateStatus: record.certificateStatus, cloudflareOwnership: record.cloudflareOwnership, certificateValidation: record.certificateValidation, ssl: {provider: 'cloudflare', managed: true, automaticRenewal: true, method: record.certificateMethod || 'http', status: record.certificateStatus || 'pending', checkedAt: record.checkedAt, nextCheckAt: record.nextCheckAt, lastError: record.lastError}};
 }
 
 export async function domainAction(env, action, input, now = Date.now()) {
@@ -71,7 +73,15 @@ async function handle(env, action, input, now) {
   const remote = await api(env, 'GET', `/${record.cloudflareId}`);
   const cnames = await dns(name, 'CNAME');
   const pointed = cnames.some(answer => answer.type === 5 && answer.name.toLowerCase().replace(/\.$/, '') === name && answer.data.toLowerCase().replace(/\.$/, '') === env.SAAS_CNAME_TARGET);
-  const active = remote.hostname === name && remote.status === 'active' && remote.ssl?.status === 'active' && pointed;
+  const certificateReady = remote.hostname === name && remote.status === 'active' && remote.ssl?.status === 'active';
+  let routed = pointed;
+  if (certificateReady && !pointed) {
+    if (!['pending_certificate', 'active'].includes(record.status)) record = await updateDomain(env, name, {status: 'pending_certificate'});
+    const targetRoute = await customerRoute(env, env.SAAS_CNAME_TARGET, true);
+    if (targetRoute.error) return json({error: targetRoute.error, ...publicDomain(record, env)}, 503);
+    routed = targetRoute.ready && await reachesRouter(env, name, record.tenantId);
+  }
+  const active = certificateReady && routed;
   const value = await updateDomain(env, name, {checkedAt: new Date(now).toISOString(), nextCheckAt: now + (active ? 21600000 : 300000), lastError: undefined, certificateMethod: remote.ssl?.method || 'http', certificateStatus: remote.ssl?.status, cloudflareOwnership: remote.ownership_verification, certificateValidation: remote.ssl?.validation_records, status: active ? 'active' : 'pending_certificate'});
   return json(publicDomain(value, env));
 }

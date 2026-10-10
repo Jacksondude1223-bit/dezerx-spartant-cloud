@@ -316,7 +316,7 @@ Domain ownership is tenant-specific. A hostname held by a different tenant retur
 ### Custom domain and managed SSL workflow
 
 1. Call `reserve`. A new reservation returns HTTP 201; an existing reservation for the same tenant returns HTTP 200.
-2. Show the returned `ownership` TXT record and `cname` record to the customer. Use the returned target exactly. The returned CNAME instructions specify DNS-only (`proxied: false`) at the customer's DNS provider.
+2. Show the returned `ownership` TXT record and `cname` record to the customer. Use the returned target exactly. The routing CNAME defaults to DNS-only (`proxied: false`), but also supports Cloudflare proxied mode (`proxySupported: true`). Keep certificate-validation records DNS-only. Proxied verification requires the customer WAF/Access configuration to allow uncached HTTPS GET `/__spartan_domain_probe` without a challenge. Ownership TXT and active Cloudflare hostname/SSL are still required.
 3. Call `verify` after DNS changes propagate. Until the TXT proof is visible, the API returns HTTP 409 `ownership_not_verified` with the domain details.
 4. Publish any additional `cloudflareOwnership` or `certificateValidation` records returned by Cloudflare.
 5. Poll `status` or retry `verify` until `status` is `active` and `certificateStatus` is `active`. Background monitoring also retries verification.
@@ -329,7 +329,7 @@ A first reservation response can look like:
   "hostname": "billing.customer.com",
   "tenantId": "t-111111111111111111111111",
   "status": "pending_ownership",
-  "cname": {"type":"CNAME","name":"billing.customer.com","target":"cloud.yourdomain.com","proxied":false},
+  "cname": {"type":"CNAME","name":"billing.customer.com","target":"cloud.yourdomain.com","proxied":false,"proxySupported":true,"proxyModes":["dns_only","cloudflare_proxied"]},
   "ownership": {"type":"TXT","name":"_spartan-verification.billing.customer.com","value":"returned-verification-token"},
   "ssl": {"provider":"cloudflare","managed":true,"automaticRenewal":true,"method":"http","status":"pending","nextCheckAt":1791379200000}
 }

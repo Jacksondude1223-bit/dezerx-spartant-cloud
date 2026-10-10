@@ -1,3 +1,4 @@
+import {PROBE_PATH, domainProbe} from './domain-probe.js';
 import {ID, json, region, visitorIp} from './shared.js';
 import {routingControl} from './routing-registry.js';
 import {readRoute, resolveHostname} from './store.js';
@@ -21,6 +22,7 @@ export default {
       return browser ? statusPage(request, env, url.pathname === '/__routing_status', 404) : json({error: 'not_found'}, 404);
     };
     try {
+      if (url.pathname === PROBE_PATH) return await domainProbe(request, env);
       const controlHost = url.hostname === env.BASE_DOMAIN || url.hostname === env.ROUTING_API_HOSTNAME || url.hostname.endsWith('.workers.dev');
       if (controlHost && memeAsset) return await asset();
       if (controlHost && ['GET', 'HEAD'].includes(request.method) && ['/', '/__routing_status'].includes(url.pathname)) return await statusPage(request, env, url.pathname === '/__routing_status');
