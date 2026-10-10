@@ -5,7 +5,7 @@ import {productId, validLicenseKey} from '../node/license.mjs';
 const body = 'a'.repeat(24);
 test('product identifiers follow the licence tier prefix', () => {
   assert.equal(productId(`SPARTANSTARTER_${body}`), '1');
-  assert.equal(productId(`SPARTANCLOUDPLUS_${body}`), '1');
+  assert.equal(productId(`SPARTANCLOUDPLUS_${body}`), '9');
   assert.equal(productId(`SPARTANPROFESSIONAL_${body}`), '5');
   assert.equal(productId(`SPARTANULTIMATE_${body}`), '6');
   assert.equal(productId(`SPARTANDEV_${body}`), '6');

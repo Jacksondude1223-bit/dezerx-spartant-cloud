@@ -2,7 +2,7 @@
 // request, because the master website issues it at purchase. Nothing here mints or
 // sub-licenses anything; the node only carries the key through to the tenant's
 // environment, where the application verifies it against the vendor itself.
-const PRODUCTS = {SPARTANSTARTER_: '1', SPARTANCLOUDPLUS_: '1', SPARTANPROFESSIONAL_: '5', SPARTANULTIMATE_: '6', SPARTANDEV_: '6'};
+const PRODUCTS = {SPARTANSTARTER_: '1', SPARTANCLOUDPLUS_: '9', SPARTANPROFESSIONAL_: '5', SPARTANULTIMATE_: '6', SPARTANDEV_: '6'};
 
 export function productId(key) {
   const prefix = Object.keys(PRODUCTS).find(candidate => typeof key === 'string' && key.startsWith(candidate));
