@@ -21,7 +21,7 @@ sudo bash install.sh us --github-token-file /root/github-token --env /root/node.
 
 For public repositories, omit `--private`. If running inside an already downloaded repository, `install.sh` directly invokes the local node installer and does not download again.
 
-Private container images require separate registry authentication before installation, for example `sudo docker login ghcr.io`. Repository access does not grant access to Docker images.
+Private container images require separate registry authentication before installation, for example `sudo docker --config /etc/spartan-cloud/docker login ghcr.io`. Repository access does not grant access to Docker images.
 
 For node installation, copy `node.environment.example` to a private `node.env` file and supply `--env /absolute/path/node.env`. The five entries are the required node settings. Replace the image with your published image digest. Set the same `ORIGIN_SECRET` on both nodes, the routing Worker and the master website. This key authenticates Worker origin requests and signs master website node and routing API requests. Existing `NODE_CONTROL_SECRET` and `ROUTING_CONTROL_SECRET` overrides still take priority; remove them to enable the shared-key setup. The installer chooses the region from `us` or `de` and supplies port, storage paths, and resource defaults automatically. Tunnel tokens stay in their separate protected files or hidden prompts.
 

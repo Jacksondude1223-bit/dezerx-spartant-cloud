@@ -66,7 +66,7 @@ jobs:
           host_entry="$NODE_SSH_HOST"
           if ((10#$NODE_SSH_PORT != 22)); then host_entry="[$NODE_SSH_HOST]:$NODE_SSH_PORT"; fi
           ssh-keygen -F "$host_entry" -f "$work_dir/known_hosts" >/dev/null || { printf 'Missing pinned SSH host key for node.\n' >&2; exit 1; }
-          remote_command="sudo -n sh -c 'umask 077; docker login ghcr.io -u \"\$1\" --password-stdin && docker pull \"\$2\"' sh '$GHCR_USERNAME' '$SPARTAN_IMAGE'"
+          remote_command="sudo -n sh -c 'umask 077; install -d -m 700 /etc/spartan-cloud/docker; export DOCKER_CONFIG=/etc/spartan-cloud/docker; docker login ghcr.io -u \"\$1\" --password-stdin && docker pull \"\$2\"' sh '$GHCR_USERNAME' '$SPARTAN_IMAGE'"
           printf '%s\n' "$GHCR_TOKEN" | env -u GHCR_TOKEN ssh -F /dev/null -T \
             -i "$work_dir/key" -p "$NODE_SSH_PORT" -l "$NODE_SSH_USER" \
             -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \

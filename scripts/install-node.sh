@@ -48,7 +48,12 @@ else
 fi
 image="$(cat "$staging/image")"
 printf 'Checking Spartan image availability.\n'
-docker pull "$image" || { printf 'Image pull failed. For private images run sudo docker login REGISTRY, then retry.\n' >&2; exit 1; }
+export DOCKER_CONFIG=/etc/spartan-cloud/docker
+install -d -m 700 "$DOCKER_CONFIG"
+if [[ ! -e "$DOCKER_CONFIG/config.json" && -f /root/.docker/config.json && ! -L /root/.docker/config.json ]]; then
+  install -m 600 /root/.docker/config.json "$DOCKER_CONFIG/config.json"
+fi
+docker pull "$image" || { printf 'Image pull failed. For private images run sudo docker --config /etc/spartan-cloud/docker login REGISTRY, then retry.\n' >&2; exit 1; }
 install -d -m 700 /etc/spartan-cloud /srv/spartan-cloud /srv/spartan-backups
 # Tenant containers reach MariaDB over its unix socket only, so it never listens on a
 # public interface. Each Octane worker, queue worker and scheduler holds a connection,
@@ -88,6 +93,7 @@ Requires=docker.service
 [Service]
 Type=simple
 EnvironmentFile=/etc/spartan-cloud/node.env
+Environment=DOCKER_CONFIG=/etc/spartan-cloud/docker
 ExecStart=$node_path /opt/spartan-cloud/agent.mjs
 Restart=always
 RestartSec=5

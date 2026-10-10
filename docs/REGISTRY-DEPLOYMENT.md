@@ -1,6 +1,6 @@
 # Configure private registry access on both nodes
 
-The manually triggered `Configure node registry access` workflow sends the GHCR token over authenticated SSH to `docker login --password-stdin` on both nodes, then pulls the selected image by digest. It runs only from `main`. It does not install the node, deploy an application container, change the configured image, restart services, or run database migrations. Docker saves the registry credentials in the root user's Docker configuration or configured credential helper so future root-operated pulls work. The token never goes into tenant environments or source files.
+The manually triggered `Configure node registry access` workflow sends the GHCR token over authenticated SSH to `docker login --password-stdin` on both nodes, then pulls the selected image by digest. It runs only from `main`. It does not install the node, deploy an application container, change the configured image, restart services, or run database migrations. Docker saves credentials under `/etc/spartan-cloud/docker`, with a root-only directory. The agent uses that configuration because its `ProtectHome=true` sandbox hides `/root/.docker`. An existing installed agent needs a systemd drop-in setting `Environment=DOCKER_CONFIG=/etc/spartan-cloud/docker` and an agent restart; the code updater does not rewrite the service unit. The token never goes into tenant environments or source files.
 
 In repository Settings > Secrets and variables > Actions, add these repository secrets:
 
