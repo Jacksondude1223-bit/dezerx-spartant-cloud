@@ -15,7 +15,7 @@ test('Worker landing page displays professional branding, current hostname and t
   assert.match(response.headers.get('content-type'), /text\/html/);
   assert.equal(response.headers.get('cache-control'), 'private, no-store');
   const html = await response.text();
-  for (const text of ['Provisioning for the <span>next generation of hosts.</span>', 'Costal Cloud', 'Your connection overview', '198.51.100.15', 'routing.workers.dev', 'Cloudflare edge', 'Not configured', 'BOS']) assert.ok(html.includes(text), text);
+  for (const text of ['Provisioning for the <span>next generation of hosts.</span>', 'Costal Cloud', 'Your connection overview', '/__spartan_assets/regions.jpeg', '198.51.100.15', 'routing.workers.dev', 'Cloudflare edge', 'Not configured', 'BOS']) assert.ok(html.includes(text), text);
   assert.equal(html.includes('1.2.3.4'), false);
   assert.equal(/meme|<video|Jokes on you|free server/i.test(html), false);
 });
@@ -90,7 +90,20 @@ test('registered customer media paths continue to their own application', async 
   const id = 't-' + 'd'.repeat(24);
   const configured = {...env, US_ORIGIN: 'https://us.origin.test', ORIGIN_SECRET: 'secret', ASSETS: {async fetch() { throw new Error('customer_asset_intercepted'); }}, DB: d1()};
   setRoute(configured, {id, status: 'ready'});
-  globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/media/customer.mp4`); return new Response('customer-media'); };
-  const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/media/customer.mp4`, {headers: {'cf-connecting-ip': '198.51.100.22'}}), configured);
+  globalThis.fetch = async request => { assert.equal(request.url, `https://us.origin.test/tenant/${id}/__spartan_assets/regions.jpeg`); return new Response('customer-media'); };
+  const response = await routing.fetch(new Request(`https://${id}.cloud.example.com/__spartan_assets/regions.jpeg`, {headers: {'cf-connecting-ip': '198.51.100.22'}}), configured);
   assert.equal(await response.text(), 'customer-media');
+});
+
+
+test('regional image is served on the gateway and unmapped hosts without catching customer assets', async () => {
+  const calls = [];
+  const ASSETS = {async fetch(request) {calls.push(request.url); return new Response('image', {headers: {'content-type': 'image/jpeg'}});}};
+  for (const host of ['routing.workers.dev', 'unknown.customer.test']) {
+    const response = await routing.fetch(new Request(`https://${host}/__spartan_assets/regions.jpeg`), {...env, ASSETS, DB: d1()});
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('content-type'), 'image/jpeg');
+    assert.equal(await response.text(), 'image');
+  }
+  assert.equal(calls.length, 2);
 });

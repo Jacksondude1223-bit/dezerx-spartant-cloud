@@ -32,6 +32,11 @@ crons = ["*/5 * * * *"]
 
 
 
+[assets]
+directory = "public"
+binding = "ASSETS"
+run_worker_first = true
+
 [[routes]]
 pattern = "load.dezerx.cloud/*"
 zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
