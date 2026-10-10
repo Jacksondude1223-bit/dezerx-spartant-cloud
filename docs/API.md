@@ -492,3 +492,8 @@ The node control API limits authenticated operations to 120 per minute and 50 qu
 Security audit events are written to the node agent's journal: `control_authentication_denied`, `control_authentication_rate_limited`, `control_rate_limited`, `control_authorized`, `control_completed`, and `control_failed`. Events allow only timestamp, tenant ID, operation and known result status; request headers, bodies, customer email, passwords, licences and tokens are excluded. Authentication failure events are capped to avoid flooding the log. Inspect them with `journalctl -u spartan-agent`. Configure journal access and retention on the host. The updated nginx access log records method, response status, byte count and request ID instead of URL queries, cookies or authorization headers. Vendor application logs are separate and still require their own review.
 
 These controls reduce exposure and provide evidence of suspicious control activity. They are not a guarantee against data breaches or a substitute for security updates, tested restores and an application-level security review. The changes add no paid Cloudflare products.
+
+
+### Pre-provision domain onboarding
+
+The market module can reserve and verify domain ownership, Cloudflare SSL and an exact customer Worker route before creating any container. Signed POST endpoints are `/v1/routing/onboarding/prepare`, `/v1/routing/onboarding/status` and `/v1/routing/onboarding/verify`. The complete request fields, DNS record response, provisioning permit and lifecycle sequence are in [MARKET_MODULE_API.md](MARKET_MODULE_API.md). New installs enforce `DOMAIN_VERIFICATION_REQUIRED=true`; existing node configurations opt in explicitly.

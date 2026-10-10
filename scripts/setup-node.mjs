@@ -51,6 +51,7 @@ export function validateNodeEnvironment(env, region) {
   const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
   if (origins[0] === origins[1] || origins.some(host => host === env.BASE_DOMAIN || host.endsWith(`.${env.BASE_DOMAIN}`))) throw new Error('Origin hostnames must differ and be outside the tenant base domain');
   if (env.AGENT_PORT !== '8788' || env.DATA_ROOT !== '/srv/spartan-cloud' || env.MYSQL_SOCKET !== '/run/mysqld/mysqld.sock' || env.LARAVEL_ENV_FILE !== '/etc/spartan-cloud/laravel-env.json') throw new Error('Invalid node paths or port');
+  if (env.DOMAIN_VERIFICATION_REQUIRED !== undefined && !['true', 'false'].includes(env.DOMAIN_VERIFICATION_REQUIRED)) throw new Error('Invalid DOMAIN_VERIFICATION_REQUIRED');
   if (env.AI_RECOVERY_ENABLED === 'true') {
     let url;
     try { url = new URL(env.AI_RECOVERY_URL); } catch { throw new Error('Invalid AI_RECOVERY_URL'); }
@@ -108,7 +109,7 @@ async function main(args) {
   else text = await optionalFile('/etc/spartan-cloud/node.env') ?? await optionalFile(path.join(root, 'generated', `${region}.env`));
   const supplied = text === null ? {} : parseEnvironment(text);
   if (supplied.NODE_REGION && supplied.NODE_REGION !== region) throw new Error('Existing configuration belongs to another region');
-  const env = {NODE_REGION: region, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', MYSQL_SOCKET: '/run/mysqld/mysqld.sock', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
+  const env = {DOMAIN_VERIFICATION_REQUIRED: supplied.DOMAIN_VERIFICATION_REQUIRED ?? process.env.DOMAIN_VERIFICATION_REQUIRED ?? 'true', NODE_REGION: region, DATA_ROOT: '/srv/spartan-cloud', AGENT_PORT: '8788', MYSQL_SOCKET: '/run/mysqld/mysqld.sock', LARAVEL_ENV_FILE: '/etc/spartan-cloud/laravel-env.json'};
   let muted = false;
   const output = new Writable({write(chunk, encoding, callback) { if (!muted) process.stdout.write(chunk, encoding); callback(); }});
   const interactive = !options['--non-interactive'] && process.stdin.isTTY && process.stdout.isTTY;

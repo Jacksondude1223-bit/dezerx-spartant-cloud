@@ -13,6 +13,7 @@ import path from 'node:path';
 import {createInitialAdmin, validInitialAdmin} from './initial-admin.mjs';
 import {createRecovery} from './recovery.mjs';
 import {createMysql, newPassword, SOCKET} from './mysql.mjs';
+import {verifyDomainPermit} from './domain-permit.mjs';
 import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
@@ -22,6 +23,7 @@ const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRE
 for (const key of ['NODE_REGION', 'NODE_CONTROL_SECRET', 'ORIGIN_SECRET', 'BASE_DOMAIN', 'SPARTAN_IMAGE', 'US_ORIGIN', 'DE_ORIGIN']) {
   if (!cfg[key] || cfg[key].includes('CHANGE_ME')) throw new Error(`missing_${key}`);
 }
+if (cfg.DOMAIN_VERIFICATION_REQUIRED !== undefined && !['true', 'false'].includes(cfg.DOMAIN_VERIFICATION_REQUIRED)) throw new Error('invalid_domain_verification_setting');
 if (!['us', 'de'].includes(cfg.NODE_REGION)) throw new Error('invalid_region');
 if (!/^\S+@sha256:[a-f0-9]{64}$/.test(cfg.SPARTAN_IMAGE)) throw new Error('image_digest_required');
 if (cfg.NODE_CONTROL_SECRET.length < 32 || cfg.ORIGIN_SECRET.length < 32) throw new Error('weak_secret');
@@ -120,9 +122,12 @@ async function provisionOnce(input, progress) {
   const {id, primary, appKey, url, fingerprint, licenseKey} = input;
   const appUrlValue = tenantAppUrl(url);
   if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || !appUrlValue || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
+  if (cfg.DOMAIN_VERIFICATION_REQUIRED === 'true' || input.domainVerificationToken !== undefined) {
+    if (!await verifyDomainPermit(input.domainVerificationToken, cfg.ORIGIN_SECRET, id, new URL(appUrlValue).hostname)) throw apiError('domain_verification_required', 409);
+  }
   if (!validLicenseKey(licenseKey)) throw new Error('invalid_license_key');
   if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) throw new Error('invalid_initial_admin');
-  const {initialAdmin, ...persistedInput} = input;
+  const {initialAdmin, domainVerificationToken, ...persistedInput} = input;
   persistedInput.url = appUrlValue;
   const existing = await load(id);
   persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
@@ -212,7 +217,7 @@ async function provision(input) {
       if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
       if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
     } catch (error) {
-      if (['invalid_input', 'invalid_license_key', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
+      if (['invalid_input', 'invalid_license_key', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'domain_verification_required', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
       if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
     }
   }
@@ -332,7 +337,7 @@ async function control(req, res, url) {
       if (record.fingerprint !== input.fingerprint) throw apiError('tenant_conflict', 409);
       if (record.status !== 'ready') throw apiError('service_not_ready', 409);
       if (!tenantAppUrl(input.url) || !validLicenseKey(input.licenseKey)) throw apiError('invalid_domain_or_license');
-      await provision({...record, url: input.url, licenseKey: input.licenseKey});
+      await provision({...record, url: input.url, licenseKey: input.licenseKey, ...(input.domainVerificationToken === undefined ? {} : {domainVerificationToken: input.domainVerificationToken})});
       return upgrade({id: record.id, fingerprint: record.fingerprint, image: record.image});
     }
     if (url.pathname === '/control/reload') {

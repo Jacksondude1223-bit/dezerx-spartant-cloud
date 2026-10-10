@@ -64,16 +64,13 @@ export async function countCloudflareSlots(env) {
 }
 export async function insertDomain(env, record) {
   const result = await env.DB.prepare(
-    `INSERT INTO domains (hostname, tenantId, token, status, nextCheckAt) VALUES (?1, ?2, ?3, ?4, ?5)
+    `INSERT INTO domains (hostname, tenantId, token, status, nextCheckAt, certificateMethod) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
      ON CONFLICT(hostname) DO NOTHING`
-  ).bind(record.hostname, record.tenantId, record.token, record.status, record.nextCheckAt).run();
+  ).bind(record.hostname, record.tenantId, record.token, record.status, record.nextCheckAt, record.certificateMethod ?? null).run();
   return {record: await readDomain(env, record.hostname), created: (result.meta?.changes ?? 0) === 1};
 }
-// Single-statement lock replacing the Durable Object's serialisation: only the caller that
-// flips createAttempted from 0 to 1 may create the Cloudflare custom hostname, so two
-// concurrent verifies cannot both spend a hostname slot.
-export async function claimCreateAttempt(env, hostname) {
-  const result = await env.DB.prepare('UPDATE domains SET createAttempted = 1 WHERE hostname = ? AND createAttempted = 0').bind(hostname).run();
+export async function claimCreateAttempt(env, hostname, now = Date.now()) {
+  const result = await env.DB.prepare('UPDATE domains SET createAttempted = 1, checkedAt = ? WHERE hostname = ? AND (createAttempted = 0 OR (cloudflareId IS NULL AND (checkedAt IS NULL OR checkedAt <= ?)))').bind(new Date(now).toISOString(), hostname, new Date(now - 300000).toISOString()).run();
   return (result.meta?.changes ?? 0) === 1;
 }
 export async function updateDomain(env, hostname, patch) {

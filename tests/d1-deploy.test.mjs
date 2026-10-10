@@ -104,3 +104,20 @@ test('remote verification uses standalone PRAGMAs and rejects missing tenant uni
     assert.throws(() => readDatabase(() => JSON.stringify([{success: true, results: []}])), /invalid or unsuccessful/);
   } finally {db.close();}
 });
+
+
+test('deploy preserves active customer routes without duplicating configured test routes', () => {
+  const db = database();
+  apply(db);
+  db.exec("INSERT INTO domains (hostname, tenantId, token, status) VALUES ('billing.customer.test', 'tenant', 'proof', 'active'), ('test.costallogic.co', 'tenant', 'proof2', 'active')");
+  try {
+    deployRouting({log: () => {}, run: args => {
+      if (args[1] === 'execute') return execute(db, args);
+      if (args[0] === 'deploy') {
+        const config = readFileSync(args.at(-1), 'utf8');
+        assert.match(config, /pattern = "billing.customer.test\/\*"/);
+        assert.equal(config.match(/pattern = "test.costallogic.co\/\*"/g).length, 1);
+      }
+    }});
+  } finally {db.close();}
+});

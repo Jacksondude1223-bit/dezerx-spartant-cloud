@@ -197,3 +197,28 @@ test('domain verification returns Cloudflare status and numeric codes without ra
     assert.deepEqual(await response.json(), {error: 'domain_operation_failed', reason: 'cloudflare_403', cloudflareCodes: [10000]});
   } finally { stub.restore(); }
 });
+
+
+test('failed custom hostname creation can retry after the lease without duplicate immediate creates', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  const mock = remote(f);
+  const remoteFetch = globalThis.fetch;
+  let posts = 0;
+  globalThis.fetch = async (url, options = {}) => {
+    if (options.method === 'POST') {
+      posts++;
+      if (posts === 1) return Response.json({success: false, errors: [{code: 10000}]}, {status: 500});
+    }
+    return remoteFetch(url, options);
+  };
+  const now = Date.now();
+  try {
+    assert.equal((await domainAction(f.env, 'verify', {hostname: host, tenantId: first}, now)).status, 503);
+    await domainAction(f.env, 'verify', {hostname: host, tenantId: first}, now + 60000);
+    assert.equal(posts, 1);
+    const retry = await domainAction(f.env, 'verify', {hostname: host, tenantId: first}, now + 300001);
+    assert.equal(posts, 2);
+    assert.equal((await retry.json()).status, 'active');
+  } finally {mock.restore();}
+});

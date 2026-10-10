@@ -32,11 +32,12 @@ async function handle(env, action, input, now) {
   if (!ID.test(input.tenantId || '')) throw new Error('invalid_tenant');
   if (record && record.tenantId !== input.tenantId) return json({error: 'hostname_conflict'}, 409);
   const tenant = await readRoute(env, input.tenantId);
-  if (!tenant || tenant.status !== 'ready') return json({error: 'tenant_not_ready'}, 409);
+  if (!tenant || !['pending', 'ready'].includes(tenant.status)) return json({error: 'tenant_not_ready'}, 409);
   if (action === 'reserve') {
     if (record) return json(publicDomain(record, env));
     if (await countDomains(env) >= limit(env)) return json({error: 'custom_hostname_limit'}, 409);
-    const inserted = await insertDomain(env, {hostname: name, tenantId: input.tenantId, token: crypto.randomUUID(), status: 'pending_ownership', nextCheckAt: now + 60000});
+    const inserted = await insertDomain(env, {hostname: name, tenantId: input.tenantId, token: crypto.randomUUID(), status: 'pending_ownership', certificateMethod: input.certificateMethod === 'txt' ? 'txt' : 'http', nextCheckAt: now + 60000});
+    if (inserted.record.tenantId !== input.tenantId) return json({error: 'hostname_conflict'}, 409);
     return json(publicDomain(inserted.record, env), inserted.created ? 201 : 200);
   }
   if (!record) return json({error: 'not_found'}, 404);
@@ -61,11 +62,9 @@ async function handle(env, action, input, now) {
     else {
       const quota = await api(env, 'GET', '/quota');
       if (!Number.isSafeInteger(quota.used) || quota.used < 0) throw new Error('unknown_quota');
-      if (Math.max(quota.used, await countCloudflareSlots(env)) >= 100) return json({error: 'free_hostname_limit'}, 409);
-      // Only the caller that flips createAttempted may create the hostname. A loser returns
-      // the current record; the documented workflow already polls status after verify.
-      if (!await claimCreateAttempt(env, name)) return json(publicDomain(await readDomain(env, name), env));
-      const created = await api(env, 'POST', '', {hostname: name, ssl: {method: 'http', type: 'dv', settings: {min_tls_version: '1.2'}}});
+      if (Math.max(quota.used, (await countCloudflareSlots(env)) - (record.createAttempted ? 1 : 0)) >= 100) return json({error: 'free_hostname_limit'}, 409);
+      if (!await claimCreateAttempt(env, name, now)) return json(publicDomain(await readDomain(env, name), env));
+      const created = await api(env, 'POST', '', {hostname: name, ssl: {method: record.certificateMethod || 'http', type: 'dv', settings: {min_tls_version: '1.2'}}});
       record = await updateDomain(env, name, {cloudflareId: created.id});
     }
   }

@@ -24,6 +24,7 @@ const queries = [
   ...Object.keys(indexes).map(index => ({kind: 'index', object: index, sql: `PRAGMA index_info('${index}')`})),
   {kind: 'uniqueList', object: 'instance_hostnames', sql: "PRAGMA index_list('instance_hostnames')"},
   {kind: 'migration', object: '', sql: 'SELECT name FROM d1_migrations'},
+  {kind: 'customHostname', object: '', sql: "SELECT hostname AS name FROM domains WHERE status = 'active'"},
   {kind: 'hostname', object: '', sql: "SELECT hostname AS name FROM instance_hostnames WHERE status = 'active'"}
 ];
 export const verificationSql = queries.map(query => query.sql).join('; ');
@@ -89,11 +90,17 @@ export function deployRouting({run = wrangler, verifyOnly = false, log = console
   if (!verifyOnly) {
     const hostnames = payload.flatMap(result => result.results).filter(row => row.kind === 'hostname').map(row => row.name);
     if (hostnames.some(name => !/^instance-[1-9]\d{3}\.(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(name))) throw new Error('Invalid managed instance hostname');
-    if (!hostnames.length) return run(['deploy', ...config]);
+    const customHostnames = payload.flatMap(result => result.results).filter(row => row.kind === 'customHostname').map(row => row.name);
+    if (customHostnames.some(name => typeof name !== 'string' || !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(name))) throw new Error('Invalid customer hostname');
+    if (!hostnames.length && !customHostnames.length) return run(['deploy', ...config]);
     const filename = path.join(directory, `.routing-deploy-${process.pid}.toml`);
     try {
       const text = readFileSync(path.join(directory, 'wrangler.toml'), 'utf8');
-      writeFileSync(filename, text + hostnames.map(name => `\n[[routes]]\npattern = ${JSON.stringify(name)}\ncustom_domain = true\n`).join(''), {mode: 0o600});
+      const zone = text.match(/^CLOUDFLARE_ZONE_ID\s*=\s*"([a-f0-9]{32})"/m)?.[1];
+      if (customHostnames.length && !zone) throw new Error('SaaS zone ID missing from deployment configuration');
+      const configured = new Set([...text.matchAll(/^pattern\s*=\s*"([^"]+)"/gm)].map(match => match[1]));
+      const customRoutes = customHostnames.filter(name => !configured.has(`${name}/*`)).map(name => `\n[[routes]]\npattern = ${JSON.stringify(`${name}/*`)}\nzone_id = ${JSON.stringify(zone)}\n`).join('');
+      writeFileSync(filename, text + customRoutes + hostnames.map(name => `\n[[routes]]\npattern = ${JSON.stringify(name)}\ncustom_domain = true\n`).join(''), {mode: 0o600});
       run(['deploy', '--config', filename]);
     } finally { try {unlinkSync(filename);} catch {} }
   }
