@@ -33,7 +33,7 @@ const fields = {
   SPARTAN_IMAGE: {label: 'Published Spartan image (registry/name@sha256:digest)', valid: value => /^\S+@sha256:[a-f0-9]{64}$/.test(value || '') && !value.includes('example.com')},
   ORIGIN_SECRET: {label: 'Shared API and origin secret (same on both nodes, routing Worker and master website)', valid: secret, hidden: true},
   TENANT_CPUS: {label: 'CPU limit per tenant', default: '1', valid: value => /^(?:\d+)(?:\.\d+)?$/.test(value) && Number(value) > 0 && Number(value) <= 256},
-  TENANT_MEMORY: {label: 'Memory limit per tenant', default: '512m', valid: value => /^[1-9]\d*[mg]$/i.test(value)},
+  TENANT_MEMORY: {label: 'Memory limit per tenant', default: '2g', valid: value => /^[1-9]\d*[mg]$/i.test(value)},
   MAX_TENANTS: {label: 'Maximum tenants on this node', default: '100', valid: value => /^[1-9]\d*$/.test(value) && Number(value) <= 100000},
   AI_RECOVERY_ENABLED: {label: 'Enable existing Llama recovery service (true/false)', default: 'false', valid: value => ['true', 'false'].includes(value)},
   AI_MAX_CALLS_PER_DAY: {default: '10', valid: value => /^[1-9]\d*$/.test(value) && Number(value) <= 20}

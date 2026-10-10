@@ -81,6 +81,8 @@ COPY --chown=www-data:www-data --from=roadrunner /usr/bin/rr ./rr
 COPY runtime/vendor-entrypoint.sh /usr/local/bin/dezerx-entrypoint
 COPY runtime/healthcheck.sh /usr/local/bin/dezerx-healthcheck
 COPY runtime/sync-env.php /usr/local/lib/dezerx/sync-env.php
+COPY tests/runtime_env_test.php /tmp/runtime_env_test.php
+RUN php -l /usr/local/lib/dezerx/sync-env.php && php /tmp/runtime_env_test.php && rm /tmp/runtime_env_test.php
 
 RUN set -eux; \
     install -d -o www-data -g www-data /tmp/opcache /tmp/composer; \

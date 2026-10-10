@@ -42,6 +42,7 @@ if(args[0]==='exec' && args.some(x=>x.endsWith('/cloud-create-admin'))){ process
 if(args[0]==='stop'||args[0]==='start'){const state=JSON.parse(fs.readFileSync(file,'utf8'));state[0].State.Running=args[0]==='start';fs.writeFileSync(file,JSON.stringify(state));}
 if(args[0]==='rm'){fs.unlinkSync(file);}
 if(args[0]==='run'){
+ fs.writeFileSync(file+'.launch',JSON.stringify({args,config:process.env.DOCKER_CONFIG}));
  const label=args.find(x=>x.startsWith('spartan.fingerprint='));
  const result=[{Config:{Labels:{'spartan.fingerprint':label.split('=')[1], 'spartan.managed':'true', 'spartan.tenant':args.find(x=>x.startsWith('spartan.tenant=')).split('=')[1]}},State:{Running:true},NetworkSettings:{Ports:{'8080/tcp':[{HostPort:process.env.FAKE_PORT}]}}}];
  fs.writeFileSync(file,JSON.stringify(result));console.log('container');
@@ -58,7 +59,7 @@ fs.appendFileSync(process.env.MYSQL_CALLS, sql + '\\n');
 if (/^SELECT 1$/.test(sql)) console.log('1');
 `, {mode: 0o755});
   await writeFile(path.join(bin, 'mariadb-dump'), "#!/bin/sh\nprintf 'CREATE TABLE test (id INT);\\n'\n", {mode: 0o755});
-  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_MAINTENANCE_FILE: path.join(dir,'maintenance'), NODE_REGION: 'us', NODE_CONTROL_SECRET: '', ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
+  const agent = spawn(process.execPath, ['node/agent.mjs'], {cwd: path.resolve('.'), env: {...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_STATE: path.join(dir, 'docker.json'), FAKE_PORT: String(backendPort), ADMIN_CALLS: path.join(dir, 'admin-calls'), MYSQL_CALLS: path.join(dir, 'mysql-calls'), NODE_MAINTENANCE_FILE: path.join(dir,'maintenance'), DOCKER_CONFIG: '', TENANT_MEMORY: '', NODE_REGION: 'us', NODE_CONTROL_SECRET: '', ORIGIN_SECRET: secret, BASE_DOMAIN: 'cloud.test', SPARTAN_IMAGE: `registry.test/spartan@sha256:${'a'.repeat(64)}`, US_ORIGIN: 'https://us.origin.test', DE_ORIGIN: 'https://de.origin.test', DATA_ROOT: path.join(dir, 'data'), AGENT_PORT: String(agentPort)}});
   let stderr = '';
   agent.stderr.on('data', value => { stderr += value; });
   const origin = `http://127.0.0.1:${agentPort}`;
@@ -73,7 +74,7 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     const nodeHealth = await fetch(`${origin}/__cloud_node_health`, {headers: {'x-spartan-origin': secret}});
     assert.equal(nodeHealth.status, 200);
     assert.deepEqual(await nodeHealth.json(), {status: 'ready', region: 'us', updateSafety: 1, pendingControls: 0, maintenance: false});
-    const license = 'SPARTANULTIMATE_kkkkkkkkkkkkkkkkkkkkkkkk';
+    const license = 'SPARTANCLOUDPLUS_kkkkkkkkkkkkkkkkkkkkkkkk';
     const input = {initialAdmin: {displayName: 'Owner', email: 'owner@example.test', password: 'Chosen-password!'}, id, primary: 'us', appKey: `base64:${Buffer.alloc(32).toString('base64')}`, url: `https://${id}.cloud.test`, fingerprint: 'a'.repeat(64), licenseKey: license};
     let body = JSON.stringify(input);
     assert.equal((await fetch(`${origin}/control/provision`, {method: 'POST', body})).status, 401);
@@ -137,7 +138,11 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.match(sqlCalls, /GRANT ALL PRIVILEGES ON `sp_1{24}`\.\* TO/);
     assert.match(sqlCalls, /MAX_USER_CONNECTIONS 20/);
     assert.ok(envFile.includes(`LICENSE_KEY=${license}`), 'the tenant carries the licence the vendor issued for it');
-    assert.ok(envFile.includes('PRODUCT_ID=6'), 'the product id follows the licence tier');
+    assert.ok(envFile.includes('PRODUCT_ID=9'), 'the product id follows the licence tier');
+    const launch = JSON.parse(await readFile(path.join(dir, 'docker.json.launch'), 'utf8'));
+    assert.equal(launch.config, '/etc/spartan-cloud/docker');
+    assert.equal(launch.args[launch.args.indexOf('--memory') + 1], '2g');
+    assert.equal(launch.args[launch.args.indexOf('--memory-swap') + 1], '2g');
     assert.equal(stderr.includes(license), false, 'the licence never reaches the log');
     assert.ok(JSON.parse(state).envHash, 'the environment is fingerprinted so a renewed licence can be detected');
     assert.equal(JSON.parse(state).envHash, JSON.parse(state).containerEnvHash, 'a freshly created container matches its environment');

@@ -57,7 +57,7 @@ foreach ($defaults as $key => $value) {
     $contents = setEnvValue($contents, $key, $value);
 }
 
-foreach (array_unique(array_merge(...array_map('envKeys', $keySources))) as $key) {
+foreach (array_unique(array_merge(['PRODUCT_ID'], ...array_map('envKeys', $keySources))) as $key) {
     $value = getenv($key);
 
     if ($value !== false && $value !== '') {

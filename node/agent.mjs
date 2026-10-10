@@ -43,9 +43,10 @@ const container = id => `spartan-${id}`;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const equal = (left, right) => typeof left === 'string' && typeof right === 'string' && Buffer.byteLength(left) === Buffer.byteLength(right) && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 const reply = (res, status, payload) => { res.writeHead(status, {'content-type': 'application/json', 'cache-control': 'no-store'}); res.end(JSON.stringify(payload)); };
-const docker = async args => (await run('docker', args, {timeout: 120000, maxBuffer: 1024 * 1024})).stdout.trim();
+const dockerEnvironment = {...process.env, DOCKER_CONFIG: cfg.DOCKER_CONFIG || '/etc/spartan-cloud/docker'};
+const docker = async args => (await run('docker', args, {timeout: 120000, maxBuffer: 1024 * 1024, env: dockerEnvironment})).stdout.trim();
 const recovery = createRecovery({config: cfg, root, docker: async args => {
-  const result = await run('docker', args, {timeout: 20000, maxBuffer: 1024 * 1024});
+  const result = await run('docker', args, {timeout: 20000, maxBuffer: 1024 * 1024, env: dockerEnvironment});
   return args[0] === 'logs' ? `${result.stdout}\n${result.stderr}` : result.stdout.trim();
 }, run});
 const mysql = createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20});
@@ -88,7 +89,7 @@ async function refreshPort(id) {
   return check;
 }
 function runArgs({id, role, fingerprint, envFile, directory, image}) {
-  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '512m', '--memory-swap', cfg.TENANT_MEMORY || '512m', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, image];
+  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '2g', '--memory-swap', cfg.TENANT_MEMORY || '2g', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, image];
 }
 async function assignedPortOf(id) {
   const inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
