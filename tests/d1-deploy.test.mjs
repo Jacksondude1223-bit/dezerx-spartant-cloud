@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFileSync, readdirSync} from 'node:fs';
-import {deployRouting, verifyDatabase, verificationSql} from '../workers/deploy.mjs';
+import {deployRouting, verifyDatabase, readDatabase, verificationSql} from '../workers/deploy.mjs';
 
 const migration = '0001_routing.sql';
 function database(existing = false) {
@@ -19,7 +19,8 @@ function apply(db) {
     }
   }
 }
-const payload = db => [{success: true, results: db.prepare(verificationSql).all()}];
+const execute = (db, args) => JSON.stringify(args[args.indexOf('--command') + 1].split(';').map(sql => ({success: true, results: db.prepare(sql).all()})));
+const payload = db => readDatabase(args => execute(db, args));
 
 for (const existing of [false, true]) test(`D1 deployment migrates and verifies ${existing ? 'existing' : 'empty'} database before upload`, () => {
   const db = database(existing);
@@ -29,10 +30,10 @@ for (const existing of [false, true]) test(`D1 deployment migrates and verifies 
     const run = args => {
       calls.push(args);
       if (args[1] === 'migrations') apply(db);
-      if (args[1] === 'execute') return JSON.stringify(payload(db));
+      if (args[1] === 'execute') return execute(db, args);
     };
     deployRouting({run, log: () => {}});
-    assert.deepEqual(calls.map(args => args[0] === 'deploy' ? 'deploy' : args[1]), ['migrations', 'execute', 'deploy']);
+    assert.deepEqual(calls.map(args => args[0] === 'deploy' ? 'deploy' : args[1]), ['migrations', 'execute', 'execute', 'deploy']);
     assert.ok(calls[0].includes('--remote'));
     assert.ok(calls[1].includes('--remote'));
     deployRouting({run, log: () => {}});
@@ -50,7 +51,7 @@ test('D1 blocks deployment on migration errors and schema drift', () => {
     apply(db);
     db.exec('DROP INDEX domains_due');
     const driftCalls = [];
-    assert.throws(() => deployRouting({run: args => {driftCalls.push(args); if (args[1] === 'execute') return JSON.stringify(payload(db));}, log: () => {}}), /index missing/);
+    assert.throws(() => deployRouting({run: args => {driftCalls.push(args); if (args[1] === 'execute') return execute(db, args);}, log: () => {}}), /index missing/);
     assert.ok(!driftCalls.some(args => args[0] === 'deploy'));
   } finally {db.close();}
 });
@@ -66,8 +67,8 @@ test('verification requires every migration and valid column properties', () => 
     assert.throws(() => verifyDatabase(broken, [migration]), /routes.lifecycleVersion/);
     assert.throws(() => verifyDatabase([{success:false,results:[]}], [migration]), /unsuccessful/);
     const calls=[];
-    deployRouting({verifyOnly:true, run:args=>{calls.push(args);return JSON.stringify(payload(db));},log:()=>{}});
-    assert.equal(calls.length,1);
+    deployRouting({verifyOnly:true, run:args=>{calls.push(args);return execute(db, args);},log:()=>{}});
+    assert.equal(calls.length,2);
     assert.equal(calls[0][1],'execute');
   } finally {db.close();}
 });
@@ -79,7 +80,7 @@ test('deploy preserves allocated Worker custom domains and cleans generated conf
   let generated;
   try {
     deployRouting({log: () => {}, run: args => {
-      if (args[1] === 'execute') return JSON.stringify(payload(db));
+      if (args[1] === 'execute') return execute(db, args);
       if (args[0] === 'deploy') {
         generated = args.at(-1);
         const text = readFileSync(generated, 'utf8');
@@ -89,5 +90,17 @@ test('deploy preserves allocated Worker custom domains and cleans generated conf
     }});
     assert.ok(generated);
     assert.throws(() => readFileSync(generated), {code: 'ENOENT'});
+  } finally {db.close();}
+});
+
+
+test('remote verification uses standalone PRAGMAs and rejects missing tenant uniqueness', () => {
+  assert.doesNotMatch(verificationSql, /JOIN|pragma_\w+\(/i);
+  const db = database();
+  try {
+    apply(db);
+    db.exec("DROP TABLE instance_hostnames; CREATE TABLE instance_hostnames (hostname TEXT PRIMARY KEY, tenantId TEXT NOT NULL, status TEXT NOT NULL); CREATE UNIQUE INDEX partial_tenant ON instance_hostnames(tenantId) WHERE status = 'active'");
+    assert.throws(() => verifyDatabase(payload(db), [migration]), /tenant uniqueness missing/);
+    assert.throws(() => readDatabase(() => JSON.stringify([{success: true, results: []}])), /invalid or unsuccessful/);
   } finally {db.close();}
 });

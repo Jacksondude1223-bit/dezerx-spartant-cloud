@@ -18,13 +18,36 @@ export const tables = {
   }
 };
 const indexes = {domains_due: 'nextCheckAt', domains_tenant: 'tenantId'};
-export const verificationSql = [
-  ...Object.keys(tables).map(table => `SELECT 'column' AS kind, '${table}' AS object, name, type, "notnull" AS required, pk, dflt_value AS defaultValue FROM pragma_table_info('${table}')`),
-  ...Object.keys(indexes).map(index => `SELECT 'index' AS kind, '${index}' AS object, name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM pragma_index_info('${index}') WHERE EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'index' AND name = '${index}' AND tbl_name = 'domains')`),
-  `SELECT 'constraint' AS kind, 'instance_hostnames' AS object, c.name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM pragma_index_list('instance_hostnames') AS i JOIN pragma_index_info(i.name) AS c WHERE i."unique" = 1 AND c.name = 'tenantId' AND (SELECT COUNT(*) FROM pragma_index_info(i.name)) = 1`,
-  `SELECT 'migration' AS kind, '' AS object, name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM d1_migrations`,
-  `SELECT 'hostname' AS kind, '' AS object, hostname AS name, '' AS type, 0 AS required, 0 AS pk, NULL AS defaultValue FROM instance_hostnames WHERE status = 'active'`
-].join(' UNION ALL ');
+const queries = [
+  ...Object.keys(tables).map(table => ({kind: 'column', object: table, sql: `PRAGMA table_info('${table}')`})),
+  {kind: 'indexList', object: 'domains', sql: "PRAGMA index_list('domains')"},
+  ...Object.keys(indexes).map(index => ({kind: 'index', object: index, sql: `PRAGMA index_info('${index}')`})),
+  {kind: 'uniqueList', object: 'instance_hostnames', sql: "PRAGMA index_list('instance_hostnames')"},
+  {kind: 'migration', object: '', sql: 'SELECT name FROM d1_migrations'},
+  {kind: 'hostname', object: '', sql: "SELECT hostname AS name FROM instance_hostnames WHERE status = 'active'"}
+];
+export const verificationSql = queries.map(query => query.sql).join('; ');
+
+function parseResults(text, count) {
+  const payload = JSON.parse(text);
+  if (!Array.isArray(payload) || payload.length !== count || payload.some(result => result.success !== true || !Array.isArray(result.results))) throw new Error('D1 verification returned an invalid or unsuccessful response');
+  return payload;
+}
+
+export function readDatabase(run, config = []) {
+  const execute = sql => run(['d1', 'execute', 'DB', '--remote', '--json', '--command', sql, ...config], true);
+  const results = parseResults(execute(verificationSql), queries.length);
+  const rows = results.flatMap((result, index) => result.results.map(row => ({...row, kind: queries[index].kind, object: queries[index].object, required: row.notnull, defaultValue: row.dflt_value})));
+  const domainIndexes = rows.filter(row => row.kind === 'indexList' && Number(row.partial) === 0).map(row => row.name);
+  const normalized = rows.filter(row => row.kind !== 'index' || domainIndexes.includes(row.object));
+  const uniqueIndexes = rows.filter(row => row.kind === 'uniqueList' && Number(row.unique) === 1 && Number(row.partial) === 0);
+  if (uniqueIndexes.length) {
+    const sql = uniqueIndexes.map(row => `PRAGMA index_info('${row.name.replaceAll("'", "''")}')`).join('; ');
+    const details = parseResults(execute(sql), uniqueIndexes.length);
+    if (details.some(result => result.results.length === 1 && result.results[0].name === 'tenantId')) normalized.push({kind: 'constraint', object: 'instance_hostnames', name: 'tenantId'});
+  }
+  return [{success: true, results: normalized}];
+}
 
 export function verifyDatabase(payload, migrations) {
   if (!Array.isArray(payload) || payload.length !== 1 || payload.some(result => result.success !== true || !Array.isArray(result.results))) throw new Error('D1 verification returned an invalid or unsuccessful response');
@@ -60,7 +83,7 @@ export function deployRouting({run = wrangler, verifyOnly = false, log = console
     run(['d1', 'migrations', 'apply', 'DB', '--remote', ...config]);
   }
   log('Verifying remote D1 schema and migration history.');
-  const payload = JSON.parse(run(['d1', 'execute', 'DB', '--remote', '--json', '--command', verificationSql, ...config], true));
+  const payload = readDatabase(run, config);
   verifyDatabase(payload, migrations);
   log(`D1 verified: ${migrations.length} migration(s), required columns and indexes present.`);
   if (!verifyOnly) {
@@ -81,5 +104,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     const args = process.argv.slice(2);
     if (args.length && !(args.length === 1 && args[0] === '--verify-only')) throw new Error('Use deploy.mjs [--verify-only]');
     deployRouting({verifyOnly: args[0] === '--verify-only'});
-  } catch (error) { console.error(error.message); process.exitCode = 1; }
+  } catch (error) {
+    if (error.stdout) console.error(String(error.stdout).trim());
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }
