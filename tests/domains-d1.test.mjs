@@ -170,3 +170,30 @@ test('reserved and malformed hostnames are refused', async () => {
     assert.equal((await f.call('reserve', first, name)).status, 400, name);
   }
 });
+
+test('domain verification reports missing configuration without disclosing secrets', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  delete f.env.CF_SAAS_API_TOKEN;
+  const stub = remote(f);
+  try {
+    const response = await f.call('verify');
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {error: 'domain_operation_failed', reason: 'saas_configuration_required', missingSettings: ['CF_SAAS_API_TOKEN']});
+  } finally { stub.restore(); }
+});
+
+test('domain verification returns Cloudflare status and numeric codes without raw upstream messages', async () => {
+  const f = fixture();
+  await f.call('reserve');
+  const stub = remote(f);
+  const dnsFetch = globalThis.fetch;
+  globalThis.fetch = (url, options) => new URL(url).hostname === 'api.cloudflare.com'
+    ? Promise.resolve(Response.json({success: false, errors: [{code: 10000, message: 'secret-upstream-detail'}]}, {status: 403}))
+    : dnsFetch(url, options);
+  try {
+    const response = await f.call('verify');
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), {error: 'domain_operation_failed', reason: 'cloudflare_403', cloudflareCodes: [10000]});
+  } finally { stub.restore(); }
+});

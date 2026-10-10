@@ -15,7 +15,10 @@ export async function domainAction(env, action, input, now = Date.now()) {
   try { return await handle(env, action, input, now); }
   catch (error) {
     const client = ['invalid_hostname', 'reserved_hostname', 'invalid_tenant'].includes(error.message);
-    return json({error: client ? error.message : 'domain_operation_failed'}, client ? 400 : 503);
+    const reason = /^(saas_configuration_required|dns_unavailable|unknown_quota|invalid_hostname_limit|cloudflare_\d{3})$/.test(error.message) ? error.message : 'internal_failure';
+    const missingSettings = reason === 'saas_configuration_required' ? ['CF_SAAS_API_TOKEN', 'CLOUDFLARE_ZONE_ID'].filter(key => !env[key]) : undefined;
+    const cloudflareCodes = Array.isArray(error.cloudflareCodes) ? error.cloudflareCodes.filter(Number.isSafeInteger).slice(0, 5) : undefined;
+    return json(client ? {error: error.message} : {error: 'domain_operation_failed', reason, missingSettings, cloudflareCodes}, client ? 400 : 503);
   }
 }
 

@@ -11,7 +11,11 @@ export async function api(env, method, suffix, body) {
   if (!env.CF_SAAS_API_TOKEN || !env.CLOUDFLARE_ZONE_ID) throw new Error('saas_configuration_required');
   const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${env.CLOUDFLARE_ZONE_ID}/custom_hostnames${suffix}`, {method, headers: {authorization: `Bearer ${env.CF_SAAS_API_TOKEN}`, 'content-type': 'application/json'}, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(8000)});
   const result = await response.json();
-  if (!response.ok || !result.success) throw new Error(`cloudflare_${response.status}`);
+  if (!response.ok || !result.success) {
+    const error = new Error(`cloudflare_${response.status}`);
+    error.cloudflareCodes = (Array.isArray(result.errors) ? result.errors : []).map(item => item?.code).filter(Number.isSafeInteger).slice(0, 5);
+    throw error;
+  }
   return result.result;
 }
 export async function dns(name, type) {
