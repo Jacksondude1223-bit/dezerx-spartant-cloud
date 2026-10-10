@@ -44,6 +44,10 @@ zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
 pattern = "*.load.dezerx.cloud/*"
 zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
 
+[[routes]]
+pattern = "test.costallogic.co/*"
+zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "spartan-routing-load-dezerx-cloud"
