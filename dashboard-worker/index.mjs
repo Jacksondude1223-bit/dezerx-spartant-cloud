@@ -32,9 +32,7 @@ export function createWorker(fetchImpl = fetch) {
             const db = store(env), authEnv = await credentials(env, db);
             if (!authEnv || !await session(request, authEnv, db)) throw new ApiError(401, 'not_signed_in');
           }
-          const assetUrl = new URL(request.url);
-          if (url.pathname === '/setup') assetUrl.pathname = '/setup.html';
-          const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
+          const asset = await env.ASSETS.fetch(request);
           const headers = new Headers(asset.headers);
           for (const [key, value] of Object.entries(SECURITY)) headers.set(key, value);
           if (['/', '/index.html', '/app.js', '/styles.css', '/setup', '/setup.html', '/setup.js'].includes(url.pathname)) headers.set('cache-control', 'no-store');

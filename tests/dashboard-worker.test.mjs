@@ -51,6 +51,31 @@ async function browser(worker, env, extra = {}) {
   return {call, cookie, csrf};
 }
 
+test('setup assets preserve canonical paths without redirecting back to the requested URL', async () => {
+  const urls = [], worker = createWorker();
+  const env = {ASSETS: {fetch: async request => {
+    urls.push(request.url);
+    const url = new URL(request.url);
+    if (url.pathname === '/setup.html' || url.pathname === '/setup/') return new Response(null, {status: 307, headers: {location: '/setup' + url.search}});
+    return new Response(request.method === 'HEAD' ? null : '<html>Setup</html>', {headers: {'content-type': 'text/html'}});
+  }}};
+  for (const method of ['GET', 'HEAD']) {
+    const url = 'https://dashboard.example.test/setup?source=login';
+    const result = await worker.fetch(new Request(url, {method}), env);
+    assert.equal(result.status, 200);
+    assert.equal(result.headers.get('location'), null);
+    assert.equal(urls.at(-1), url);
+    assert.equal(result.headers.get('cache-control'), 'no-store');
+    assert.match(result.headers.get('content-security-policy'), /frame-ancestors 'none'/);
+  }
+  for (const path of ['/setup.html', '/setup/']) {
+    const redirect = await worker.fetch(new Request('https://dashboard.example.test' + path), env);
+    assert.equal(redirect.status, 307);
+    const final = await worker.fetch(new Request(new URL(redirect.headers.get('location'), 'https://dashboard.example.test')), env);
+    assert.equal(final.status, 200);
+  }
+});
+
 test('Worker login persists a hashed session in separate D1 across Worker instances and enforces CSRF', async () => {
   const {db, sqlite} = database(), env = environment(db), worker = createWorker();
   try {
@@ -243,7 +268,7 @@ test('dashboard D1 setup creates or reuses only the separately named database', 
   const {join} = await import('node:path');
   const root = mkdtempSync(join(tmpdir(), 'dashboard-setup-'));
   const configFile = join(root, 'wrangler.toml');
-  const config = readFileSync(new URL('../dashboard-worker/wrangler.toml', import.meta.url), 'utf8');
+  const config = readFileSync(new URL('../dashboard-worker/wrangler.toml', import.meta.url), 'utf8').replace(/database_id\s*=\s*"[^"]+"/, 'database_id = "CREATE_SEPARATE_DASHBOARD_DATABASE"');
   const id = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   try {
     writeFileSync(configFile, config);
