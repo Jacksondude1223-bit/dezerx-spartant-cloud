@@ -8,7 +8,8 @@ It talks to the node agents through a separate **admin API** (`/admin/*`), signe
 
 - **A separate secret.** `ORIGIN_SECRET` is shared with the routing Worker and the master website. The admin API can run commands and change any file in a tenant container, so it accepts only `ADMIN_API_SECRET`. That value lives on the nodes and in the dashboard and nowhere else. If it is missing, shorter than 32 characters, or equal to the origin or control secret, the agent logs `admin_api_disabled` and answers `/admin/*` with 404. Tenant traffic and `/control/*` keep working either way.
 - **The browser never holds a node secret.** The dashboard server signs every node call. The browser gets an `HttpOnly`, `SameSite=Strict` session cookie, and every change also needs a CSRF token. Sign-in is rate limited (10 attempts per IP per 15 minutes, 60 per minute overall), and passwords are stored as scrypt hashes.
-- **Loopback only.** The dashboard listens on `127.0.0.1:8790`. Reach it through an SSH tunnel, or through a Cloudflare Tunnel hostname protected by Cloudflare Access.
+- **Where it is served.** The dashboard process listens only on `127.0.0.1:8790`. When `DASHBOARD_PROXY_PORT` is set in `node.env`, the agent also serves it at `https://<node hostname>/panel/` through the node's existing tunnel route, and redirects the bare hostname (`/`) there. Only `/panel` is forwarded; `/control`, `/admin`, `/tenant` and `/__cloud_node_health` behave exactly as before. The session cookie is limited to `Path=/panel`, and node credentials are never forwarded to the dashboard.
+- **Two-factor sign-in.** With `DASHBOARD_TOTP_SECRET` set, sign-in also needs a 6-digit code from an authenticator app (RFC 6238). Each code is accepted once. The installer turns this on by default when the dashboard is served publicly.
 - **Kernel-enforced permissions.** File and console operations run inside the tenant container as `www-data` by default. You can choose `root` per action. Root inside a container can use the bind-mounted MariaDB socket as the database root user, which reaches every tenant database on the node, so prefer `www-data`.
 - **Audit trail.** The agent logs each admin call (`admin_authorized`, with tenant, operation, run-as user and file action, but never paths or commands). The dashboard logs sign-ins and each action, including the first 200 characters of console commands, to its journal and to the Activity page.
 - **Billing state stays with the master website.** The dashboard does not suspend, terminate or resume tenants. If it did, lifecycle versions would conflict with the master website and the routing Worker would not learn the new state. "Stop" is a Docker-level stop for maintenance only.
@@ -36,13 +37,18 @@ Containers are recreated on upgrade. Only `/var/www/html/storage` (and the `Modu
    printf 'ADMIN_API_SECRET="%s"\n' "$s" | sudo tee -a /etc/spartan-cloud/node.env >/dev/null; unset s
    sudo systemctl restart spartan-agent
    ```
-4. **Open it.** Either:
-   - SSH tunnel: `ssh -L 8790:127.0.0.1:8790 root@your-node`, then visit `http://localhost:8790`. If Safari loops back to the sign-in page over plain `http://localhost`, add `DASHBOARD_SECURE_COOKIE=false` to `dashboard.env` and restart the service.
-   - Cloudflare: add a published application route on that node's tunnel, for example `panel.yourdomain.com` to HTTP `127.0.0.1:8790`, and protect it with a Cloudflare Access application. Do **not** put Access or challenges on the `node-us` and `node-de` hostnames.
+   During a fresh install it also asks:
+   - **Serve the dashboard at `https://node-us.example.com/panel/`?** Answer yes to open it on the node's own hostname. Nothing changes in Cloudflare: the existing published route already sends that hostname to the agent.
+   - **Require an authenticator-app code?** Answer yes. It shows a QR code (and the key for manual entry) and saves the setting only after you type a valid code.
+4. **Open it** at `https://node-us.example.com/` (it redirects to `/panel/`). To have it on both hostnames, run the installer on the other node too; each dashboard has its own sign-in.
+   - Optional extra lock: in Cloudflare Zero Trust, create an Access application for the path `node-us.example.com/panel` only. Do **not** protect or challenge the whole `node-us`/`node-de` hostname, because the routing Worker and master website call `/control`, `/admin` and `/tenant` on it.
+   - Without publishing, use an SSH tunnel: `ssh -L 8790:127.0.0.1:8790 root@your-node`, then visit `http://localhost:8790`. If Safari loops back to the sign-in page over plain `http://localhost`, add `DASHBOARD_SECURE_COOKIE=false` to `dashboard.env` and restart the service.
 
-Other commands: `sudo bash scripts/install-dashboard.sh password` changes the password, and re-running the installer updates the dashboard code while keeping `dashboard.env`. Logs: `journalctl -u spartan-dashboard -f`.
+Other commands: `install-dashboard.sh public` serves an existing install at `/panel/`, `totp` sets up or replaces the authenticator code, and `password` changes the password. Re-running the installer updates the dashboard code while keeping `dashboard.env`. Logs: `journalctl -u spartan-dashboard -f`.
 
-`dashboard.env` keys: `ADMIN_API_SECRET`, `DASHBOARD_USER`, `DASHBOARD_PASSWORD_HASH` (create with `printf '%s\n' 'password' | node dashboard/server.mjs hash-password`), `US_ORIGIN`, `DE_ORIGIN` (https, or `http://127.0.0.1:8788` for the local agent), optional `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_SESSION_HOURS` (default 12), `DASHBOARD_SECURE_COOKIE`, `DASHBOARD_LABEL`.
+`node.env` additions: `ADMIN_API_SECRET` and, to publish the dashboard, `DASHBOARD_PROXY_PORT="8790"`. Both survive re-running the node installer.
+
+`dashboard.env` keys: `ADMIN_API_SECRET`, `DASHBOARD_USER`, `DASHBOARD_PASSWORD_HASH` (create with `printf '%s\n' 'password' | node dashboard/server.mjs hash-password`), `US_ORIGIN`, `DE_ORIGIN` (https, or `http://127.0.0.1:8788` for the local agent), optional `DASHBOARD_BASE_PATH` (`/panel` when served by the agent), `DASHBOARD_TOTP_SECRET` (create with `node dashboard/server.mjs totp-secret`), `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_SESSION_HOURS` (default 12), `DASHBOARD_SECURE_COOKIE`, `DASHBOARD_LABEL`.
 
 To look at the design without a node, run `node dashboard/demo/build-preview.mjs preview.html` and open the file. It uses invented data.
 

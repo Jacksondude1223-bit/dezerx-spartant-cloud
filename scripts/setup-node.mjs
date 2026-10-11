@@ -49,6 +49,7 @@ export function validateNodeEnvironment(env, region) {
   for (const [key, field] of Object.entries(fields)) if (!field.valid(env[key] || '')) throw new Error(`Invalid ${key}`);
   if (env.NODE_CONTROL_SECRET !== undefined && !secret(env.NODE_CONTROL_SECRET)) throw new Error('Invalid NODE_CONTROL_SECRET');
   if (env.ADMIN_API_SECRET !== undefined && (!secret(env.ADMIN_API_SECRET) || [env.ORIGIN_SECRET, env.NODE_CONTROL_SECRET].includes(env.ADMIN_API_SECRET))) throw new Error('Invalid ADMIN_API_SECRET; it must be at least 32 characters and differ from ORIGIN_SECRET');
+  if (env.DASHBOARD_PROXY_PORT !== undefined && (!/^\d{4,5}$/.test(env.DASHBOARD_PROXY_PORT) || Number(env.DASHBOARD_PROXY_PORT) > 65535 || ['8788', '8789'].includes(env.DASHBOARD_PROXY_PORT))) throw new Error('Invalid DASHBOARD_PROXY_PORT');
   const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
   if (origins[0] === origins[1] || origins.some(host => host === env.BASE_DOMAIN || host.endsWith(`.${env.BASE_DOMAIN}`))) throw new Error('Origin hostnames must differ and be outside the tenant base domain');
   if (env.AGENT_PORT !== '8788' || env.DATA_ROOT !== '/srv/spartan-cloud' || env.MYSQL_SOCKET !== '/run/mysqld/mysqld.sock' || env.LARAVEL_ENV_FILE !== '/etc/spartan-cloud/laravel-env.json') throw new Error('Invalid node paths or port');
@@ -135,9 +136,11 @@ async function main(args) {
     if (legacyControlSecret !== undefined && legacyControlSecret !== '') env.NODE_CONTROL_SECRET = legacyControlSecret;
     // Store bare origins: a trailing slash turned forwarded paths into "//tenant/...".
     for (const key of ['US_ORIGIN', 'DE_ORIGIN']) env[key] = new URL(env[key]).origin;
-    // Re-running the installer must not silently drop the operator dashboard secret.
-    const adminSecret = supplied.ADMIN_API_SECRET ?? process.env.ADMIN_API_SECRET;
-    if (adminSecret !== undefined && adminSecret !== '') env.ADMIN_API_SECRET = adminSecret;
+    // Re-running the installer must not silently drop the operator dashboard settings.
+    for (const key of ['ADMIN_API_SECRET', 'DASHBOARD_PROXY_PORT']) {
+      const value = supplied[key] ?? process.env[key];
+      if (value !== undefined && value !== '') env[key] = value;
+    }
     if (env.AI_RECOVERY_ENABLED === 'true') {
       env.AI_RECOVERY_URL = await ask('AI_RECOVERY_URL', {label: 'Existing recovery Worker URL (https://worker.workers.dev/v1/recovery)', valid: value => { try { const url = new URL(value); return url.protocol === 'https:' && url.pathname === '/v1/recovery'; } catch { return false; } }});
       env.AI_RECOVERY_SECRET = await ask('AI_RECOVERY_SECRET', {label: 'Shared recovery Worker secret', valid: secret, hidden: true});

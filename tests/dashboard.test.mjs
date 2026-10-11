@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import {createHmac} from 'node:crypto';
-import {createDashboard, hashPassword, verifyPassword, loadConfig} from '../dashboard/server.mjs';
+import {createDashboard, hashPassword, verifyPassword, loadConfig, base32Encode, base32Decode, totpCode, checkTotp} from '../dashboard/server.mjs';
 
 const secret = 's'.repeat(64);
 const id = 't-' + 'c'.repeat(24);
@@ -58,7 +58,7 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     assert.equal(page.headers.get('x-frame-options'), 'DENY');
     assert.equal((await fetch(`${origin}/demo.js`)).status, 404, 'the demo data layer is never served');
     assert.equal((await fetch(`${origin}/api/overview`)).status, 401);
-    assert.deepEqual(await (await fetch(`${origin}/api/session`)).json(), {authenticated: false, label: 'Spartan Cloud'});
+    assert.deepEqual(await (await fetch(`${origin}/api/session`)).json(), {authenticated: false, label: 'Spartan Cloud', twoFactor: false});
     const post = (path, body, headers = {}) => fetch(origin + path, {method: 'POST', headers: {'content-type': 'application/json', ...headers}, body: JSON.stringify(body)});
     assert.equal((await post('/api/login', {username: 'admin', password: 'wrong password!!'})).status, 401);
     const login = await post('/api/login', {username: 'admin', password: 'a long admin password'});
@@ -110,4 +110,54 @@ test('dashboard reports an unreachable node without failing the whole overview',
     assert.equal(overview.nodes[0].ok, false);
     assert.equal(overview.nodes[0].error, 'node_unreachable');
   } finally { dashboard.close(); }
+});
+
+test('authenticator codes match the RFC 6238 test vectors and are single use', () => {
+  const secret = base32Encode(Buffer.from('12345678901234567890'));
+  assert.equal(secret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  assert.equal(base32Decode(secret).toString(), '12345678901234567890');
+  assert.equal(totpCode(secret, Math.floor(59 / 30)), '287082');
+  assert.equal(totpCode(secret, Math.floor(1111111109 / 30)), '081804');
+  assert.equal(totpCode(secret, Math.floor(1234567890 / 30)), '005924');
+  const at = 1234567890 * 1000;
+  const counter = checkTotp(secret, '005924', at);
+  assert.equal(counter, Math.floor(1234567890 / 30));
+  assert.equal(checkTotp(secret, '005924', at, counter), null, 'a used code is refused');
+  assert.equal(checkTotp(secret, '005924', at + 90000), null, 'codes expire after the next step');
+  assert.equal(checkTotp(secret, '12345', at), null);
+});
+
+test('dashboard under /panel requires an authenticator code and scopes its cookie', async () => {
+  const secret = base32Encode(Buffer.from('abcdefghijabcdefghij'));
+  let clock = 1_800_000_000_000;
+  const dashboard = createDashboard({secret: 's'.repeat(64), nodes: {us: 'http://127.0.0.1:9'}, user: 'admin', passwordHash: await hashPassword('a long admin password'), secureCookie: true, sessionHours: 1, publicLabel: 'X', basePath: '/panel', totpSecret: secret}, {log: () => {}, now: () => clock});
+  const origin = await listen(dashboard);
+  try {
+    const bare = await fetch(`${origin}/panel`, {redirect: 'manual'});
+    assert.equal(bare.status, 308);
+    assert.equal(bare.headers.get('location'), '/panel/');
+    assert.equal((await fetch(`${origin}/panel/`)).status, 200);
+    assert.equal((await fetch(`${origin}/panel/app.js`)).status, 200);
+    assert.equal((await fetch(`${origin}/api/session`)).status, 404, 'nothing is served outside the prefix');
+    assert.equal((await (await fetch(`${origin}/panel/api/session`)).json()).twoFactor, true);
+    const login = body => fetch(`${origin}/panel/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify(body)});
+    const credentials = {username: 'admin', password: 'a long admin password'};
+    assert.equal((await login(credentials)).status, 401, 'password alone is not enough');
+    assert.equal((await login({...credentials, code: '000000'})).status, 401);
+    const code = totpCode(secret, Math.floor(clock / 30000));
+    const ok = await login({...credentials, code});
+    assert.equal(ok.status, 200);
+    assert.match(ok.headers.get('set-cookie'), /Path=\/panel; HttpOnly; SameSite=Strict; Max-Age=3600; Secure/);
+    assert.equal((await login({...credentials, code})).status, 401, 'the same code cannot be replayed');
+    clock += 30000;
+    assert.equal((await login({...credentials, code: totpCode(secret, Math.floor(clock / 30000))})).status, 200);
+  } finally { dashboard.close(); }
+});
+
+test('dashboard configuration validates the base path and authenticator secret', () => {
+  const base = {ADMIN_API_SECRET: secret, DASHBOARD_USER: 'admin', DASHBOARD_PASSWORD_HASH: 'scrypt$1$1$1$a$b', US_ORIGIN: 'https://node-us.example.test'};
+  assert.equal(loadConfig({...base, DASHBOARD_BASE_PATH: '/panel'}).basePath, '/panel');
+  assert.throws(() => loadConfig({...base, DASHBOARD_BASE_PATH: '/../x'}), /BASE_PATH/);
+  assert.throws(() => loadConfig({...base, DASHBOARD_TOTP_SECRET: 'short'}), /TOTP/);
+  assert.equal(loadConfig({...base, DASHBOARD_TOTP_SECRET: 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'}).totpSecret, 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
 });

@@ -35,6 +35,45 @@ export async function verifyPassword(password, stored) {
   return timingSafeEqual(key, expected);
 }
 
+// RFC 6238 time-based one-time codes (SHA-1, 6 digits, 30 s), as used by authenticator apps.
+const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+export function base32Encode(bytes) {
+  let bits = 0, value = 0, out = '';
+  for (const byte of bytes) {
+    value = ((value << 8) | byte) & 0xffff; bits += 8;
+    while (bits >= 5) { out += BASE32[(value >>> (bits - 5)) & 31]; bits -= 5; }
+  }
+  if (bits > 0) out += BASE32[(value << (5 - bits)) & 31];
+  return out;
+}
+export function base32Decode(text) {
+  let bits = 0, value = 0;
+  const out = [];
+  for (const char of String(text).toUpperCase().replace(/[\s=]/g, '')) {
+    const index = BASE32.indexOf(char);
+    if (index < 0) throw new Error('invalid_base32');
+    value = ((value << 5) | index) & 0xffff; bits += 5;
+    if (bits >= 8) { out.push((value >>> (bits - 8)) & 255); bits -= 8; }
+  }
+  return Buffer.from(out);
+}
+export function totpCode(secret, counter) {
+  const message = Buffer.alloc(8);
+  message.writeBigUInt64BE(BigInt(counter));
+  const digest = createHmac('sha1', base32Decode(secret)).update(message).digest();
+  const offset = digest[digest.length - 1] & 15;
+  return String((digest.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
+}
+// Accepts the previous, current and next 30-second step, and never the same step twice.
+export function checkTotp(secret, code, time = Date.now(), lastCounter = -1) {
+  if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return null;
+  const step = Math.floor(time / 30000);
+  for (const counter of [step - 1, step, step + 1]) {
+    if (counter > lastCounter && timingSafeEqual(Buffer.from(totpCode(secret, counter)), Buffer.from(code))) return counter;
+  }
+  return null;
+}
+
 const loopback = hostname => ['127.0.0.1', 'localhost', '[::1]'].includes(hostname);
 export function loadConfig(env = process.env) {
   const secret = env.ADMIN_API_SECRET || '';
@@ -50,7 +89,11 @@ export function loadConfig(env = process.env) {
     nodes[region] = url.origin;
   }
   if (!Object.keys(nodes).length) throw new Error('Set US_ORIGIN and/or DE_ORIGIN');
-  return {secret, nodes, user: env.DASHBOARD_USER, passwordHash: env.DASHBOARD_PASSWORD_HASH, host: env.DASHBOARD_HOST || '127.0.0.1', port: Number(env.DASHBOARD_PORT || 8790), secureCookie: env.DASHBOARD_SECURE_COOKIE !== 'false', sessionHours: Number(env.DASHBOARD_SESSION_HOURS || 12), publicLabel: env.DASHBOARD_LABEL || 'Spartan Cloud'};
+  const basePath = env.DASHBOARD_BASE_PATH || '';
+  if (basePath && !/^\/[a-z0-9-]{1,32}$/.test(basePath)) throw new Error('DASHBOARD_BASE_PATH must look like /panel');
+  const totpSecret = env.DASHBOARD_TOTP_SECRET || '';
+  if (totpSecret && (!/^[A-Z2-7]{16,128}$/.test(totpSecret) || base32Decode(totpSecret).length < 10)) throw new Error('DASHBOARD_TOTP_SECRET must be a base32 secret of at least 16 characters');
+  return {secret, nodes, user: env.DASHBOARD_USER, passwordHash: env.DASHBOARD_PASSWORD_HASH, host: env.DASHBOARD_HOST || '127.0.0.1', port: Number(env.DASHBOARD_PORT || 8790), secureCookie: env.DASHBOARD_SECURE_COOKIE !== 'false', sessionHours: Number(env.DASHBOARD_SESSION_HOURS || 12), publicLabel: env.DASHBOARD_LABEL || 'Spartan Cloud', basePath, totpSecret};
 }
 
 class HttpError extends Error { constructor(status, code) { super(code); this.status = status; } }
@@ -87,7 +130,9 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     if (session.expires < now()) { sessions.delete(token); return null; }
     return {token, ...session};
   };
-  const cookie = (token, maxAge) => `spartan_admin=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${config.secureCookie ? '; Secure' : ''}`;
+  // Scoped to the dashboard path, so the cookie is never sent to the node's /control or /tenant routes.
+  const cookie = (token, maxAge) => `spartan_admin=${token}; Path=${config.basePath || '/'}; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${config.secureCookie ? '; Secure' : ''}`;
+  let lastTotpCounter = -1;
 
   const send = (res, status, payload, headers = {}) => {
     if (res.headersSent) { res.destroy(); return; }
@@ -171,14 +216,16 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     const ip = clientIp(req);
     if (url.pathname === '/api/session' && req.method === 'GET') {
       const session = sessionOf(req);
-      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host}))} : {authenticated: false, label: config.publicLabel});
+      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host}))} : {authenticated: false, label: config.publicLabel, twoFactor: Boolean(config.totpSecret)});
     }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (!limitLogin(ip)) { record('login_rate_limited', {ip}); return send(res, 429, {error: 'too_many_attempts'}); }
       const input = await readJson(req, 4096);
       const userOk = typeof input.username === 'string' && input.username.length === config.user.length && timingSafeEqual(Buffer.from(input.username), Buffer.from(config.user));
       const passwordOk = await verifyPassword(String(input.password || ''), config.passwordHash);
-      if (!userOk || !passwordOk) { record('login_failed', {ip}); return send(res, 401, {error: 'invalid_credentials'}); }
+      const counter = config.totpSecret ? checkTotp(config.totpSecret, input.code, now(), lastTotpCounter) : 0;
+      if (!userOk || !passwordOk || counter === null) { record('login_failed', {ip}); return send(res, 401, {error: config.totpSecret ? 'invalid_credentials_or_code' : 'invalid_credentials'}); }
+      if (config.totpSecret) lastTotpCounter = counter;
       const token = randomBytes(32).toString('base64url');
       const csrf = randomBytes(24).toString('base64url');
       if (sessions.size > 200) sessions.delete(sessions.keys().next().value);
@@ -245,7 +292,13 @@ export function createDashboard(config, {now = Date.now, log = value => console.
 
   return http.createServer(async (req, res) => {
     try {
-      const url = new URL(req.url, 'http://dashboard.local');
+      let url = new URL(req.url, 'http://dashboard.local');
+      // Behind the node agent the dashboard lives under a prefix such as /panel.
+      if (config.basePath) {
+        if (url.pathname === config.basePath) { res.writeHead(308, {...SECURITY_HEADERS, location: `${config.basePath}/${url.search}`}); return res.end(); }
+        if (!url.pathname.startsWith(`${config.basePath}/`)) return send(res, 404, {error: 'not_found'});
+        url = new URL(url.pathname.slice(config.basePath.length) + url.search, 'http://dashboard.local');
+      }
       if (url.pathname.startsWith('/api/')) return await api(req, res, url);
       if (req.method === 'GET' && Object.hasOwn(STATIC, url.pathname)) return await asset(res, url.pathname);
       return send(res, 404, {error: 'not_found'});
@@ -267,6 +320,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (process.argv[2] === 'hash-password') {
     // Reads the password from stdin so it never appears in the process list or shell history.
     readStdin().then(hashPassword).then(value => console.log(value)).catch(error => { console.error(error.message); process.exitCode = 1; });
+  } else if (process.argv[2] === 'totp-secret') {
+    console.log(base32Encode(randomBytes(20)));
+  } else if (process.argv[2] === 'totp-check') {
+    // stdin: "SECRET CODE"; exits 0 when the code is valid right now.
+    readStdin().then(text => { const [secret, code] = text.trim().split(/\s+/); process.exitCode = checkTotp(secret, code) === null ? 1 : 0; }).catch(() => { process.exitCode = 1; });
   } else {
     const config = loadConfig();
     const server = createDashboard(config);

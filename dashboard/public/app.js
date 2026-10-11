@@ -11,7 +11,8 @@ const api = {
     const headers = {};
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (method !== 'GET') headers['x-csrf-token'] = csrf;
-    const response = await fetch(path, {method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin'});
+    // Relative to the page, so the dashboard works at / and under a prefix such as /panel/.
+    const response = await fetch(path.replace(/^\//, ''), {method, headers, body: body === undefined ? undefined : JSON.stringify(body), credentials: 'same-origin'});
     let data = null;
     try { data = await response.json(); } catch {}
     if (response.status === 401 && path !== '/api/login') { state.session = null; render(); throw new ApiError('not_signed_in', 401); }
@@ -22,7 +23,7 @@ const api = {
   post(path, body = {}) { return this.request('POST', path, body); },
   download(path) {
     if (demo) return demo.download(path);
-    const link = h('a', {href: path, download: ''});
+    const link = h('a', {href: path.replace(/^\//, ''), download: ''});
     document.body.append(link); link.click(); link.remove();
   }
 };
@@ -37,6 +38,7 @@ const MESSAGES = {
   container_not_running: 'The container is not running.', service_suspended: 'This tenant is suspended. Resume it from the master website.',
   console_busy: 'Too many commands are running. Try again shortly.', rate_limited: 'Too many requests. Slow down for a minute.',
   csrf_failed: 'Your session expired. Reload the page.', invalid_credentials: 'Incorrect username or password.',
+  invalid_credentials_or_code: 'Incorrect username, password or authenticator code. Each code works once.',
   too_many_attempts: 'Too many sign-in attempts. Wait 15 minutes.', not_provisioned: 'This tenant is not provisioned on this node.',
   node_update_in_progress: 'The node is applying an update. Try again shortly.', service_not_ready: 'The tenant is not ready.',
   invalid_archive: 'That archive could not be read.', unsupported_archive: 'Only .zip and .tar(.gz/.bz2/.xz) archives can be extracted.',
@@ -300,7 +302,7 @@ async function render() {
   const token = ++state.view;
   const root = document.getElementById('root');
   if (!state.session) {
-    try { const session = await api.get('/api/session'); if (session.authenticated) { state.session = session; csrf = session.csrf; } else { state.label = session.label; } }
+    try { const session = await api.get('/api/session'); if (session.authenticated) { state.session = session; csrf = session.csrf; } else { state.label = session.label; state.twoFactor = session.twoFactor === true; } }
     catch { /* shown as login */ }
     if (token !== state.view) return;
     if (!state.session) { root.replaceChildren(loginPage()); return; }
@@ -327,17 +329,18 @@ window.addEventListener('hashchange', render);
 function loginPage() {
   const user = h('input', {class: 'input', name: 'username', autocomplete: 'username', required: true});
   const pass = h('input', {class: 'input', name: 'password', type: 'password', autocomplete: 'current-password', required: true});
+  const code = state.twoFactor ? h('input', {class: 'input mono', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]{6}', maxlength: '6', placeholder: '123456', required: true}) : null;
   const message = h('div', {class: 'banner error', style: {display: 'none'}});
   const submit = h('button', {type: 'submit', class: 'btn primary'}, 'Sign in');
   const form = h('form', {onsubmit: async event => {
     event.preventDefault();
     submit.disabled = true; message.style.display = 'none';
     try {
-      const session = await api.post('/api/login', {username: user.value, password: pass.value});
+      const session = await api.post('/api/login', {username: user.value, password: pass.value, ...(code ? {code: code.value.trim()} : {})});
       csrf = session.csrf; state.session = null; render();
-    } catch (error) { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; pass.value = ''; pass.focus(); }
+    } catch (error) { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; pass.value = ''; if (code) code.value = ''; pass.focus(); }
     finally { submit.disabled = false; }
-  }}, message, h('label', {class: 'field'}, h('span', null, 'Username'), user), h('label', {class: 'field'}, h('span', null, 'Password'), pass), submit);
+  }}, message, h('label', {class: 'field'}, h('span', null, 'Username'), user), h('label', {class: 'field'}, h('span', null, 'Password'), pass), code ? h('label', {class: 'field'}, h('span', null, 'Authenticator code'), code) : null, submit);
   setTimeout(() => user.focus(), 0);
   return h('div', {class: 'login'}, h('div', {class: 'card'}, h('div', {class: 'brand'}, h('span', {class: 'brand-mark'}, icon('cube')), state.label || 'Spartan Cloud'), h('h1', null, 'Sign in'), h('p', null, 'Operator access to your nodes and tenants.'), form));
 }

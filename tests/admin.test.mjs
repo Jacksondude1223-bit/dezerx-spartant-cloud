@@ -270,3 +270,39 @@ test('secondary node forwards to an origin configured with a trailing slash', as
     assert.deepEqual(seen, [`/tenant/${id}/dashboard?a=1`]);
   } finally { await agent.stop(); primary.close(); await rm(dir, {recursive: true, force: true}); }
 });
+
+test('agent serves the dashboard at /panel on the node hostname only when enabled', async () => {
+  const seen = [];
+  const dashboard = http.createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    seen.push({method: req.method, url: req.url, ip: req.headers['cf-connecting-ip'], cookie: req.headers.cookie, body, origin: req.headers['x-spartan-origin']});
+    res.writeHead(200, {'content-type': 'application/json', 'set-cookie': 'spartan_admin=x; Path=/panel'});
+    res.end('{"from":"dashboard"}');
+  });
+  await new Promise(resolve => dashboard.listen(0, '127.0.0.1', resolve));
+  const agent = await startAgent({env: {DASHBOARD_PROXY_PORT: String(dashboard.address().port)}});
+  try {
+    seen.length = 0; // drop the startup readiness probe, which follows the / redirect
+    const root = await fetch(`${agent.origin}/`, {redirect: 'manual'});
+    assert.equal(root.status, 302);
+    assert.equal(root.headers.get('location'), '/panel/');
+    const page = await fetch(`${agent.origin}/panel/app.js?v=1`, {headers: {'cf-connecting-ip': '198.51.100.7', cookie: 'spartan_admin=abc', 'x-spartan-origin': originSecret}});
+    assert.equal(page.status, 200);
+    assert.equal(page.headers.get('set-cookie'), 'spartan_admin=x; Path=/panel');
+    const posted = await fetch(`${agent.origin}/panel/api/login`, {method: 'POST', headers: {'content-type': 'application/json'}, body: '{"username":"admin"}'});
+    assert.deepEqual(await posted.json(), {from: 'dashboard'});
+    assert.deepEqual(seen.map(s => [s.method, s.url]), [['GET', '/panel/app.js?v=1'], ['POST', '/panel/api/login']]);
+    assert.equal(seen[0].ip, '198.51.100.7');
+    assert.equal(seen[0].cookie, 'spartan_admin=abc');
+    assert.equal(seen[0].origin, undefined, 'node credentials are never forwarded to the dashboard');
+    assert.equal(seen[1].body, '{"username":"admin"}');
+    assert.equal((await fetch(`${agent.origin}/panelx`)).status, 404);
+    assert.equal((await agent.json('/admin/overview')).status, 200, 'admin API unaffected');
+  } finally { await agent.stop(); dashboard.close(); }
+  const plain = await startAgent();
+  try {
+    assert.equal((await fetch(`${plain.origin}/`, {redirect: 'manual'})).status, 404, 'disabled by default');
+    assert.equal((await fetch(`${plain.origin}/panel/`)).status, 404);
+  } finally { await plain.stop(); }
+});

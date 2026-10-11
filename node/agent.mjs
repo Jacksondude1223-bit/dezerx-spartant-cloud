@@ -48,6 +48,19 @@ const adminSecret = (() => {
 })();
 const root = cfg.DATA_ROOT || '/srv/spartan-cloud';
 const port = Number(cfg.AGENT_PORT || 8788);
+// Opt-in: serve the operator dashboard (running on this host's loopback) at
+// https://<node hostname>/panel/, so it shares the node's existing tunnel route.
+const dashboardPort = (() => {
+  const value = cfg.DASHBOARD_PROXY_PORT;
+  if (!value) return null;
+  const number = Number(value);
+  if (!/^\d{4,5}$/.test(value) || number < 1024 || number > 65535 || number === port || number === 8789) {
+    console.error(JSON.stringify({event: 'dashboard_proxy_disabled', reason: 'DASHBOARD_PROXY_PORT must be a free port between 1024 and 65535'}));
+    return null;
+  }
+  return number;
+})();
+const DASHBOARD_PATH = '/panel';
 const jobs = new Map();
 const security = createSecurity();
 let pendingControls = 0;
@@ -371,6 +384,23 @@ async function queued(id, task) {
   try { return await job; }
   finally { pendingControls--; if (jobs.get(id) === job) jobs.delete(id); }
 }
+// Forwards /panel traffic to the local dashboard. Only the headers the dashboard needs
+// are passed on; Cloudflare's cf-connecting-ip lets it rate-limit sign-ins per visitor.
+function proxyDashboard(req, res, url) {
+  const headers = {'x-forwarded-proto': 'https'};
+  for (const key of ['cookie', 'content-type', 'content-length', 'x-csrf-token', 'accept', 'cf-connecting-ip', 'user-agent', 'if-none-match']) if (req.headers[key] !== undefined) headers[key] = req.headers[key];
+  const upstream = http.request({hostname: '127.0.0.1', port: dashboardPort, method: req.method, path: url.pathname + url.search, headers}, response => {
+    const out = {...response.headers};
+    for (const key of ['connection', 'keep-alive', 'transfer-encoding']) delete out[key];
+    res.writeHead(response.statusCode, out);
+    response.pipe(res);
+  });
+  upstream.setTimeout(330000, () => upstream.destroy(new Error('timeout')));
+  upstream.on('error', () => { if (!res.headersSent) reply(res, 502, {error: 'dashboard_unavailable'}); else res.destroy(); });
+  req.on('aborted', () => upstream.destroy());
+  res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
+  req.pipe(upstream);
+}
 const ADMIN_ROUTES = ['/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download'];
 async function adminRoute(req, res, url) {
   if (!adminSecret || !ADMIN_ROUTES.includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
@@ -474,6 +504,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
     if (url.pathname.startsWith('/admin/')) return await adminRoute(req, res, url);
+    if (dashboardPort && (url.pathname === DASHBOARD_PATH || url.pathname.startsWith(`${DASHBOARD_PATH}/`))) return proxyDashboard(req, res, url);
+    if (dashboardPort && url.pathname === '/' && ['GET', 'HEAD'].includes(req.method)) { res.writeHead(302, {location: `${DASHBOARD_PATH}/`, 'cache-control': 'no-store'}); return res.end(); }
     const info = await target(req);
     if (!info) return reply(res, 404, {error: 'not_found'});
     if (info.redirect) {
