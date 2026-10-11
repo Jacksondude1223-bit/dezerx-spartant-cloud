@@ -27,7 +27,8 @@ export async function nodeCall(env, location, path, payload) {
   const secret = env.NODE_CONTROL_SECRET || env.ORIGIN_SECRET;
   if (!secret) throw new Error('node_secret_missing');
   const headers = {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': await signature(secret, timestamp, 'POST', path, body)};
-  const response = await fetch(`${origin}${path}`, {method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(90000)});
+  // new URL(...).origin drops a trailing slash that would otherwise produce "//control/...".
+  const response = await fetch(`${new URL(origin).origin}${path}`, {method: 'POST', headers, body, redirect: 'manual', signal: AbortSignal.timeout(90000)});
   if (!response.ok) throw new Error(`node_${location}_${response.status}`);
   return response.json();
 }

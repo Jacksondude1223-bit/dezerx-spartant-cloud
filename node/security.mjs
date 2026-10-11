@@ -6,8 +6,12 @@ export function createSecurity({now = Date.now, log = value => console.error(JSO
   const audit = (event, fields = {}) => {
     const record = {event, timestamp: new Date(now()).toISOString()};
     if (/^t-[a-f0-9]{24}$/.test(fields.id || '')) record.id = fields.id;
-    if (['provision', 'lifecycle', 'upgrade', 'node-health', 'instance', 'health', 'version', 'database/download', 'files', 'domain', 'reload'].includes(fields.operation)) record.operation = fields.operation;
+    if (['provision', 'lifecycle', 'upgrade', 'node-health', 'instance', 'health', 'version', 'database/download', 'files', 'domain', 'reload', 'list'].includes(fields.operation)) record.operation = fields.operation;
+    if (['admin/tenant', 'admin/logs', 'admin/exec', 'admin/fs', 'admin/fs/download', 'admin/database/download', 'admin/container', 'admin/reload', 'admin/upgrade'].includes(fields.operation)) record.operation = fields.operation;
     if (['ready', 'provisioning', 'suspended', 'terminated', 'current', 'upgraded', 'rolled_back'].includes(fields.status)) record.status = fields.status;
+    // Who ran a console command and which file action, never the command or path itself.
+    if (['www-data', 'root'].includes(fields.user)) record.user = fields.user;
+    if (/^[a-z]{3,10}$/.test(fields.action || '')) record.action = fields.action;
     log(record);
   };
   return {audit, denied() { reset(); if (++denied <= 5) audit('control_authentication_denied'); if (denied === limit + 1) audit('control_authentication_rate_limited'); return denied <= limit; }, allowed() { reset(); if (++allowed > limit) { if (allowed === limit + 1) audit('control_rate_limited'); return false; } return true; }};

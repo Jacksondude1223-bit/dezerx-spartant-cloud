@@ -192,5 +192,5 @@ export function createManagement({cfg, root, load, save, docker, mysql, applicat
     try { return await sqlExport(input, res); }
     finally { exporting = false; }
   }
-  return {nodeHealth, information, version, files, sqlDownload};
+  return {nodeHealth, information, version, files, sqlDownload, tenant};
 }

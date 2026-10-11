@@ -2535,6 +2535,147 @@
         }
       }
     },
+    "/control/list": {
+      "post": {
+        "operationId": "list_node_tenants",
+        "summary": "List every tenant provisioned on this node",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "Send {}. Returns {region, tenants: [...]}: id, primary, role, status, url, activeUrl, image, port, lifecycleVersion, fingerprint, plan, adminInitialized, environmentPending, createdAt and container state. Never returns app keys, licence keys or database passwords. See docs/MANAGEMENT-API.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "required": []
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/control/instance": {
       "post": {
         "operationId": "manage_instance",

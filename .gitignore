@@ -5,3 +5,4 @@ generated/
 .wrangler/
 *.sqlite*
 __pycache__/
+dashboard/demo/preview.html

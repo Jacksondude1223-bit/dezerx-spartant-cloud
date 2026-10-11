@@ -161,7 +161,9 @@ Build and push a new image, then take the digest from `scripts/build-image.sh`. 
 
 ## Node API
 
-Health, resource usage, versions, per-tenant image selection, SQL downloads, restricted files and domain changes are documented in [MANAGEMENT-API.md](MANAGEMENT-API.md).
+Health, resource usage, versions, per-tenant image selection, SQL downloads, restricted files, domain changes and the `/control/list` tenant listing are documented in [MANAGEMENT-API.md](MANAGEMENT-API.md). The operator admin API (`/admin/*`: file manager, console, logs, per-container usage), signed with a separate `ADMIN_API_SECRET`, and the dashboard that uses it are documented in [DASHBOARD.md](DASHBOARD.md).
+
+Node origins are normalised to `scheme://host` at startup and by the installer. Earlier installers accepted a trailing slash (`https://node-us.example.com/`), which made a node forward cross-region requests to `//tenant/...` and receive 404.
 
 Node control bodies are limited to 16,384 bytes, except `/control/files`, which accepts up to 6 MiB plus 16 KiB of JSON overhead. Sign control requests with `ORIGIN_SECRET`. An explicitly configured `NODE_CONTROL_SECRET` takes priority for compatibility.
 

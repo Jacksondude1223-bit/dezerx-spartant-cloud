@@ -17,6 +17,7 @@ import {verifyDomainPermit} from './domain-permit.mjs';
 import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
+import {createAdmin} from './admin.mjs';
 
 const run = promisify(execFile);
 const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRET || process.env.ORIGIN_SECRET};
@@ -27,7 +28,24 @@ if (cfg.DOMAIN_VERIFICATION_REQUIRED !== undefined && !['true', 'false'].include
 if (!['us', 'de'].includes(cfg.NODE_REGION)) throw new Error('invalid_region');
 if (!/^\S+@sha256:[a-f0-9]{64}$/.test(cfg.SPARTAN_IMAGE)) throw new Error('image_digest_required');
 if (cfg.NODE_CONTROL_SECRET.length < 32 || cfg.ORIGIN_SECRET.length < 32) throw new Error('weak_secret');
-for (const key of ['US_ORIGIN', 'DE_ORIGIN']) if (new URL(cfg[key]).protocol !== 'https:') throw new Error('https_required');
+for (const key of ['US_ORIGIN', 'DE_ORIGIN']) {
+  if (new URL(cfg[key]).protocol !== 'https:') throw new Error('https_required');
+  // The installer accepted "https://node-us.example.com/". Concatenating a request path
+  // onto that produced "//tenant/...", which the other node then answered with 404.
+  cfg[key] = new URL(cfg[key]).origin;
+}
+// Operator routes (/admin/*) use their own secret so the Worker and master website
+// credentials can never run commands or edit files. Misconfiguration disables the
+// routes rather than stopping the agent and its tenant traffic.
+const adminSecret = (() => {
+  const value = cfg.ADMIN_API_SECRET;
+  if (!value) return null;
+  if (value.length < 32 || value.includes('CHANGE_ME') || /[\x00-\x20\x7f]/.test(value) || value === cfg.ORIGIN_SECRET || value === cfg.NODE_CONTROL_SECRET) {
+    console.error(JSON.stringify({event: 'admin_api_disabled', reason: 'ADMIN_API_SECRET must be at least 32 characters and differ from the origin and control secrets'}));
+    return null;
+  }
+  return value;
+})();
 const root = cfg.DATA_ROOT || '/srv/spartan-cloud';
 const port = Number(cfg.AGENT_PORT || 8788);
 const jobs = new Map();
@@ -53,6 +71,8 @@ const recovery = createRecovery({config: cfg, root, docker: async args => {
 }, run});
 const mysql = createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20});
 const management = createManagement({cfg, root, load, save, docker, mysql, applicationHealth});
+const admin = createAdmin({cfg, root, load, management, env: dockerEnvironment});
+const adminSecurity = createSecurity({limit: 900});
 const stateFile = id => path.join(root, id, 'state.json');
 async function load(id) {
   if (!validId(id)) throw new Error('invalid_id');
@@ -302,19 +322,91 @@ async function body(req, limit = 16384) {
   }
   return Buffer.concat(chunks).toString('utf8');
 }
-async function control(req, res, url) {
-  const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
+// Cheap checks that need no body. Rejecting here means an unauthenticated client can no
+// longer make the agent buffer a multi-megabyte body before it is turned away.
+function plausible(req) {
   const timestamp = req.headers['x-spartan-timestamp'];
-  const expected = createHmac('sha256', cfg.NODE_CONTROL_SECRET).update(`${timestamp}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex');
-  if (req.method !== 'POST' || !/^\d+$/.test(timestamp || '') || Math.abs(Date.now() - Number(timestamp)) > 300000 || !equal(expected, req.headers['x-spartan-signature'])) {
-    const withinLimit = security.denied();
-    return reply(res, withinLimit ? 401 : 429, {error: withinLimit ? 'unauthorized' : 'rate_limited'});
-  }
+  return req.method === 'POST' && /^\d+$/.test(timestamp || '') && Math.abs(Date.now() - Number(timestamp)) <= 300000 && /^[a-f0-9]{64}$/.test(req.headers['x-spartan-signature'] || '');
+}
+const signedWith = (secret, req, url, payload) => equal(createHmac('sha256', secret).update(`${req.headers['x-spartan-timestamp']}\n${req.method}\n${url.pathname}\n${payload}`).digest('hex'), req.headers['x-spartan-signature']);
+function deny(res, limiter, unread = false) {
+  const withinLimit = limiter.denied();
+  res.writeHead(withinLimit ? 401 : 429, {'content-type': 'application/json', 'cache-control': 'no-store', ...(unread ? {connection: 'close'} : {})});
+  res.end(JSON.stringify({error: withinLimit ? 'unauthorized' : 'rate_limited'}));
+}
+function parseInput(payload) {
+  const input = JSON.parse(payload);
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw apiError('invalid_input');
+  return input;
+}
+async function reloadTenant(input) {
+  const info = await management.information(input);
+  if (!info.running || info.status !== 'ready') throw apiError('service_not_ready', 409);
+  await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'optimize:clear', '--no-interaction']);
+  await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'octane:reload', '--no-interaction']);
+  return {id: input.id, reloaded: true};
+}
+// Docker-level power control for operators. Billing state (suspend, terminate, resume)
+// stays with the master website through /control/lifecycle and /control/provision.
+async function containerAction(input) {
+  if (!['start', 'stop', 'restart'].includes(input.action)) throw apiError('invalid_action');
+  const {record} = await management.tenant(input);
+  if (input.action !== 'stop' && ['suspended', 'terminated'].includes(record.status)) throw apiError('service_suspended', 409);
+  if (input.action === 'stop') await docker(['stop', '--time', '30', container(input.id)]);
+  else await docker([input.action, ...(input.action === 'restart' ? ['--time', '30'] : []), container(input.id)]);
+  // A restarted container can be given a different loopback port.
+  const port = input.action === 'stop' ? null : await refreshPort(input.id).catch(() => null);
+  security.audit('admin_container_action', {id: input.id});
+  return {id: input.id, action: input.action, done: true, ...(port ? {port} : {})};
+}
+// Serialises work on one tenant with the control routes, so an operator restart cannot
+// interleave with a provision or upgrade from the master website.
+async function queued(id, task) {
+  if (maintenance()) throw apiError('node_update_in_progress', 503);
+  if (pendingControls >= 50) throw apiError('control_capacity', 429);
+  pendingControls++;
+  const previous = jobs.get(id) || Promise.resolve();
+  const job = previous.catch(() => {}).then(task);
+  jobs.set(id, job);
+  try { return await job; }
+  finally { pendingControls--; if (jobs.get(id) === job) jobs.delete(id); }
+}
+const ADMIN_ROUTES = ['/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download'];
+async function adminRoute(req, res, url) {
+  if (!adminSecret || !ADMIN_ROUTES.includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!plausible(req)) return deny(res, adminSecurity, true);
+  const payload = await body(req, url.pathname === '/admin/fs' ? 8 * 1024 * 1024 + 65536 : 16384);
+  if (!signedWith(adminSecret, req, url, payload)) return deny(res, adminSecurity);
+  if (!adminSecurity.allowed()) return reply(res, 429, {error: 'rate_limited'});
+  const input = parseInput(payload);
+  const operation = url.pathname.slice('/admin/'.length);
+  if (operation === 'overview') return reply(res, 200, await admin.overview());
+  if (operation === 'tenants') return reply(res, 200, {region: cfg.NODE_REGION, tenants: await admin.tenants({withStats: input.stats === true})});
+  if (operation === 'stats') return reply(res, 200, {region: cfg.NODE_REGION, containers: await admin.stats(), sampledAt: new Date().toISOString()});
+  const record = await admin.record(input);
+  const tenant = {...input, id: record.id, fingerprint: record.fingerprint};
+  security.audit('admin_authorized', {id: record.id, operation: `admin/${operation}`, user: input.user, action: input.action});
+  if (operation === 'tenant') return reply(res, 200, await admin.detail(tenant));
+  if (operation === 'logs') return reply(res, 200, await admin.logs(tenant));
+  if (operation === 'exec') return reply(res, 200, await admin.exec(tenant));
+  if (operation === 'fs') return reply(res, 200, await admin.fs(input));
+  if (operation === 'fs/download') return admin.download(input, res);
+  if (operation === 'database/download') return management.sqlDownload(tenant, res);
+  if (operation === 'container') return reply(res, 200, await queued(record.id, () => containerAction(tenant)));
+  if (operation === 'reload') return reply(res, 200, await queued(record.id, () => reloadTenant(tenant)));
+  if (operation === 'upgrade') return reply(res, 200, await queued(record.id, () => upgrade({id: record.id, fingerprint: record.fingerprint})));
+  return reply(res, 404, {error: 'not_found'});
+}
+async function control(req, res, url) {
+  if (!plausible(req)) return deny(res, security, true);
+  const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
+  if (!signedWith(cfg.NODE_CONTROL_SECRET, req, url, payload)) return deny(res, security);
   if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
-  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(res, 400, {error: 'invalid_input'});
   if (url.pathname === '/control/node-health') return reply(res, 200, await management.nodeHealth());
+  if (url.pathname === '/control/list') return reply(res, 200, {region: cfg.NODE_REGION, tenants: await admin.tenants()});
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});
   if (!/^[a-f0-9]{64}$/.test(input.fingerprint || '')) return reply(res, 400, {error: 'invalid_fingerprint'});
   if (maintenance()) return reply(res, 503, {error: 'node_update_in_progress'});
@@ -340,13 +432,7 @@ async function control(req, res, url) {
       await provision({...record, url: input.url, licenseKey: input.licenseKey, ...(input.domainVerificationToken === undefined ? {} : {domainVerificationToken: input.domainVerificationToken})});
       return upgrade({id: record.id, fingerprint: record.fingerprint, image: record.image});
     }
-    if (url.pathname === '/control/reload') {
-      const info = await management.information(input);
-      if (!info.running || info.status !== 'ready') throw apiError('service_not_ready', 409);
-      await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'optimize:clear', '--no-interaction']);
-      await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'octane:reload', '--no-interaction']);
-      return {id: input.id, reloaded: true};
-    }
+    if (url.pathname === '/control/reload') return reloadTenant(input);
     return provision(input);
   });
   jobs.set(input.id, job);
@@ -387,6 +473,7 @@ const server = http.createServer(async (req, res) => {
       return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION, updateSafety: 1, pendingControls, maintenance: maintenance()});
     }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
+    if (url.pathname.startsWith('/admin/')) return await adminRoute(req, res, url);
     const info = await target(req);
     if (!info) return reply(res, 404, {error: 'not_found'});
     if (info.redirect) {
