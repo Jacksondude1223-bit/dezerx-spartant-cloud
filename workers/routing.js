@@ -7,6 +7,28 @@ import {sensitivePath} from './security.js';
 import {statusPage} from './status-page.js';
 import {resolveInstanceHostname} from './instance-hostnames.js';
 
+// Every page, script and image of a tenant passes through here, so the D1 lookups behind
+// it (hostname -> tenant, tenant -> route) are cached per isolate for a few seconds. A
+// status change (suspend, terminate) therefore reaches visitors after a short delay;
+// ROUTE_CACHE_SECONDS bounds that delay; unset or 0 disables the cache. npm run configure sets 10.
+const lookups = new WeakMap();
+async function cached(env, key, load) {
+  const seconds = Number(env.ROUTE_CACHE_SECONDS || 0);
+  if (!(seconds > 0)) return load();
+  let cache = lookups.get(env);
+  if (!cache) { cache = new Map(); lookups.set(env, cache); }
+  const hit = cache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = await load();
+  if (cache.size > 5000) cache.clear();
+  // Misses are kept briefly too, so a burst against an unknown hostname costs one query.
+  cache.set(key, {value, expires: Date.now() + (value ? seconds : Math.min(seconds, 5)) * 1000});
+  return value;
+}
+// With D1 read replication enabled, read from the nearest replica; otherwise this is the
+// primary database exactly as before.
+const reader = env => (typeof env.DB?.withSession === 'function' ? {...env, DB: env.DB.withSession('first-unconstrained')} : env);
+
 export default {
   async scheduled(event, env) {
     // D1 has no alarms, so the cron trigger drives the certificate sweep.
@@ -38,21 +60,24 @@ export default {
       if (url.hostname.endsWith(`.${env.BASE_DOMAIN}`)) id = url.hostname.slice(0, -env.BASE_DOMAIN.length - 1);
       else {
         if (!env.DB) return await missing();
-        id = await resolveInstanceHostname(env, url.hostname) || await resolveHostname(env, url.hostname);
+        const read = reader(env);
+        id = await cached(env, `host:${url.hostname}`, async () => await resolveInstanceHostname(read, url.hostname) || await resolveHostname(read, url.hostname));
         if (!id) return await missing();
       }
       if (!ID.test(id)) return await missing();
       if (!env.DB) return json({error: 'database_binding_missing'}, 503);
       if (url.protocol !== 'https:') { url.protocol = 'https:'; return Response.redirect(url.toString(), 308); }
-      const record = await readRoute(env, id);
+      const record = await cached(env, `route:${id}`, () => readRoute(reader(env), id));
       if (!record) return await missing();
       if (['suspended', 'suspending'].includes(record.status)) return json({error: 'service_suspended'}, 403);
       if (['terminated', 'terminating'].includes(record.status)) return json({error: 'service_terminated'}, 410);
       if (record.status !== 'ready') return json({error: 'provisioning'}, 503);
       const ip = visitorIp(request.headers);
       if (!ip) return json({error: 'client_ip_unavailable'}, 503);
-      const selected = region(request.cf?.country || 'US');
-      const origin = selected === 'us' ? env.US_ORIGIN : env.DE_ORIGIN;
+      // The application and its database run only on the tenant's primary node; the other
+      // node would just forward the request there, adding a second trip (often across the
+      // Atlantic). Go straight to the primary.
+      const origin = (record.primary === 'de' ? 'de' : record.primary === 'us' ? 'us' : region(request.cf?.country || 'US')) === 'us' ? env.US_ORIGIN : env.DE_ORIGIN;
       const target = new URL(origin);
       target.pathname = `/tenant/${id}${url.pathname}`;
       target.search = url.search;

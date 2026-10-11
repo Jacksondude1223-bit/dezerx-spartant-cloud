@@ -126,15 +126,16 @@ test('failed provisioning stays pending with retry and durable alarm', async () 
     assert.ok(tenants.get(record.id).values.get('alarm'));
   } finally { globalThis.fetch = previous; }
 });
-test('routing selects region, preserves application credentials, strips origin spoofing', async () => {
+test('routing goes straight to the primary node, preserves application credentials, strips origin spoofing', async () => {
   const {env, tenants} = fixture();
   const record = await (await reserve(env)).json();
   await tenants.get(record.id).fetch('https://tenant/complete', {method: 'POST'});
   const request = new Request(`${record.url}/invoices?x=1`, {method: 'POST', body: 'invoice', headers: {'cf-connecting-ip': '198.51.100.42', 'x-spartan-client-ip': 'attacker', 'x-forwarded-for': 'attacker', 'x-real-ip': 'attacker', authorization: 'Bearer app-token', cookie: 'session=value', 'x-spartan-origin': 'attacker', 'x-spartan-hop': '1', 'x-forwarded-host': 'evil.test'}});
+  // A German visitor still goes to the US primary: the German node would only forward it.
   Object.defineProperty(request, 'cf', {value: {country: 'DE'}});
   const previous = globalThis.fetch;
   globalThis.fetch = async upstream => {
-    assert.equal(new URL(upstream.url).host, 'de.origin.test');
+    assert.equal(new URL(upstream.url).host, 'us.origin.test');
     assert.equal(new URL(upstream.url).pathname, `/tenant/${record.id}/invoices`);
     assert.equal(new URL(upstream.url).search, '?x=1');
     assert.equal(await upstream.text(), 'invoice');

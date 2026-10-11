@@ -17,6 +17,7 @@ SAAS_CNAME_TARGET = "load.dezerx.cloud"
 INSTANCE_DOMAIN = "dezerx.cloud"
 CLOUDFLARE_ACCOUNT_ID = "fd777f8c55d9f6151ce6dae30d9f96ec"
 ROUTING_WORKER_NAME = "dezerx-spartant-cloud"
+ROUTE_CACHE_SECONDS = "10"
 
 
 [[migrations]]
