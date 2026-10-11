@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {mkdtemp, readFile, stat} from 'node:fs/promises';
 import {createHmac} from 'node:crypto';
-import {createProvisioner, loadProvisioningConfig, normalizeDomain} from '../dashboard/provisioning.mjs';
+import {createProvisioner, loadProvisioningConfig, normalizeDomain, productName} from '../dashboard/provisioning.mjs';
 import {createDashboard, hashPassword} from '../dashboard/server.mjs';
 import {verifyDomainPermit, issueDomainPermit} from '../node/domain-permit.mjs';
 
@@ -49,6 +49,8 @@ test('instance creation is optional and validates its configuration', () => {
   assert.equal(loadProvisioningConfig({ORIGIN_SECRET: originSecret, BASE_DOMAIN: 'Load.Example.Test'}, adminSecret).routingUrl, 'https://load.example.test');
   assert.equal(normalizeDomain('https://Panel.Customer.com/'), 'panel.customer.com');
   assert.equal(normalizeDomain('panel.customer.com:8443'), null);
+  assert.equal(productName('SPARTANCLOUD_abcdefghijklmnop'), 'Cloud');
+  assert.equal(productName('SPARTANCLOUDPLUS_abcdefghijklmnop'), 'Cloud Plus');
 });
 
 test('a default-subdomain instance provisions the primary, then the secondary, then publishes ready', async () => {

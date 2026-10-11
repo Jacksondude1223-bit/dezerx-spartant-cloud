@@ -18,7 +18,7 @@ import {issueDomainPermit} from '../node/domain-permit.mjs';
 
 const HOSTNAME = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const FIELD = /^[A-Za-z0-9_-]{1,100}$/;
-const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
+const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUD_: 'Cloud', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
 const LOCAL_TIMEOUT = 15 * 60000;
 // Cloudflare ends a proxied request after 100 seconds; the node carries on regardless.
 const REMOTE_TIMEOUT = 110000;

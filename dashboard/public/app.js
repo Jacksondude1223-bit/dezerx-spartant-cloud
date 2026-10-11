@@ -44,7 +44,7 @@ const MESSAGES = {
   invalid_archive: 'That archive could not be read.', unsupported_archive: 'Only .zip and .tar(.gz/.bz2/.xz) archives can be extracted.',
   not_a_file: 'That is not a regular file.', not_a_directory: 'That is not a folder.', file_not_found: 'File not found.',
   primary_node_required: 'Database downloads are only available on the primary node.', unknown_owner: 'Unknown user or group.',
-  invalid_license_key: 'That licence key is not valid. It must start with SPARTANSTARTER_, SPARTANCLOUDPLUS_, SPARTANPROFESSIONAL_, SPARTANULTIMATE_ or SPARTANDEV_.',
+  invalid_license_key: 'That licence key is not valid. It must start with SPARTANSTARTER_, SPARTANCLOUD_, SPARTANCLOUDPLUS_, SPARTANPROFESSIONAL_, SPARTANULTIMATE_ or SPARTANDEV_.',
   invalid_domain: 'Enter a bare domain such as panel.customer.com.', reserved_hostname: 'That domain belongs to the platform itself. Leave it blank to use the default subdomain.',
   hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
   invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
@@ -866,7 +866,7 @@ async function activityPage(ctx) {
 }
 
 /* ---------------------------------------------------------------- create instance */
-const PRODUCT_PREFIXES = [['SPARTANSTARTER_', 'Starter'], ['SPARTANCLOUDPLUS_', 'Cloud Plus'], ['SPARTANPROFESSIONAL_', 'Professional'], ['SPARTANULTIMATE_', 'Ultimate'], ['SPARTANDEV_', 'Developer']];
+const PRODUCT_PREFIXES = [['SPARTANSTARTER_', 'Starter'], ['SPARTANCLOUD_', 'Cloud'], ['SPARTANCLOUDPLUS_', 'Cloud Plus'], ['SPARTANPROFESSIONAL_', 'Professional'], ['SPARTANULTIMATE_', 'Ultimate'], ['SPARTANDEV_', 'Developer']];
 const productOf = key => (PRODUCT_PREFIXES.find(([prefix]) => key.startsWith(prefix)) || [])[1] || null;
 const INSTANCE_STATUS = {awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
 const instanceStatus = item => { const [label, tone] = INSTANCE_STATUS[item.status] || [item.status, '']; return {label, tone}; };

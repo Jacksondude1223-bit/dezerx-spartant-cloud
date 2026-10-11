@@ -157,7 +157,7 @@
   }
   // Simulated create-instance flow: custom domains verify on the second check, deploys finish in ~12 s.
   const instances = new Map();
-  const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
+  const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUD_: 'Cloud', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
   const advance = item => {
     if (item.status !== 'deploying') return;
     const elapsed = Date.now() - item.started;
