@@ -125,6 +125,10 @@ COPY runtime/create-admin.py /usr/local/bin/cloud-create-admin
 COPY runtime/admin-state.php /usr/local/bin/cloud-admin-state.php
 RUN chmod 755 /usr/local/bin/cloud-entrypoint /usr/local/bin/dezerx-entrypoint /usr/local/bin/dezerx-healthcheck && printf 'if ($http_x_spartan_ingress_key != "build-test") { return 403; }\n' > /etc/nginx/spartan-origin-auth.conf && nginx -t && rm /etc/nginx/spartan-origin-auth.conf
 ENV OCTANE_SERVER=roadrunner OCTANE_HTTPS=true REDIS_HOST=127.0.0.1 REDIS_PORT=6379
+# Tells the node agent this image starts Redis before migrations (runtime/entrypoint.sh),
+# so its tenants may use Redis for the cache and sessions. Older images lack the label and
+# stay on the file cache.
+LABEL cloud.spartan.redis-cache="1"
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=10s --start-period=300s --retries=3 CMD ["dezerx-healthcheck"]
 ENTRYPOINT ["tini", "--", "cloud-entrypoint"]

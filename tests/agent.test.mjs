@@ -39,6 +39,7 @@ const fs=require('node:fs');
 const args=process.argv.slice(2);
 const file=process.env.FAKE_STATE;
 if(args[0]==='info'){console.log('29.0');}
+if(args[0]==='image'&&args[1]==='inspect'){console.log(fs.existsSync(file+'.old-image')?'':'1');process.exit(0);}
 if(args[0]==='stats'){console.log(JSON.stringify({CPUPerc:'10.5%',MemUsage:'50MiB / 512MiB',MemPerc:'9.7%',PIDs:'5'}));}
 if(args[0]==='exec' && args.includes('python3')){console.log('{"version":"1.2.3"}');}
 if(args[0]==='inspect'){if(!fs.existsSync(file)){console.error('No such object');process.exit(1);} console.log(fs.readFileSync(file,'utf8'));}
@@ -164,6 +165,14 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.equal(launch.args[launch.args.indexOf('--cpus') + 1], '2.5', 'tenants default to 2.5 CPUs');
     assert.ok(envFile.includes('CACHE_STORE=redis') && envFile.includes('CACHE_DRIVER=redis'), 'the cache uses the container Redis');
     assert.ok(envFile.includes('SESSION_DRIVER=redis'), 'sessions use the container Redis outside the US-central mode');
+    // An image built before Redis started ahead of migrations must stay on the file cache.
+    await writeFile(path.join(dir, 'docker.json.old-image'), '');
+    assert.equal((await send()).status, 200);
+    const oldImageEnv = await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8');
+    assert.ok(oldImageEnv.includes('CACHE_STORE=file') && oldImageEnv.includes('CACHE_DRIVER=file') && oldImageEnv.includes('SESSION_DRIVER=file'), 'an image without the Redis label gets the file cache');
+    await rm(path.join(dir, 'docker.json.old-image'));
+    assert.equal((await send()).status, 200);
+    assert.equal(await readFile(path.join(dir, 'data', id, 'app.env'), 'utf8'), envFile, 'a Redis-ready image gets the Redis cache back');
     assert.equal(launch.args[launch.args.indexOf('--memory-swap') + 1], '2g');
     assert.equal(stderr.includes(license), false, 'the licence never reaches the log');
     assert.equal(JSON.parse(state).domainVerificationToken, undefined, 'short-lived permits are not persisted');

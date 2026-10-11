@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {proxyCacheControl, NO_STORE} from '../node/cache-policy.mjs';
 import {normalizeCpuLimit, tenantCpus, cpuSummary, requestedCpuLimit, DEFAULT_TENANT_CPUS} from '../node/resources.mjs';
-import {migrateCacheEnvironment} from '../node/tenant-env.mjs';
+import {migrateCacheEnvironment, switchCacheEnvironment, cacheEnvironment, imageSupportsRedis, REDIS_CACHE_LABEL} from '../node/tenant-env.mjs';
 
 test('the node keeps the application cache policy but never shares cookies or unlabelled responses', () => {
   const immutable = 'public, max-age=31536000, immutable';
@@ -44,6 +44,25 @@ test('a legacy tenant environment moves to Redis without touching database sessi
   const current = 'SESSION_DRIVER=redis\nCACHE_STORE=redis\n';
   assert.deepEqual(migrateCacheEnvironment(current), {text: current, changed: false});
   assert.equal(migrateCacheEnvironment('CACHE_STORE=filesystem\nMY_CACHE_STORE=file\n').changed, false, 'only exact keys and values change');
+});
+
+test('the Redis cache is used only with images that start Redis before migrations', async () => {
+  assert.deepEqual(cacheEnvironment({redis: true, databaseSessions: false}), {SESSION_DRIVER: 'redis', CACHE_STORE: 'redis', CACHE_DRIVER: 'redis'});
+  assert.deepEqual(cacheEnvironment({redis: false, databaseSessions: false}), {SESSION_DRIVER: 'file', CACHE_STORE: 'file', CACHE_DRIVER: 'file'});
+  assert.deepEqual(cacheEnvironment({redis: true, databaseSessions: true}), {SESSION_DRIVER: 'database', CACHE_STORE: 'redis', CACHE_DRIVER: 'redis'});
+  const back = switchCacheEnvironment('SESSION_DRIVER=redis\nCACHE_STORE="redis"\nCACHE_DRIVER=redis\nQUEUE_CONNECTION=database\n', false);
+  assert.deepEqual(back, {text: 'SESSION_DRIVER=file\nCACHE_STORE=file\nCACHE_DRIVER=file\nQUEUE_CONNECTION=database\n', changed: true}, 'an old image is moved back to files');
+  assert.equal(switchCacheEnvironment('SESSION_DRIVER=database\nCACHE_STORE=redis\n', false).text, 'SESSION_DRIVER=database\nCACHE_STORE=file\n');
+  const calls = [];
+  const docker = labels => async args => { calls.push(args); if (args[0] === 'pull') { labels.pulled = true; return ''; } if (labels.missing && !labels.pulled) throw new Error('No such image'); return labels.value; };
+  assert.equal(await imageSupportsRedis(docker({value: '1\n'}), 'img'), true);
+  assert.equal(await imageSupportsRedis(docker({value: ''}), 'img'), false, 'no label: an older image');
+  assert.equal(await imageSupportsRedis(docker({value: '<no value>'}), 'img'), false);
+  assert.equal(await imageSupportsRedis(docker({value: '1', missing: true}), 'img'), true, 'an image not yet on the node is pulled first');
+  assert.ok(calls.some(args => args[0] === 'pull'));
+  assert.equal(await imageSupportsRedis(async () => { throw new Error('docker down'); }, 'img'), false, 'any failure means the file cache');
+  const dockerfile = await readFile('runtime/Dockerfile', 'utf8');
+  assert.ok(dockerfile.includes(`LABEL ${REDIS_CACHE_LABEL}="1"`), 'the image built from this repository declares Redis support');
 });
 
 test('runtime serves hashed bundles as immutable, compresses, and sizes the Octane pool', async () => {
