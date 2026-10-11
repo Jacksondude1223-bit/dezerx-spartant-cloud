@@ -590,7 +590,10 @@ function overviewTab(ctx, data) {
   const c = data.container || {};
   ctx.fill([
     data.status === 'suspended' ? h('div', {class: 'banner info'}, icon('info'), 'Suspended by the master website. Resume it there; the dashboard does not change billing state.') : null,
-    data.status === 'provisioning' && data.applicationHealthy ? h('div', {class: 'banner warn'}, icon('alert'), 'The app is healthy but the node still records this tenant as provisioning, so the first administrator may not exist yet and the router may not know it. Finish it with Retry deployment on its Instances page (or the provision call from the master website).') : null,
+    data.status === 'provisioning' ? h('div', {class: 'banner warn'}, icon('alert'), h('div', {style: {flex: '1'}}, data.applicationHealthy
+        ? 'The app is healthy but the node still records this tenant as provisioning, so the first administrator may not exist yet and the router may not know it. Open its deployment to see progress or press Retry deployment.'
+        : 'This tenant is still being provisioned. Open its deployment to see each step and the container log.'),
+      state.session.provisioning ? h('a', {class: 'btn small', href: `#/instances/${data.id}`}, icon('rocket'), 'Open deployment') : null) : null,
     data.environmentPending ? h('div', {class: 'banner warn'}, icon('alert'), 'The environment file changed but the container still runs the old one. Use More actions → Upgrade to apply it.') : null,
     h('div', {class: 'cards'},
       statCard('cpu', 'CPU', r ? pct(r.cpuPercent) : '—', r ? 'right now' : 'not running', r ? segbar(r.cpuPercent) : null),
