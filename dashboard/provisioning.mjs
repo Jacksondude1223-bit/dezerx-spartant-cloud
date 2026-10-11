@@ -67,7 +67,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
       // A deployment cannot survive a restart: it needs the administrator password,
       // which is never written to disk.
-      for (const item of instances.values()) if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted'});
+      for (const item of instances.values()) if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null});
     })();
     return loaded;
   }
@@ -81,6 +81,10 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     });
     return writing;
   }
+  // A running commentary for the instance page, so a long first boot is not a mystery.
+  const note = (item, text, tone = '') => {
+    item.log = [...(item.log || []), {time: new Date(now()).toISOString(), text, tone}].slice(-60);
+  };
   const update = async (item, fields) => { Object.assign(item, fields, {updatedAt: new Date(now()).toISOString()}); await persist(); };
 
   const signed = (secret, pathname, body) => {
@@ -113,7 +117,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     id: item.id, primary: item.primary, secondary: item.secondary, hostname: item.hostname, custom: item.custom, url: `https://${item.hostname}`,
     product: item.licenseKey ? productName(item.licenseKey) : null, licenseHint: item.licenseKey ? `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}` : null,
     customerId: item.customerId, serviceId: item.serviceId, status: item.status, error: item.error || null, steps: item.steps || {},
-    dns: item.dns || null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
+    dns: item.dns || null, log: item.log || [], progress: item.progress || null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
   });
   const other = region => region === 'us' ? 'de' : 'us';
   const find = async id => { await load(); const item = instances.get(id); if (!item) throw new ProvisionError(404, 'instance_not_found'); return item; };
@@ -166,6 +170,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       if (assigned.status !== 200 || !normalizeDomain(assigned.data.hostname)) throw routingError(assigned);
       item.hostname = normalizeDomain(assigned.data.hostname);
     }
+    note(item, hostname ? `Created by ${user}. Add the DNS records below, then verify.` : `Created by ${user}. The routing Worker assigned ${item.hostname}; Cloudflare manages its DNS and certificate.`);
     instances.set(id, item);
     await update(item, {});
     record('instance_create', {user, region: primary, id, path: item.hostname});
@@ -181,6 +186,8 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (result.status === 401) throw new ProvisionError(502, 'routing_unauthorized');
     if (!result.data.hostname) throw new ProvisionError(result.status >= 400 ? result.status : 502, String(result.data.error || 'routing_error').slice(0, 80));
     const dns = dnsView(result.data);
+    const STAGES = {spartan_ownership: 'waiting for the _spartan-verification TXT record', cloudflare_validation: 'ownership proven; Cloudflare is validating the hostname and issuing the SSL certificate', routing_setup: 'certificate active; attaching the Worker route', ready_to_provision: 'everything checks out, ready to deploy'};
+    note(item, `DNS check: ${STAGES[dns.stage] || dns.stage || result.data.error || 'checked'}.`, dns.readyToProvision ? 'good' : '');
     if (dns.readyToProvision && result.data.domainVerificationToken) permits.set(id, {token: result.data.domainVerificationToken, expiresAt: Date.parse(result.data.tokenExpiresAt) || now() + 540000});
     await update(item, {dns, ...(item.status === 'failed' ? {} : {status: dns.readyToProvision ? 'ready_to_deploy' : 'awaiting_dns'}), ...(dns.readyToProvision ? {} : {error: result.data.error || null})});
     return view(item);
@@ -203,21 +210,38 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     await persist();
     // A first boot runs migrations and seeders, which can take several minutes; each node
     // call only waits about 30 s for health, so keep asking until the deadline.
-    const deadline = now() + DEPLOY_WAIT;
+    const started = now();
+    const deadline = started + DEPLOY_WAIT;
     const exhausted = attempt => attempt >= 60 || now() >= deadline;
+    const label = `node-${region}`;
+    note(item, role === 'primary' ? `Provisioning on ${label} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.` : `Provisioning the standby on ${label}. It holds no data and forwards traffic to the home node.`);
     for (let attempt = 1; ; attempt++) {
+      item.progress = {role, region, attempt, startedAt: new Date(started).toISOString(), callStartedAt: new Date(now()).toISOString(), retryAt: null, deadline: new Date(deadline).toISOString()};
+      if (attempt > 1) note(item, `Asking ${label} again (attempt ${attempt}).`);
+      await persist();
       const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: await permit(item), ...(role === 'primary' ? {initialAdmin: admin} : {})};
+      const callStarted = now();
+      const took = () => `${Math.round((now() - callStarted) / 1000)} s`;
       try {
         const result = await provisionOn(region, body);
-        if (result.status === 'ready') { item.steps[role] = 'done'; await persist(); return; }
+        if (result.status === 'ready') {
+          note(item, role === 'primary' ? `${label} is ready after ${took()}; the app answers its health check and the first administrator exists.` : `${label} is ready after ${took()}.`, 'good');
+          item.steps[role] = 'done'; item.progress = null; await persist(); return;
+        }
+        note(item, `${label} answered after ${took()}: the container is running but the app is not answering yet. A first start runs database migrations and seeders, which can take a few minutes.`);
       } catch (error) {
         // Timeouts and gateway errors mean the node is still working; the retry joins its queue.
         const transient = error instanceof ProvisionError && (error.status >= 500 || error.status === 429 || error.message === 'domain_verification_required');
         if (error.message === 'domain_verification_required') permits.delete(item.id);
-        if (!transient || exhausted(attempt)) { item.steps[role] = 'failed'; throw error; }
+        const why = {still_running_on_node: `Cloudflare closed the request after 100 s, but ${label} keeps working.`, node_timeout: `${label} did not answer within the request time; it keeps working.`, node_unreachable: `${label} could not be reached.`, domain_verification_required: `${label} refused the domain permit; getting a fresh one.`, rate_limited: `${label} is rate limiting; waiting.`}[error.message] || `${label} answered ${error.message}.`;
+        if (!transient || exhausted(attempt)) { note(item, `${why} Stopping.`, 'bad'); item.steps[role] = 'failed'; item.progress = null; throw error; }
+        note(item, why, 'warn');
       }
-      if (exhausted(attempt)) { item.steps[role] = 'failed'; throw new ProvisionError(504, 'not_ready_in_time'); }
-      await sleep(Math.min(5000 * attempt, 20000));
+      if (exhausted(attempt)) { note(item, `${label} was not ready within ${Math.round(DEPLOY_WAIT / 60000)} minutes.`, 'bad'); item.steps[role] = 'failed'; item.progress = null; throw new ProvisionError(504, 'not_ready_in_time'); }
+      const wait = Math.min(5000 * attempt, 20000);
+      item.progress.retryAt = new Date(now() + wait).toISOString();
+      await persist();
+      await sleep(wait);
     }
   }
 
@@ -226,15 +250,18 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       if (item.steps.primary !== 'done') await deployOn(item, 'primary', admin);
       if (item.steps.secondary !== 'done') await deployOn(item, 'secondary');
       item.steps.routing = 'running';
+      note(item, 'Both nodes are ready. Publishing the instance to the routing Worker so visitors reach it.');
       await persist();
       // Onboarding registered the custom-domain service as pending at version 0, so ready needs 1.
       const result = await routing('instances', {id: item.id, serviceId: item.serviceId, customerId: item.customerId, primary: item.primary, status: 'ready', lifecycleVersion: 1});
       if (result.status !== 200 && result.status !== 201) { item.steps.routing = 'failed'; throw new ProvisionError(result.status, String(result.data.error || 'routing_error').slice(0, 80)); }
       item.steps.routing = 'done';
+      note(item, `Live at https://${item.hostname}.`, 'good');
       await update(item, {status: 'ready', error: null, readyAt: new Date(now()).toISOString()});
       record('instance_ready', {region: item.primary, id: item.id});
     } catch (error) {
-      await update(item, {status: 'failed', error: String(error?.message || 'deploy_failed').slice(0, 80)});
+      if (item.steps.routing === 'running') { item.steps.routing = 'failed'; note(item, `The routing Worker answered ${error?.message}.`, 'bad'); }
+      await update(item, {status: 'failed', error: String(error?.message || 'deploy_failed').slice(0, 80), progress: null});
       record('instance_failed', {region: item.primary, id: item.id, path: item.error});
     } finally { running.delete(item.id); }
   }
@@ -250,6 +277,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, item.licenseKey ? 'invalid_license_key' : 'license_key_required');
     // Once a node holds the tenant, its licence changes only through the master website's domain flow.
     if (licenseKey !== item.licenseKey && (item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'license_locked');
+    note(item, `Deployment started by ${user}.`);
     await update(item, {licenseKey, status: 'deploying', error: null});
     record('instance_deploy', {user, region: item.primary, id});
     running.set(id, run(item, {displayName: admin.displayName, email: admin.email, password: admin.password}));
