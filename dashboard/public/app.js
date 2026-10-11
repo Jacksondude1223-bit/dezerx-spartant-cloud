@@ -1046,7 +1046,7 @@ async function instancePage(ctx, id, polling = false) {
     detail('Product', item.product || '—'), detail('Licence', item.licenseHint ? h('span', {class: 'mono'}, item.licenseHint) : h('span', {class: 'faint'}, 'Entered at deploy')),
     detail('Customer reference', item.customerId), detail('Created', `${ago(item.createdAt)} by ${item.createdBy || '—'}`)));
   const body = [];
-  if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(item.error))));
+  if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), h('div', null, h('strong', null, item.status === 'failed' ? 'Deployment stopped: ' : ''), explain(new ApiError(item.error)), item.log?.length ? ' The full sequence is under What happened, below.' : '', item.status === 'failed' ? ' Fix the cause if there is one, then press Retry deployment; it continues where it stopped.' : '')));
   if (item.status === 'awaiting_dns') body.push(
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Domain checks'), h('span', {class: 'note'}, 'Press Verify DNS to re-check')), dnsStages(item)),
     h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
