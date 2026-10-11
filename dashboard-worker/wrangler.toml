@@ -28,5 +28,5 @@ crons = ["* * * * *"]
 [[d1_databases]]
 binding = "DASHBOARD_DB"
 database_name = "spartan-cloud-dashboard"
-database_id = "CREATE_SEPARATE_DASHBOARD_DATABASE"
+database_id = "bba95636-e2f1-46d1-980d-ee481ce3bde0"
 migrations_dir = "migrations"
