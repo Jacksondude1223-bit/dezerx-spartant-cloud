@@ -9,10 +9,11 @@ import {issueDomainPermit} from '../node/domain-permit.mjs';
 // service" flow in docs/API.md: provision the primary (with the first administrator),
 // then the secondary, then publish the tenant as ready to the routing Worker.
 //
-// A customer domain must first pass the routing Worker's onboarding checks (ownership
-// TXT, Cloudflare hostname and certificate, Worker route), which issue the provisioning
-// permit the nodes require. The tenant's own subdomain on BASE_DOMAIN is the operator's
-// hostname, so for that one the dashboard issues the permit itself.
+// Without a customer domain, the routing Worker assigns instance-NNNN.<zone> as a Worker
+// Custom Domain: one level under the zone, so Cloudflare's free certificate covers it.
+// That hostname is the operator's, so the dashboard issues the node permit itself. A
+// customer domain must first pass the routing Worker's onboarding checks (ownership
+// TXT, Cloudflare hostname and certificate, Worker route), which issue the permit.
 //
 // Suspend, resume and terminate stay with whoever owns billing; this only creates.
 
@@ -39,7 +40,9 @@ export function loadProvisioningConfig(env, adminSecret) {
   if (routingUrl.protocol !== 'https:') throw new Error('ROUTING_API_URL must use https');
   const stateFile = env.DASHBOARD_STATE_FILE || path.join(env.STATE_DIRECTORY || '/var/lib/spartan-dashboard', 'instances.json');
   // Legacy per-plane overrides, as on the nodes and the routing Worker. Permits always use ORIGIN_SECRET.
-  return {originSecret, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
+  // Only shown in the form; the routing Worker decides the real name.
+  const instanceDomain = String(env.INSTANCE_DOMAIN || baseDomain.split('.').slice(1).join('.') || baseDomain).toLowerCase();
+  return {originSecret, instanceDomain, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
 }
 
 // Accepts "panel.example.com", "https://panel.example.com/" and the like.
@@ -108,7 +111,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
   // What the browser sees: never the app key, fingerprint, full licence or permit.
   const view = item => ({
     id: item.id, primary: item.primary, secondary: item.secondary, hostname: item.hostname, custom: item.custom, url: `https://${item.hostname}`,
-    product: productName(item.licenseKey), licenseHint: `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}`,
+    product: item.licenseKey ? productName(item.licenseKey) : null, licenseHint: item.licenseKey ? `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}` : null,
     customerId: item.customerId, serviceId: item.serviceId, status: item.status, error: item.error || null, steps: item.steps || {},
     dns: item.dns || null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
   });
@@ -116,6 +119,8 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
   const find = async id => { await load(); const item = instances.get(id); if (!item) throw new ProvisionError(404, 'instance_not_found'); return item; };
   const dnsView = data => ({stage: data.stage, readyToProvision: data.readyToProvision === true, records: Array.isArray(data.dnsRecords) ? data.dnsRecords : [], status: data.status, certificateStatus: data.ssl?.status || data.certificateStatus || null, checkedAt: new Date(now()).toISOString()});
   const onboarding = item => ({id: item.id, serviceId: item.serviceId, customerId: item.customerId, primary: item.primary, hostname: item.hostname});
+
+  const routingError = result => new ProvisionError(result.status === 401 ? 502 : result.status >= 400 ? result.status : 502, result.status === 401 ? 'routing_unauthorized' : String(result.data.error || 'routing_error').slice(0, 80));
 
   async function list() {
     await load();
@@ -127,8 +132,10 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const primary = input.primary;
     if (!['us', 'de'].includes(primary) || !nodes[primary]) throw new ProvisionError(400, 'invalid_region');
     if (!nodes[other(primary)]) throw new ProvisionError(400, 'both_nodes_required');
-    const licenseKey = typeof input.licenseKey === 'string' ? input.licenseKey.trim() : '';
-    if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, 'invalid_license_key');
+    // A licence is issued for one hostname. An assigned hostname is only known after
+    // create, so its licence can come with the deploy instead.
+    const licenseKey = typeof input.licenseKey === 'string' && input.licenseKey.trim() ? input.licenseKey.trim() : null;
+    if ((licenseKey || input.domain) && !validLicenseKey(licenseKey)) throw new ProvisionError(400, 'invalid_license_key');
     const customerId = input.customerId ? String(input.customerId).trim() : 'dashboard';
     if (!FIELD.test(customerId)) throw new ProvisionError(400, 'invalid_customer_id');
     let hostname = null;
@@ -142,7 +149,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const serviceId = `dash_${randomBytes(10).toString('hex')}`;
     const id = 't-' + createHash('sha256').update(serviceId).digest('hex').slice(0, 24);
     const item = {
-      id, serviceId, customerId, primary, secondary: other(primary), licenseKey, hostname: hostname || `${id}.${p.baseDomain}`, custom: Boolean(hostname),
+      id, serviceId, customerId, primary, secondary: other(primary), licenseKey, hostname, custom: Boolean(hostname),
       appKey: 'base64:' + randomBytes(32).toString('base64'), fingerprint: createHash('sha256').update(JSON.stringify([serviceId, customerId, primary])).digest('hex'),
       lifecycleVersion: 0, status: hostname ? 'awaiting_dns' : 'ready_to_deploy', steps: {}, createdBy: user, createdAt: new Date(now()).toISOString()
     };
@@ -150,6 +157,14 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       const result = await routing('onboarding/prepare', onboarding(item));
       if (result.status >= 400 && !result.data.hostname) throw new ProvisionError(result.status === 401 ? 502 : result.status, result.status === 401 ? 'routing_unauthorized' : String(result.data.error || 'routing_error').slice(0, 80));
       item.dns = dnsView(result.data);
+    } else {
+      // The hostname API needs the routing record, so register it as pending first.
+      const pending = await routing('instances', {id, serviceId, customerId, primary, status: 'pending', lifecycleVersion: 0});
+      if (pending.status !== 200 && pending.status !== 201) throw routingError(pending);
+      let assigned = await routing(`instances/${id}/hostname`, {});
+      if (assigned.status === 503 && assigned.data.retryable) assigned = await routing(`instances/${id}/hostname`, {});
+      if (assigned.status !== 200 || !normalizeDomain(assigned.data.hostname)) throw routingError(assigned);
+      item.hostname = normalizeDomain(assigned.data.hostname);
     }
     instances.set(id, item);
     await update(item, {});
@@ -231,7 +246,11 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (item.status === 'awaiting_dns') throw new ProvisionError(409, 'domain_not_verified');
     const admin = input.initialAdmin;
     if (!validInitialAdmin(admin)) throw new ProvisionError(400, 'invalid_initial_admin');
-    await update(item, {status: 'deploying', error: null});
+    const licenseKey = typeof input.licenseKey === 'string' && input.licenseKey.trim() ? input.licenseKey.trim() : item.licenseKey;
+    if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, item.licenseKey ? 'invalid_license_key' : 'license_key_required');
+    // Once a node holds the tenant, its licence changes only through the master website's domain flow.
+    if (licenseKey !== item.licenseKey && (item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'license_locked');
+    await update(item, {licenseKey, status: 'deploying', error: null});
     record('instance_deploy', {user, region: item.primary, id});
     running.set(id, run(item, {displayName: admin.displayName, email: admin.email, password: admin.password}));
     return view(item);

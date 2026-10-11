@@ -47,6 +47,8 @@ const MESSAGES = {
   invalid_license_key: 'That licence key is not valid. It must start with SPARTANSTARTER_, SPARTANCLOUD_, SPARTANCLOUDPLUS_, SPARTANPROFESSIONAL_, SPARTANULTIMATE_ or SPARTANDEV_.',
   invalid_domain: 'Enter a bare domain such as panel.customer.com.', reserved_hostname: 'That domain belongs to the platform itself. Leave it blank to use the default subdomain.',
   hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
+  license_key_required: 'Enter the Spartan licence issued for this hostname.', license_locked: 'The licence cannot change after a node holds this tenant.',
+  instance_domain_configuration_required: 'The routing Worker cannot assign hostnames yet. Set CF_INSTANCE_API_TOKEN on it (npm run configure does this).', instance_hostname_setup_failed: 'Cloudflare did not attach the hostname. Try again in a minute.',
   invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
   ownership_not_verified: 'The DNS records are not visible yet. Add them, wait a few minutes and verify again.', domain_not_verified: 'Verify the domain first.',
   domain_verification_required: 'The node refused the domain permit. Verify the domain again.', instance_busy: 'This instance is being deployed right now.',
@@ -905,7 +907,7 @@ function choiceGroup(name, options, value, onChange) {
 
 async function newInstancePage(ctx) {
   if (!state.session.provisioning) return disabledNotice(ctx);
-  const base = state.session.provisioning.baseDomain;
+  const zone = state.session.provisioning.instanceDomain || state.session.provisioning.baseDomain;
   const nodes = state.session.nodes.map(n => n.region);
   const form = {primary: nodes.includes('us') ? 'us' : nodes[0], domainMode: 'default'};
   const license = h('input', {class: 'input mono', placeholder: 'SPARTANPROFESSIONAL_…', spellcheck: 'false', autocomplete: 'off'});
@@ -919,12 +921,13 @@ async function newInstancePage(ctx) {
   const submit = button('Continue', {kind: 'primary', icon: 'rocket'});
   const message = h('div', {class: 'banner error', style: {display: 'none'}});
   const regionChoices = choiceGroup('primary', [['us', 'Home: United States'], ['de', 'Home: Germany']].map(([value]) => ({value, lead: flag(value), title: regionName(value), text: value === 'us' ? 'Database and app run in the US; Germany holds the standby.' : 'Database and app run in Germany; the US holds the standby.', disabled: !nodes.includes(value)})), form.primary, value => { form.primary = value; });
-  const domainChoices = choiceGroup('domain', [{value: 'default', title: 'Default subdomain', text: `t-<id>.${base}, ready immediately`}, {value: 'custom', title: 'Customer domain', text: 'Verified with DNS before deploying'}], form.domainMode, value => { form.domainMode = value; domainField.style.display = value === 'custom' ? '' : 'none'; if (value === 'custom') domain.focus(); });
+  const licenseSection = h('div', {class: 'form-section', style: {display: 'none'}}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, 'Spartan licence key, issued for the customer domain'), license, product));
+  const domainChoices = choiceGroup('domain', [{value: 'default', title: 'Assigned subdomain', text: `instance-1234.${zone} style, free SSL. You get the name first, then enter its licence.`}, {value: 'custom', title: 'Customer domain', text: 'Verified with DNS before deploying'}], form.domainMode, value => { form.domainMode = value; domainField.style.display = licenseSection.style.display = value === 'custom' ? '' : 'none'; if (value === 'custom') domain.focus(); });
   submit.addEventListener('click', async () => {
     message.style.display = 'none';
     submit.disabled = true;
     try {
-      const item = await api.post('/api/instances', {primary: form.primary, licenseKey: license.value.trim(), domain: form.domainMode === 'custom' ? domain.value.trim() : '', customerId: customer.value.trim() || undefined});
+      const item = await api.post('/api/instances', {primary: form.primary, licenseKey: form.domainMode === 'custom' ? license.value.trim() : undefined, domain: form.domainMode === 'custom' ? domain.value.trim() : '', customerId: customer.value.trim() || undefined});
       go(`#/instances/${item.id}`);
     } catch (error) { if (error.code !== 'not_signed_in') { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; } }
     finally { submit.disabled = false; }
@@ -936,11 +939,10 @@ async function newInstancePage(ctx) {
     h('div', {class: 'card form-card'},
       message,
       h('div', {class: 'form-section'}, h('h2', null, 'Region'), h('p', {class: 'muted'}, 'The home region owns the database. It cannot be changed later.'), regionChoices),
-      h('div', {class: 'form-section'}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, 'Spartan licence key'), license, product)),
       h('div', {class: 'form-section'}, h('h2', null, 'Domain'), domainChoices, domainField),
+      licenseSection,
       h('div', {class: 'form-section'}, h('h2', null, 'Reference'), h('label', {class: 'field'}, h('span', null, 'Customer reference (optional)'), customer, h('span', {class: 'hint'}, 'Stored with the routing record. Letters, digits, _ and -.'))),
       h('div', {class: 'form-foot'}, h('a', {class: 'btn', href: '#/instances'}, 'Cancel'), submit))]);
-  setTimeout(() => license.focus(), 0);
 }
 
 function dnsCard(item) {
@@ -961,13 +963,17 @@ function adminForm(item, onDone) {
   const name = h('input', {class: 'input', autocomplete: 'off', placeholder: 'Customer Owner'});
   const email = h('input', {class: 'input', type: 'email', autocomplete: 'off', placeholder: 'owner@customer.com'});
   const password = h('input', {class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', value: `${randomHex(6)}-${randomHex(6)}`});
+  const license = item.licenseHint ? null : h('input', {class: 'input mono', placeholder: 'SPARTANCLOUD_…', spellcheck: 'false', autocomplete: 'off'});
+  const product = h('span', {class: 'hint'}, `Get the Spartan licence for ${item.hostname} from DezerX and paste it here.`);
+  license?.addEventListener('input', () => { const name = productOf(license.value.trim()); product.className = `hint ${name ? 'good' : 'bad'}`; product.replaceChildren(...(name ? [icon('check'), `Product: ${name}`] : ['Unknown prefix'])); });
   const deployButton = button(item.status === 'failed' ? 'Retry deployment' : 'Deploy', {kind: 'primary', icon: 'rocket'});
   deployButton.addEventListener('click', async () => {
     deployButton.disabled = true;
-    try { await api.post(`/api/instances/${item.id}/deploy`, {initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast('Deployment started'); onDone(); }
+    try { await api.post(`/api/instances/${item.id}/deploy`, {...(license ? {licenseKey: license.value.trim()} : {}), initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast('Deployment started'); onDone(); }
     catch (error) { fail(error); deployButton.disabled = false; }
   });
   return h('div', {class: 'card form-card'},
+    license ? h('div', {class: 'form-section'}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, `Spartan licence key for ${item.hostname}`), license, product)) : null,
     h('div', {class: 'form-section'}, h('h2', null, 'First administrator'), h('p', {class: 'muted'}, 'Created as superadmin on the first deployment only. The password is never stored by the dashboard; copy it now.'),
       h('div', {class: 'form-grid'}, h('label', {class: 'field'}, h('span', null, 'Name'), name), h('label', {class: 'field'}, h('span', null, 'Email'), email)),
       h('label', {class: 'field'}, h('span', null, 'Password (8 to 128 characters)'), h('div', {class: 'copy-cell'}, password, copyButton(() => password.value)))),
@@ -992,7 +998,7 @@ async function instancePage(ctx, id) {
   const details = h('div', {class: 'card'}, h('dl', {class: 'details'},
     detail('URL', item.url), detail('Tenant ID', h('span', {class: 'mono'}, item.id)),
     detail('Home region', h('span', {class: 'label-icon'}, flag(item.primary), regionName(item.primary))), detail('Standby', h('span', {class: 'label-icon'}, flag(item.secondary), regionName(item.secondary))),
-    detail('Product', item.product || '—'), detail('Licence', h('span', {class: 'mono'}, item.licenseHint)),
+    detail('Product', item.product || '—'), detail('Licence', item.licenseHint ? h('span', {class: 'mono'}, item.licenseHint) : h('span', {class: 'faint'}, 'Entered at deploy')),
     detail('Customer reference', item.customerId), detail('Created', `${ago(item.createdAt)} by ${item.createdBy || '—'}`)));
   const body = [];
   if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(item.error))));

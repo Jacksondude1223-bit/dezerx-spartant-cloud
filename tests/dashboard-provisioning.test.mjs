@@ -33,6 +33,8 @@ async function setup({nodeReply, routerReply} = {}) {
 }
 async function defaultRouter(pathname, body) {
   if (pathname === '/v1/routing/instances') return [201, {...body}];
+  const assign = pathname.match(/^\/v1\/routing\/instances\/(t-[a-f0-9]{24})\/hostname$/);
+  if (assign) return [200, {id: assign[1], hostname: 'instance-4321.example.test', url: 'https://instance-4321.example.test', status: 'active'}];
   if (pathname === '/v1/routing/onboarding/prepare') return [201, {hostname: body.hostname, status: 'pending_ownership', stage: 'spartan_ownership', readyToProvision: false, dnsRecords: [{type: 'CNAME', name: body.hostname, target: 'load.example.test', purpose: 'routing'}, {type: 'TXT', name: `_spartan-verification.${body.hostname}`, value: 'proof', purpose: 'spartan_ownership'}]}];
   if (pathname === '/v1/routing/onboarding/verify') {
     const permit = await issueDomainPermit(originSecret, body.id, body.hostname);
@@ -53,20 +55,25 @@ test('instance creation is optional and validates its configuration', () => {
   assert.equal(productName('SPARTANCLOUDPLUS_abcdefghijklmnop'), 'Cloud Plus');
 });
 
-test('a default-subdomain instance provisions the primary, then the secondary, then publishes ready', async () => {
+test('an assigned-hostname instance takes its licence at deploy, provisions both nodes, then publishes ready', async () => {
   const {provisioner, calls, provisioning} = await setup();
   await assert.rejects(provisioner.create({primary: 'us', licenseKey: 'NOTSPARTAN_abcdefghijkl'}, 'admin'), /invalid_license_key/);
-  const created = await provisioner.create({primary: 'de', licenseKey: license}, 'admin');
+  const created = await provisioner.create({primary: 'de'}, 'admin');
   assert.equal(created.status, 'ready_to_deploy');
-  assert.equal(created.hostname, `${created.id}.load.example.test`);
-  assert.equal(created.product, 'Professional');
+  assert.equal(created.hostname, 'instance-4321.example.test', 'the routing Worker assigns a one-level hostname');
+  assert.equal(created.licenseHint, null);
+  assert.deepEqual(calls.splice(0).map(c => [c.pathname, c.body.status]), [['/v1/routing/instances', 'pending'], [`/v1/routing/instances/${created.id}/hostname`, undefined]]);
   for (const secret of ['appKey', 'fingerprint', 'licenseKey']) assert.equal(created[secret], undefined, `${secret} never reaches the browser`);
   assert.ok(!JSON.stringify(created).includes(license));
 
   await assert.rejects(provisioner.deploy(created.id, {initialAdmin: {...admin, role: 'owner'}}, 'admin'), /invalid_initial_admin/);
-  await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  await assert.rejects(provisioner.deploy(created.id, {initialAdmin: admin}, 'admin'), /license_key_required/);
+  await provisioner.deploy(created.id, {licenseKey: license, initialAdmin: admin}, 'admin');
   await provisioner.idle();
   const done = await provisioner.get(created.id);
+  assert.equal(done.product, 'Professional');
+  for (const secret of ['appKey', 'fingerprint', 'licenseKey']) assert.equal(done[secret], undefined);
+  assert.ok(!JSON.stringify(done).includes(license));
   assert.equal(done.status, 'ready');
   assert.deepEqual(calls.map(c => `${c.origin}${c.pathname}`), ['https://node-de.example.test/control/provision', 'http://127.0.0.1:8788/control/provision', 'https://load.example.test/v1/routing/instances']);
   const [primary, secondary, route] = calls.map(c => c.body);
@@ -133,7 +140,7 @@ test('a deployment retries a node that is still provisioning and reports failure
 test('the dashboard exposes instance creation only when configured, behind session and CSRF', async () => {
   const {provisioning} = await setup();
   const config = {secret: adminSecret, nodes, provisioning, user: 'admin', passwordHash: await hashPassword('a long admin password'), secureCookie: false, sessionHours: 1, publicLabel: 'Spartan Cloud'};
-  const server = createDashboard(config, {log: () => {}, fetchImpl: async () => new Response('{}', {status: 500})});
+  const server = createDashboard(config, {log: () => {}, fetchImpl: async (url, init) => { const [status, data] = await defaultRouter(new URL(url).pathname, JSON.parse(init.body)); return new Response(JSON.stringify(data), {status}); }});
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const origin = `http://127.0.0.1:${server.address().port}`;
   try {
@@ -142,7 +149,7 @@ test('the dashboard exposes instance creation only when configured, behind sessi
     const cookie = login.headers.get('set-cookie').split(';')[0];
     const {csrf} = await login.json();
     const session = await (await fetch(`${origin}/api/session`, {headers: {cookie}})).json();
-    assert.deepEqual(session.provisioning, {baseDomain: 'load.example.test'});
+    assert.deepEqual(session.provisioning, {baseDomain: 'load.example.test', instanceDomain: 'example.test'});
     const body = JSON.stringify({primary: 'us', licenseKey: license});
     assert.equal((await fetch(`${origin}/api/instances`, {method: 'POST', headers: {cookie, 'content-type': 'application/json'}, body})).status, 403);
     const created = await fetch(`${origin}/api/instances`, {method: 'POST', headers: {cookie, 'content-type': 'application/json', 'x-csrf-token': csrf}, body});
