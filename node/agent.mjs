@@ -240,6 +240,7 @@ async function provisionOnce(input, progress) {
   }
   return {id, status: 'provisioning', role};
 }
+const PERMANENT_PROVISION_ERRORS = {invalid_input: 422, invalid_license_key: 422, invalid_laravel_env: 422, invalid_initial_admin: 422, initial_admin_failed: 422, tenant_conflict: 409, container_conflict: 409, node_capacity: 409, domain_verification_required: 409, stale_operation: 409, service_terminated: 409};
 async function provision(input) {
   const before = validId(input.id) ? await load(input.id) : null;
   const mayRecover = !before || before.status !== 'ready';
@@ -250,7 +251,8 @@ async function provision(input) {
       if (result.status === 'ready' || !mayRecover || attempt === 2) return result;
       if (!await recovery.recover(input.id, progress.stage, new Error('health_timeout'))) return result;
     } catch (error) {
-      if (['invalid_input', 'invalid_license_key', 'tenant_conflict', 'container_conflict', 'node_capacity', 'invalid_laravel_env', 'invalid_initial_admin', 'initial_admin_failed', 'domain_verification_required', 'stale_operation', 'service_terminated'].includes(error.message)) throw error;
+      // Retrying these cannot help, so name them instead of the generic 503 operation_failed.
+      if (Object.hasOwn(PERMANENT_PROVISION_ERRORS, error.message)) throw error.apiStatus ? error : apiError(error.message, PERMANENT_PROVISION_ERRORS[error.message]);
       if (!mayRecover || attempt === 2 || !await recovery.recover(input.id, progress.stage, error).catch(() => false)) throw error;
     }
   }

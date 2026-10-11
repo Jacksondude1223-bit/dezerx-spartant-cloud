@@ -49,6 +49,10 @@ const MESSAGES = {
   hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
   license_key_required: 'Enter the Spartan licence issued for this hostname.', license_locked: 'The licence cannot change after a node holds this tenant.',
   instance_domain_configuration_required: 'The routing Worker cannot assign hostnames yet. Set CF_INSTANCE_API_TOKEN on it (npm run configure does this).', instance_hostname_setup_failed: 'Cloudflare did not attach the hostname. Try again in a minute.',
+  initial_admin_failed: 'Spartan refused to create the first administrator. Use a stronger password (upper and lower case, a number and a symbol). If an earlier attempt already created the admin, enter exactly the same name, email and password as then.',
+  invalid_laravel_env: 'The node rejected its extra Laravel environment file (LARAVEL_ENV_FILE).', node_capacity: 'The node already holds its maximum number of tenants (MAX_TENANTS).',
+  stale_operation: 'The node has a newer lifecycle version for this tenant.', service_terminated: 'This tenant was terminated on the node and cannot be provisioned again.',
+  container_conflict: 'A container with this name belongs to a different tenant on the node.',
   invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
   ownership_not_verified: 'The DNS records are not visible yet. Add them, wait a few minutes and verify again.', domain_not_verified: 'Verify the domain first.',
   domain_verification_required: 'The node refused the domain permit. Verify the domain again.', instance_busy: 'This instance is being deployed right now.',
@@ -1006,10 +1010,15 @@ function dnsStages(item) {
   const current = Math.max(0, order.indexOf(item.dns?.stage));
   return h('div', {class: 'card'}, h('ol', {class: 'steps'}, labels.map(([label, hint], i) => h('li', {class: i < current ? 'done' : i === current ? 'running' : 'pending'}, h('span', {class: 'step-mark'}, i < current ? icon('check') : i === current ? h('span', {class: 'spinner'}) : null), h('div', {class: 'step-text'}, label, h('div', {class: 'sub'}, hint))))));
 }
+// Upper and lower case, digits and a symbol, so it passes Spartan's password rules.
+function strongPassword() {
+  const pick = (set, n) => Array.from(crypto.getRandomValues(new Uint32Array(n)), v => set[v % set.length]).join('');
+  return `${pick('ABCDEFGHJKLMNPQRSTUVWXYZ', 3)}${pick('abcdefghijkmnopqrstuvwxyz', 6)}-${pick('23456789', 4)}!${pick('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', 6)}`;
+}
 function adminForm(item, onDone) {
   const name = h('input', {class: 'input', autocomplete: 'off', placeholder: 'Customer Owner'});
   const email = h('input', {class: 'input', type: 'email', autocomplete: 'off', placeholder: 'owner@customer.com'});
-  const password = h('input', {class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', value: `${randomHex(6)}-${randomHex(6)}`});
+  const password = h('input', {class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', value: strongPassword()});
   const license = item.licenseHint ? null : h('input', {class: 'input mono', placeholder: 'SPARTANCLOUD_…', spellcheck: 'false', autocomplete: 'off'});
   const product = h('span', {class: 'hint'}, `Get the Spartan licence for ${item.hostname} from DezerX and paste it here.`);
   license?.addEventListener('input', () => { const name = productOf(license.value.trim()); product.className = `hint ${name ? 'good' : 'bad'}`; product.replaceChildren(...(name ? [icon('check'), `Product: ${name}`] : ['Unknown prefix'])); });

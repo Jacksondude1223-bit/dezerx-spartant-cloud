@@ -443,7 +443,7 @@ Backups are written to the same machine as the data they protect. Copy them off 
 | 500 | Optional provisioning Worker's internal failure |
 | 503 | Node operation failed, origin unavailable, or domain/recovery operation unavailable |
 
-Errors usually have `{"error":"code"}`. Domain ownership errors also include the public domain record. The node currently collapses most provisioning/lifecycle validation and operational failures into HTTP 503 `operation_failed`, with a more specific code in its server log. Do not assume every node 503 is a transient network failure.
+Errors usually have `{"error":"code"}`. Domain ownership errors also include the public domain record. Provisioning failures that a retry cannot fix are named: HTTP 422 for `invalid_input`, `invalid_license_key`, `invalid_laravel_env`, `invalid_initial_admin` and `initial_admin_failed` (Spartan refused to create the first administrator, for example because the password does not meet its rules, or a different first user already exists), and HTTP 409 for `tenant_conflict`, `container_conflict`, `node_capacity`, `domain_verification_required`, `stale_operation` and `service_terminated`. Other provisioning and lifecycle failures still collapse into HTTP 503 `operation_failed`, with a more specific code in the node's server log. Do not assume every node 503 is a transient network failure.
 
 Retry connection failures and genuine transient failures with bounded backoff and a newly signed timestamp. Preserve identity, keys, initial-administrator payload, and lifecycle version for retries. A changed desired state needs a newer version. Reconcile both nodes and routing metadata after partial failures. Do not retry termination by creating a new record with the same tenant ID.
 
