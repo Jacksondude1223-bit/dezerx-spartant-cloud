@@ -55,7 +55,7 @@ export function normalizeDomain(value) {
   return HOSTNAME.test(text) && text.length <= 200 ? text : null;
 }
 
-export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nodeStatus = null, queueInterval = 60000}) {
+export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nodeStatus = null, adminCall = null, queueInterval = 60000}) {
   const p = config.provisioning;
   const instances = new Map();
   const permits = new Map();
@@ -105,10 +105,12 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const timestamp = String(now());
     return {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': createHmac('sha256', secret).update(`${timestamp}\nPOST\n${pathname}\n${body}`).digest('hex'), 'user-agent': 'spartan-dashboard'};
   };
-  async function call(origin, pathname, payload, timeout, secret) {
-    const body = JSON.stringify(payload);
+  async function call(origin, pathname, payload, timeout, secret, method = 'POST') {
+    const body = method === 'GET' ? '' : JSON.stringify(payload);
     let response;
-    try { response = await fetchImpl(origin + pathname, {method: 'POST', headers: signed(secret, pathname, body), body, redirect: 'manual', signal: AbortSignal.timeout(timeout)}); }
+    const headers = signed(secret, pathname, body);
+    if (method === 'GET') { delete headers['content-type']; headers['x-spartan-signature'] = createHmac('sha256', secret).update(`${headers['x-spartan-timestamp']}\nGET\n${pathname}\n`).digest('hex'); }
+    try { response = await fetchImpl(origin + pathname, {method, headers, body: method === 'GET' ? undefined : body, redirect: 'manual', signal: AbortSignal.timeout(timeout)}); }
     catch (error) { throw new ProvisionError(error?.name === 'TimeoutError' ? 504 : 502, error?.name === 'TimeoutError' ? 'node_timeout' : 'node_unreachable'); }
     const text = await response.text();
     let data;
@@ -389,7 +391,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
   async function discard(id, user) {
     const item = await find(id);
     if (running.has(id) || ['deploying', 'queued'].includes(item.status)) throw new ProvisionError(409, 'instance_busy');
-    if (item.status === 'ready' || item.steps?.primary === 'done' || item.steps?.secondary === 'done') throw new ProvisionError(409, 'instance_deployed');
+    if (item.status !== 'terminated' && (['ready', 'suspended'].includes(item.status) || item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'instance_deployed');
     instances.delete(id);
     permits.delete(id);
     await persist();
@@ -397,7 +399,81 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     return {discarded: true};
   }
 
+  // Suspend, resume and terminate any tenant on the nodes, created here or by the master
+  // website. The next lifecycle version is one above the highest any party has seen (both
+  // nodes, the routing Worker, this dashboard), so it never collides with a stale one; if
+  // a master website also manages the tenant, it must read versions the same way.
+  const busyLifecycle = new Set();
+  async function lifecycle(id, action, user) {
+    if (!['suspend', 'resume', 'terminate'].includes(action)) throw new ProvisionError(400, 'invalid_action');
+    if (!/^t-[a-f0-9]{24}$/.test(id)) throw new ProvisionError(400, 'invalid_id');
+    if (!nodeStatus || !adminCall) throw new ProvisionError(503, 'provisioning_disabled');
+    await load();
+    if (busyLifecycle.has(id) || running.has(id)) throw new ProvisionError(409, 'instance_busy');
+    busyLifecycle.add(id);
+    const item = instances.get(id);
+    const say = (text, tone) => { if (item) note(item, text, tone); };
+    try {
+      const copies = [];
+      for (const region of Object.keys(nodes)) {
+        let data;
+        try { data = await nodeStatus(region); } catch { throw new ProvisionError(502, `node_${region}_unreachable`); }
+        const copy = (data?.tenants || []).find(t => t.id === id);
+        if (copy) copies.push({region, ...copy});
+      }
+      if (!copies.length) throw new ProvisionError(404, 'tenant_not_found');
+      const fingerprint = copies[0].fingerprint;
+      if (!/^[a-f0-9]{64}$/.test(fingerprint || '') || copies.some(c => c.fingerprint !== fingerprint)) throw new ProvisionError(409, 'tenant_conflict');
+      const route = await call(p.routingUrl, `/v1/routing/instances/${id}`, null, 30000, p.routingSecret, 'GET');
+      if (route.status === 401) throw new ProvisionError(502, 'routing_unauthorized');
+      const routed = route.status === 200 ? route.data : null;
+      const current = copies.find(c => c.role === 'primary')?.status || routed?.status;
+      if (action === 'suspend' && current === 'suspended') throw new ProvisionError(409, 'already_suspended');
+      if (action === 'resume' && current !== 'suspended') throw new ProvisionError(409, 'not_suspended');
+      const version = Math.max(0, ...copies.map(c => c.lifecycleVersion || 0), routed?.lifecycleVersion || 0, item?.lifecycleVersion || 0, item?.status === 'ready' ? 1 : 0) + 1;
+      const publish = async status => {
+        if (!routed) return;
+        const result = await routing('instances', {id, serviceId: routed.serviceId, customerId: routed.customerId, primary: routed.primary, status, lifecycleVersion: version});
+        if (result.status !== 200 && result.status !== 201) throw routingError(result);
+      };
+      const onNodes = async body => {
+        for (const copy of copies) {
+          const result = await call(nodes[copy.region], '/control/lifecycle', body, isLocal(copy.region) ? LOCAL_TIMEOUT : REMOTE_TIMEOUT, p.controlSecret);
+          if (result.status !== 200) throw new ProvisionError(result.status, `node_${copy.region}_${String(result.data.error || 'error').slice(0, 60)}`);
+        }
+      };
+      say(`${{suspend: 'Suspending', resume: 'Resuming', terminate: 'Terminating'}[action]} (lifecycle version ${version}), requested by ${user}.`);
+      if (action === 'suspend') {
+        // Router first, so visitors get the suspended page before containers stop.
+        await publish('suspended');
+        await onNodes({id, fingerprint, lifecycleVersion: version, action: 'suspended'});
+      } else if (action === 'resume') {
+        // Primary first, so the database owner is up before the standby and the router.
+        for (const copy of [...copies].sort((a, b) => (a.role === 'primary' ? -1 : 1) - (b.role === 'primary' ? -1 : 1))) {
+          const result = await adminCall(copy.region, 'resume', {id, lifecycleVersion: version}, {timeout: isLocal(copy.region) ? LOCAL_TIMEOUT : REMOTE_TIMEOUT});
+          if (result?.status !== 'ready') say(`node-${copy.region} is still starting; the router waits until it answers ready on a later resume.`, 'warn');
+        }
+        await publish('ready');
+      } else {
+        // The domain API only works on a ready tenant, so detach a customer domain first.
+        if (item?.custom && routed?.status === 'ready') {
+          const detached = await routing(`instances/${id}/domains/delete`, {hostname: item.hostname});
+          if (detached.status >= 400 && detached.status !== 404) throw routingError(detached);
+        }
+        await publish('terminated');
+        await onNodes({id, fingerprint, lifecycleVersion: version, action: 'terminated'});
+      }
+      const status = {suspend: 'suspended', resume: 'ready', terminate: 'terminated'}[action];
+      if (item) { say({suspend: 'Suspended. Visitors see the suspended page; data is kept.', resume: 'Resumed and live again.', terminate: 'Terminated. Containers are removed; the database, storage and backups stay on the nodes.'}[action], action === 'resume' ? 'good' : ''); await update(item, {status, lifecycleVersion: version, error: null}); }
+      record(`tenant_${action}`, {user, region: copies[0].region, id});
+      return {id, status, lifecycleVersion: version};
+    } catch (error) {
+      if (item) { say(`${action} failed: ${error.message}.`, 'bad'); await persist(); }
+      throw error;
+    } finally { busyLifecycle.delete(id); }
+  }
+
   // Resolves when nothing is running; queued work that cannot start yet does not hold it.
   const idle = async () => { while (running.size || pumping) { await Promise.all([...running.values(), pumping]); } };
-  return {list, create, verify, deploy, cancel, discard, pump, get: async id => view(await find(id)), idle, products: PRODUCTS};
+  return {list, create, verify, deploy, cancel, discard, pump, lifecycle, get: async id => view(await find(id)), idle, products: PRODUCTS};
 }

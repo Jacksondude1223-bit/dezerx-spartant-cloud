@@ -190,6 +190,28 @@ install -d -m 755 "$install_dir" "$install_dir/dashboard" "$install_dir/dashboar
 for file in server.mjs provisioning.mjs; do install -m 644 "$repo/dashboard/$file" "$install_dir/dashboard/$file"; done
 for file in index.html app.js styles.css favicon.png logo.png; do install -m 644 "$repo/dashboard/public/$file" "$install_dir/dashboard/public/$file"; done
 for file in license.mjs domain-permit.mjs admin-validation.mjs; do install -m 644 "$repo/node/$file" "$install_dir/node/$file"; done
+
+# The file manager's code editor (Monaco), served by the dashboard itself rather than a
+# CDN. Downloaded once from the npm registry and checked against a pinned SHA-512; if the
+# download fails the dashboard falls back to a plain text box.
+monaco_version=0.52.2
+monaco_sha512=18441611999f90e18b75ddd72bcaf2adf5b3dc020ff18ca655788f1c475ec2b52aee6874aab2ab7c72cd09771b07ab139cc2e7399df3b5288a71c885524209c1
+monaco_dir="$install_dir/dashboard/public/vendor/monaco-$monaco_version"
+if [ ! -f "$monaco_dir/vs/loader.js" ]; then
+  monaco_tmp="$(mktemp -d)"
+  if curl -fsSL --max-time 300 -o "$monaco_tmp/monaco.tgz" "https://registry.npmjs.org/monaco-editor/-/monaco-editor-$monaco_version.tgz" \
+    && [ "$(sha512sum "$monaco_tmp/monaco.tgz" | cut -d' ' -f1)" = "$monaco_sha512" ] \
+    && tar -xzf "$monaco_tmp/monaco.tgz" -C "$monaco_tmp" package/min/vs; then
+    rm -rf "$install_dir/dashboard/public/vendor"
+    install -d -m 755 "$monaco_dir"
+    cp -R "$monaco_tmp/package/min/vs" "$monaco_dir/vs"
+    chmod -R u=rwX,go=rX "$install_dir/dashboard/public/vendor"
+    printf 'Installed the Monaco code editor %s.\n' "$monaco_version"
+  else
+    printf 'Could not download or verify the Monaco editor; the file manager uses a plain text box.\n' >&2
+  fi
+  rm -rf "$monaco_tmp"
+fi
 # Earlier releases installed server.mjs and public/ at the top level.
 rm -rf "$install_dir/server.mjs" "$install_dir/public"
 node_path="$(command -v node)"

@@ -12,7 +12,7 @@ It talks to the node agents through a separate **admin API** (`/admin/*`), signe
 - **Two-factor sign-in.** With `DASHBOARD_TOTP_SECRET` set, sign-in also needs a 6-digit code from an authenticator app (RFC 6238). Each code is accepted once. The installer turns this on by default when the dashboard is served publicly.
 - **Kernel-enforced permissions.** File and console operations run inside the tenant container as `www-data` by default. You can choose `root` per action. Root inside a container can use the bind-mounted MariaDB socket as the database root user, which reaches every tenant database on the node, so prefer `www-data`.
 - **Audit trail.** The agent logs each admin call (`admin_authorized`, with tenant, operation, run-as user and file action, but never paths or commands). The dashboard logs sign-ins and each action, including the first 200 characters of console commands, to its journal and to the Activity page.
-- **Billing state stays with the master website.** The dashboard can create instances (below) but does not suspend, terminate or resume tenants. If it did, lifecycle versions would conflict with the master website and the routing Worker would not learn the new state. "Stop" is a Docker-level stop for maintenance only.
+- **Lifecycle.** With instance creation configured, the dashboard can also suspend, resume and terminate any tenant (More actions on a tenant, or the instance page). It uses one lifecycle version above the highest any party has recorded (both nodes, the routing Worker, the dashboard), in the order docs/API.md documents. If a master website also manages a tenant, change its state in one place only, so the two do not undo each other. If it did, lifecycle versions would conflict with the master website and the routing Worker would not learn the new state. "Stop" is a Docker-level stop for maintenance only.
 
 ## Persistence
 
@@ -54,6 +54,20 @@ Other commands: `install-dashboard.sh public` serves an existing install at `/pa
 
 To look at the design without a node, run `node dashboard/demo/build-preview.mjs preview.html` and open the file. It uses invented data.
 
+## Tenants, home and standby
+
+Each tenant exists on both nodes. The **home** copy (role `primary`) runs the application, owns the database and serves every visitor; the routing Worker sends requests straight to it. The **standby** copy (role `secondary`) on the other node holds no data and serves no one; it is there for a future failover. The Tenants page shows one row per tenant (the home copy) and folds the standby underneath.
+
+## Suspend, resume, terminate
+
+- **Suspend:** the router answers with the suspended page first, then both nodes stop the containers. Data stays.
+- **Resume:** each node restarts the tenant from its own record (home first, through `/admin/resume`), then the router marks it live. No new domain permit is needed, because the URL is unchanged.
+- **Terminate:** a customer domain is detached while the tenant is still ready, the router marks it terminated, and both nodes remove the containers. The database, `storage/` and backups stay on the nodes. The tenant ID cannot be reused. The dashboard asks you to type the hostname first.
+
+## File editor
+
+Files open in an in-page editor (Monaco, the editor of VS Code) with syntax highlighting, search and Ctrl/Cmd+S to save. The installer downloads Monaco 0.52.2 from the npm registry, checks its pinned SHA-512 and serves it from the dashboard itself; if that fails, files open in a plain text box. Leaving the page with unsaved changes asks first, and a file changed on disk since it was opened is not overwritten without confirmation. Monaco needs `style-src 'unsafe-inline'` and `worker-src 'self' blob:` in the dashboard's Content-Security-Policy; scripts remain same-origin only.
+
 ## Creating instances
 
 With `ORIGIN_SECRET` and `BASE_DOMAIN` in `dashboard.env`, the dashboard shows **Instances → Create instance**. Re-running `install-dashboard.sh` on a node copies both from `node.env` (and `NODE_CONTROL_SECRET` if the node uses that legacy override). Without them the page is hidden and the dashboard works as before. Set `ROUTING_API_URL` only if the routing API is not at `https://BASE_DOMAIN`, and `ROUTING_CONTROL_SECRET` only if the Worker uses that legacy override.
@@ -87,6 +101,7 @@ Every route is `POST` to a node origin. Requests are signed exactly like `/contr
 | `/admin/container` | `id`, `action` (`start`/`stop`/`restart`) | Docker power control. Start and restart are refused for suspended or terminated tenants |
 | `/admin/reload` | `id` | Clears Laravel caches and reloads Octane workers |
 | `/admin/upgrade` | `id` | Same as `/control/upgrade` with the node image |
+| `/admin/resume` | `id`, `lifecycleVersion` | Resumes a suspended tenant from the node's own record (app key, licence, URL); the version must exceed the stored one |
 | `/admin/database/download` | `id` | SQL export (primary node only) |
 
 `/admin/fs` actions (paths are absolute container paths with no `.`, `..` or empty segments):

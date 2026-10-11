@@ -54,6 +54,8 @@ const MESSAGES = {
   stale_operation: 'The node has a newer lifecycle version for this tenant.', service_terminated: 'This tenant was terminated on the node and cannot be provisioned again.',
   container_conflict: 'A container with this name belongs to a different tenant on the node.',
   not_queued: 'This instance is not in the queue.',
+  already_suspended: 'It is already suspended.', not_suspended: 'It is not suspended.', tenant_not_found: 'Neither node has this tenant.', invalid_action: 'Unknown action.',
+  node_us_unreachable: 'node-us could not be reached, so nothing was changed.', node_de_unreachable: 'node-de could not be reached, so nothing was changed.',
   invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
   ownership_not_verified: 'The DNS records are not visible yet. Add them, wait a few minutes and verify again.', domain_not_verified: 'Verify the domain first.',
   domain_verification_required: 'The node refused the domain permit. Verify the domain again.', instance_busy: 'This instance is being deployed right now.',
@@ -127,6 +129,7 @@ const ICONS = {
   clock: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M12 7v5l3 3\"/>",
   arrowDown: "<path d=\"M12 5l0 14\"/><path d=\"M18 13l-6 6\"/><path d=\"M6 13l6 6\"/>",
   chevron: "<path d=\"M9 6l6 6l-6 6\"/>",
+  arrowLeft: "<path d=\"M5 12l14 0\"/><path d=\"M5 12l6 6\"/><path d=\"M5 12l6 -6\"/>",
   arrowUp: "<path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/>",
   rocket: "<path d=\"M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3\"/><path d=\"M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3\"/><path d=\"M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/>",
   check: "<path d=\"M5 12l5 5l10 -10\"/>",
@@ -401,6 +404,7 @@ function loginPage() {
 // Each tenant lives on both nodes: the primary serves it, the other copy is its standby.
 // Show one row per tenant (the primary) and fold the standby underneath it.
 const expandedTenants = new Set();
+const roleLabel = role => ({primary: 'Home', secondary: 'Standby'})[role] || role || '—';
 function tenantTable(list, {region = true, empty = 'No tenants yet', group = region} = {}) {
   if (!list.length) return h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, empty), 'Tenants appear here once the master website provisions them.'));
   const open = t => go(`#/tenant/${t.region}/${t.id}`);
@@ -409,7 +413,7 @@ function tenantTable(list, {region = true, empty = 'No tenants yet', group = reg
     return [h('td', null, statusCell(t)),
       h('td', null, r ? usage(r.cpuPercent) : h('span', {class: 'faint'}, '—')),
       h('td', null, r ? h('span', null, bytes(r.memoryUsedBytes), h('span', {class: 'faint'}, ` / ${bytes(r.memoryLimitBytes, 0)}`)) : h('span', {class: 'faint'}, '—')),
-      h('td', null, region ? h('span', {class: 'label-icon'}, flag(t.region), t.role || '—') : t.role || '—'),
+      h('td', null, h('span', {class: `role-pill ${t.role === 'secondary' ? 'standby' : 'home'}`, title: t.role === 'secondary' ? 'Standby copy: forwards visitors to the home node, holds no data' : 'Home: runs the app and owns the database'}, region ? flag(t.region) : null, roleLabel(t.role))),
       h('td', {class: 'right mono'}, t.port ? String(t.port) : '—')];
   };
   // Keep the order of the incoming list (it may be sorted by CPU), keyed by the first copy seen.
@@ -430,13 +434,13 @@ function tenantTable(list, {region = true, empty = 'No tenants yet', group = reg
         h('td', null, h('div', {class: 'name-cell'}, toggle, h('span', {class: 'app-icon'}, icon('docker')), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, hostOf(main)), h('div', {class: 'sub mono'}, main.id, others.length && !expanded ? h('span', {class: 'standby-hint'}, ` · standby on node-${others[0].region}`) : null)))),
         ...cells(main));
       return [row, ...(expanded ? others.map(t => h('tr', {class: 'clickable standby-row', tabindex: '0', onclick: () => open(t), onkeydown: e => { if (e.key === 'Enter') open(t); }},
-        h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'expander-gap'}), h('span', {class: 'tree'}, '└'), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, `Standby on node-${t.region}`), h('div', {class: 'sub'}, t.role === 'secondary' ? 'Forwards visitors to the primary; holds no data' : t.role || '')))),
+        h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'expander-gap'}), h('span', {class: 'tree'}, '└'), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, `Standby on node-${t.region}`), h('div', {class: 'sub'}, t.role === 'secondary' ? 'Standby copy. Holds no data and serves no visitors; the router sends everyone to the home node.' : roleLabel(t.role))))),
         ...cells(t))) : [])];
     }));
   };
   paint();
   return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null,
-    h('thead', null, h('tr', null, h('th', null, 'Tenant'), h('th', null, 'Status'), h('th', null, 'CPU'), h('th', null, 'Memory'), h('th', null, region ? 'Region · role' : 'Role'), h('th', {class: 'right'}, 'Port'))),
+    h('thead', null, h('tr', null, h('th', null, 'Tenant'), h('th', null, 'Status'), h('th', null, 'CPU'), h('th', null, 'Memory'), h('th', null, region ? 'Node' : 'Role'), h('th', {class: 'right'}, 'Port'))),
     tbody)));
 }
 
@@ -511,7 +515,8 @@ async function tenantsPage(ctx) {
   const unreachable = data.nodes.filter(n => !n.ok);
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Tenants'}]),
-    pageHead({title: 'Tenants', subtitle: `${uniqueCount(allTenants(data))} tenants across ${data.nodes.length} nodes, each with a standby on the other node`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
+    pageHead({title: 'Tenants', subtitle: `${uniqueCount(allTenants(data))} tenant${uniqueCount(allTenants(data)) === 1 ? '' : 's'} across ${data.nodes.length} nodes, each with a standby on the other node`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
+    h('div', {class: 'banner info explainer'}, icon('info'), h('div', null, h('strong', null, 'Why two copies? '), 'Each tenant runs on its ', h('strong', null, 'home'), ' node, which owns its database and serves every visitor. The other node keeps a ', h('strong', null, 'standby'), ' copy for future failover; it holds no data. Expand a row with the arrow to see it.')),
     unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(new ApiError(n.error))}`)),
     h('div', {class: 'section-head'}, h('div', {class: 'group', style: {display: 'flex', gap: '8px', flexWrap: 'wrap'}}, h('div', {class: 'search'}, icon('search'), search), regionSelect), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
     tableSlot]);
@@ -569,6 +574,32 @@ function resourcesTab(n, tenants) {
 }
 const detail = (label, value) => h('div', null, h('dt', null, label), h('dd', {title: typeof value === 'string' ? value : null}, value));
 
+/* ---------------------------------------------------------------- suspend, resume, terminate */
+// One flow for the tenant page and the instance page. Terminate asks for the hostname.
+async function changeLifecycle(id, host, action, after) {
+  const texts = {
+    suspend: {title: `Suspend ${host}?`, message: ['Visitors get the suspended page and the containers stop on both nodes. The database, files and backups are kept, and you can resume at any time.'], confirm: 'Suspend', danger: true},
+    resume: {title: `Resume ${host}?`, message: ['Starts the containers again (home node first) and tells the router the site is live. It can take a minute.'], confirm: 'Resume'},
+    terminate: {title: `Terminate ${host}?`, message: ['The router stops serving it, a customer domain is detached, and the containers are removed from both nodes. This tenant ID can never be used again.', 'The database, storage folder and backups stay on the nodes; remove them by hand if you need the space.'], confirm: 'Terminate', danger: true}
+  }[action];
+  if (action === 'terminate') {
+    const typed = await promptDialog({title: texts.title, label: `Type ${host} to confirm`, confirm: 'Terminate', hint: texts.message.join(' ')});
+    if (typed === null) return;
+    if (typed !== host) return toast('The name did not match; nothing was changed.', {error: true});
+  } else if (!await confirmDialog(texts)) return;
+  const note = toast(`${texts.confirm.replace(/e$/, '')}ing ${host}…`, {timeout: 0});
+  try {
+    const result = await api.post(`/api/tenants/${id}/lifecycle`, {action});
+    note.update(`${host} is ${result.status} (lifecycle version ${result.lifecycleVersion}).`); note.close(4000);
+    state.overview = null; state.details.clear();
+    after?.();
+  } catch (error) { note.close(); fail(error); }
+}
+const lifecycleItems = (id, host, status, after) => state.session.provisioning ? [
+  '-',
+  status === 'suspended' ? {label: 'Resume tenant', icon: 'play', onClick: () => changeLifecycle(id, host, 'resume', after)} : {label: 'Suspend tenant', icon: 'lock', onClick: () => changeLifecycle(id, host, 'suspend', after)},
+  {label: 'Terminate tenant', icon: 'trash', danger: true, onClick: () => changeLifecycle(id, host, 'terminate', after)}] : [];
+
 /* ---------------------------------------------------------------- tenant */
 async function loadDetail(region, id, force = false) {
   const key = `${region}/${id}`;
@@ -600,7 +631,8 @@ async function tenantPage(ctx, region, id, tab) {
       {label: 'Upgrade to node image', icon: 'upgrade', onClick: () => act('Upgrade', 'upgrade', {}, {confirmText: ['Recreate the container on the image configured on this node.', 'The new image is pulled first; if it fails to start, the previous image is restored. Storage and the database are untouched.']})},
       ...(data.role === 'primary' ? [{label: 'Download database (SQL)', icon: 'database', onClick: () => { api.download(`${base}/database`); toast('Preparing the SQL export… the download starts when it is ready.'); }}] : []),
       '-',
-      {label: 'Stop container', icon: 'stop', danger: true, onClick: () => act('Stop', 'container', {action: 'stop'}, {confirmText: [`Stop the container for ${host}?`, 'The site goes offline until you start it again. This does not change billing state on the master website.'], danger: true})}
+      {label: 'Stop container', icon: 'stop', danger: true, onClick: () => act('Stop', 'container', {action: 'stop'}, {confirmText: [`Stop the container for ${host}?`, 'Maintenance only: the site goes offline until you start it again. To take a customer offline, use Suspend tenant.'], danger: true})},
+      ...lifecycleItems(id, host, data.status, () => { if (ctx.alive()) render(); })
     ])}, icon('more')),
     /^https?:\/\//i.test(data.activeUrl || data.url || '') ? h('a', {class: 'btn primary', href: data.activeUrl || data.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null];
   const select = key => go(`#/tenant/${region}/${id}${key === 'overview' ? '' : `/${key}`}`);
@@ -620,7 +652,8 @@ function overviewTab(ctx, data) {
   const r = data.resources;
   const c = data.container || {};
   ctx.fill([
-    data.status === 'suspended' ? h('div', {class: 'banner info'}, icon('info'), 'Suspended by the master website. Resume it there; the dashboard does not change billing state.') : null,
+    data.role === 'secondary' ? h('div', {class: 'banner info'}, icon('info'), h('div', {style: {flex: '1'}}, `This is the standby copy on node-${ctx.region}. It holds no data and serves no visitors; the app runs on the home node, node-${data.primary}.`), h('a', {class: 'btn small', href: `#/tenant/${data.primary}/${data.id}`}, 'Open home copy')) : null,
+    data.status === 'suspended' ? h('div', {class: 'banner info'}, icon('info'), state.session.provisioning ? 'Suspended. Visitors see the suspended page; data is kept. Resume it from More actions.' : 'Suspended. Resume it from the master website.') : null,
     data.status === 'provisioning' ? h('div', {class: 'banner warn'}, icon('alert'), h('div', {style: {flex: '1'}}, data.applicationHealthy
         ? 'The app is healthy but the node still records this tenant as provisioning, so the first administrator may not exist yet and the router may not know it. Open its deployment to see progress or press Retry deployment.'
         : 'This tenant is still being provisioned. Open its deployment to see each step and the container log.'),
@@ -636,7 +669,7 @@ function overviewTab(ctx, data) {
       detail('Network in / out', r ? r.networkIO : '—'), detail('Block I/O', r ? r.blockIO : '—'),
       detail('Storage used', bytes(data.storageBytes)), detail('Loopback port', data.port ? String(data.port) : '—'),
       detail('Lifecycle version', String(data.lifecycleVersion ?? 0)), detail('Out-of-memory kills', c.oomKilled ? 'Yes, last exit' : 'None'),
-      detail('Home region', h('span', {class: 'label-icon'}, flag(data.primary), regionName(data.primary || '—'))), detail('This copy', data.role === 'primary' ? 'Primary (serves traffic)' : 'Standby'),
+      detail('Home region', h('span', {class: 'label-icon'}, flag(data.primary), regionName(data.primary || '—'))), detail('This copy', data.role === 'primary' ? 'Home (serves visitors, owns the database)' : 'Standby (no data, no visitors)'),
       detail('Plan', data.plan || '—'), detail('Image', shortImage(data.image)),
       detail('URL', data.activeUrl || data.url), detail('Container', h('span', {class: 'label-icon'}, icon('docker'), `spartan-${data.id}`))))),
     data.versions ? h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Versions')), h('div', {class: 'card'}, h('pre', {class: 'code'}, JSON.stringify(data.versions, null, 2)))) : null]);
@@ -648,6 +681,7 @@ async function filesTab(ctx) {
   const fstate = state.files.get(key) || {path: '/var/www/html', user: 'www-data'};
   state.files.set(key, fstate);
   if (ctx.query.get('path')) fstate.path = ctx.query.get('path');
+  if (ctx.query.get('edit')) return editorView(ctx, fstate, ctx.query.get('edit'));
   if (ctx.data.container?.running !== true) return ctx.fill(h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'The container is not running'), 'Start it to browse its files.')));
   const call = body => api.post(`${ctx.base}/fs`, {user: fstate.user, ...body});
   const open = target => go(`#/tenant/${ctx.region}/${ctx.id}/files?path=${encodeURIComponent(target)}`);
@@ -667,7 +701,7 @@ async function filesTab(ctx) {
   const picker = h('input', {type: 'file', multiple: true, style: {display: 'none'}, onchange: async e => { await uploadFiles(ctx, fstate, [...e.target.files]); e.target.value = ''; reload(); }});
   const toolbar = h('div', {class: 'toolbar'}, pathBar, h('div', {class: 'group'}, userSelect,
     button('New folder', {icon: 'folderPlus', small: true, onClick: async () => { const name = await promptDialog({title: 'New folder', label: 'Folder name', confirm: 'Create'}); if (name) { try { await call({action: 'mkdir', path: joinPath(fstate.path, name)}); reload(); } catch (e) { fail(e); } } }}),
-    button('New file', {icon: 'filePlus', small: true, onClick: async () => { const name = await promptDialog({title: 'New file', label: 'File name', confirm: 'Create'}); if (name) { try { await call({action: 'create', path: joinPath(fstate.path, name)}); await editFile(ctx, fstate, joinPath(fstate.path, name)); reload(); } catch (e) { fail(e); } } }}),
+    button('New file', {icon: 'filePlus', small: true, onClick: async () => { const name = await promptDialog({title: 'New file', label: 'File name', confirm: 'Create'}); if (name) { try { await call({action: 'create', path: joinPath(fstate.path, name)}); go(editHash(ctx, fstate.path, joinPath(fstate.path, name))); } catch (e) { fail(e); } } }}),
     button('Upload', {icon: 'upload', kind: 'primary', small: true, onClick: () => picker.click()}), picker));
   const rows = listing.entries.map(entry => fileRow(ctx, fstate, entry, call, reload, open));
   if (fstate.path !== '/') rows.unshift(h('tr', {class: 'clickable', onclick: () => open(parentOf(fstate.path))}, h('td', {colspan: '6'}, h('div', {class: 'file-name'}, h('span', {class: 'glyph dir'}, icon('folder')), h('span', {class: 'muted'}, '..')))));
@@ -686,7 +720,7 @@ function fileRow(ctx, fstate, entry, call, reload, open) {
   const full = joinPath(fstate.path, entry.name);
   const isDir = entry.type === 'directory' || entry.targetType === 'directory';
   const archive = /\.(zip|tar|tgz|tar\.gz|tar\.bz2|tar\.xz)$/i.test(entry.name);
-  const openEntry = () => isDir ? open(full) : editFile(ctx, fstate, full).then(saved => { if (saved) reload(); });
+  const openEntry = () => isDir ? open(full) : go(editHash(ctx, fstate.path, full));
   const items = [
     ...(isDir ? [{label: 'Open', icon: 'folder', onClick: openEntry}] : [{label: 'Edit', icon: 'edit', onClick: openEntry}]),
     {label: isDir ? 'Download as .tar.gz' : 'Download', icon: 'download', onClick: () => api.download(`${ctx.base}/fs/download?path=${encodeURIComponent(full)}&user=${fstate.user}`)},
@@ -738,40 +772,108 @@ function chownDialog(entry, full, isDir, ctx, reload) {
       try { const r = await api.post(`${ctx.base}/fs`, {user: 'root', action: 'chown', path: full, owner: owner.value.trim(), recursive: isDir && recursive.checked}); ref.close(); toast(`Owner set on ${r.changed} item${r.changed === 1 ? '' : 's'}`); reload(); } catch (e) { fail(e); }
     }})]});
 }
-async function editFile(ctx, fstate, full) {
+const editHash = (ctx, dir, file) => `#/tenant/${ctx.region}/${ctx.id}/files?path=${encodeURIComponent(dir)}&edit=${encodeURIComponent(file)}`;
+
+/* Monaco is served by the dashboard itself (installed by install-dashboard.sh), never from
+   a CDN. If it is missing or fails to load, the editor falls back to a plain text area. */
+const MONACO_BASE = 'vendor/monaco-0.52.2/vs';
+let monacoLoading = null;
+function loadMonaco() {
+  if (window.monaco) return Promise.resolve(window.monaco);
+  if (monacoLoading) return monacoLoading;
+  monacoLoading = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('monaco_timeout')), 15000);
+    const script = document.createElement('script');
+    script.src = `${MONACO_BASE}/loader.js`;
+    script.onerror = () => { clearTimeout(timer); reject(new Error('monaco_unavailable')); };
+    script.onload = () => {
+      // Absolute, so Monaco's blob: workers (which have no base path) find it under /panel/ too.
+      window.require.config({paths: {vs: new URL(MONACO_BASE, document.baseURI).href}});
+      window.require(['vs/editor/editor.main'], () => { clearTimeout(timer); resolve(window.monaco); }, error => { clearTimeout(timer); reject(error); });
+    };
+    document.head.append(script);
+  }).catch(error => { monacoLoading = null; throw error; });
+  return monacoLoading;
+}
+const LANGUAGES = {php: 'php', js: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript', jsx: 'javascript', json: 'json', css: 'css', scss: 'scss', less: 'less', html: 'html', htm: 'html', vue: 'html', xml: 'xml', svg: 'xml', md: 'markdown', yml: 'yaml', yaml: 'yaml', sql: 'sql', sh: 'shell', bash: 'shell', py: 'python', ini: 'ini', conf: 'ini', env: 'ini', dockerfile: 'dockerfile', twig: 'twig', txt: 'plaintext', log: 'plaintext'};
+function languageOf(file) {
+  const name = file.split('/').pop().toLowerCase();
+  if (name.endsWith('.blade.php')) return 'php';
+  if (name === 'dockerfile') return 'dockerfile';
+  if (name.startsWith('.env')) return 'ini';
+  return LANGUAGES[name.includes('.') ? name.split('.').pop() : ''] || 'plaintext';
+}
+// Asked before leaving the page (hash change or closing the tab) while there are unsaved edits.
+let leaveGuard = null;
+window.addEventListener('beforeunload', event => { if (leaveGuard && leaveGuard()) { event.preventDefault(); event.returnValue = ''; } });
+let lastHash = location.hash;
+window.addEventListener('hashchange', event => {
+  if (leaveGuard && leaveGuard() && !window.confirm('Discard unsaved changes?')) { event.stopImmediatePropagation(); history.replaceState(null, '', lastHash); return; }
+  leaveGuard = null;
+  lastHash = location.hash;
+}, true);
+
+async function editorView(ctx, fstate, full) {
+  const back = () => go(`#/tenant/${ctx.region}/${ctx.id}/files?path=${encodeURIComponent(parentOf(full))}`);
+  ctx.fill(h('div', {class: 'card'}, loading()));
   let file;
   try { file = await api.post(`${ctx.base}/fs`, {user: fstate.user, action: 'read', path: full}); }
-  catch (error) { fail(error); return false; }
-  if (file.binary) {
-    const download = await confirmDialog({title: 'Binary file', message: `${full} is not a text file, so it cannot be edited here.`, confirm: 'Download'});
-    if (download) api.download(`${ctx.base}/fs/download?path=${encodeURIComponent(full)}&user=${fstate.user}`);
-    return false;
+  catch (error) {
+    if (!ctx.alive()) return;
+    return ctx.fill([h('div', {class: 'banner error'}, icon('alert'), `${full}: ${explain(error)}`), h('div', {class: 'actions'}, button('Back to folder', {onClick: back}), fstate.user === 'www-data' && error.code === 'permission_denied' ? button('Open as root', {onClick: () => { fstate.user = 'root'; editorView(ctx, fstate, full); }}) : null)]);
   }
-  return new Promise(resolve => {
-    let saved = false, dirty = false, modifiedAt = file.modifiedAt;
-    const area = h('textarea', {class: 'editor', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', wrap: 'off'});
-    area.value = new TextDecoder().decode(fromBase64(file.contentBase64));
-    const status = h('span', {class: 'muted', style: {fontSize: '13px'}}, `${bytes(file.size)} · ${file.mode}${file.persistent ? '' : ' · not persistent'}`);
-    const save = async (force = false) => {
-      saveButton.disabled = true;
-      try {
-        const result = await api.post(`${ctx.base}/fs`, {user: fstate.user, action: 'write', path: full, contentBase64: toBase64(new TextEncoder().encode(area.value)), ...(force ? {} : {expectModifiedAt: modifiedAt})});
-        modifiedAt = result.modifiedAt; saved = true; dirty = false; status.textContent = `Saved ${new Date().toLocaleTimeString()}`;
-      } catch (error) {
-        if (error.code === 'file_changed' && await confirmDialog({title: 'File changed on disk', message: 'Someone or something changed this file after you opened it. Overwrite it with your version?', confirm: 'Overwrite', danger: true})) return save(true);
-        fail(error);
-      } finally { saveButton.disabled = false; }
-    };
-    const saveButton = button('Save', {kind: 'primary', small: true, onClick: () => save()});
-    const closeButton = button('Close', {small: true, onClick: async () => { if (dirty && !await confirmDialog({title: 'Discard changes?', message: 'You have unsaved changes.', confirm: 'Discard', danger: true})) return; ref.close(); }});
-    area.addEventListener('input', () => { dirty = true; status.textContent = 'Unsaved changes'; });
+  if (!ctx.alive()) return;
+  const download = () => api.download(`${ctx.base}/fs/download?path=${encodeURIComponent(full)}&user=${fstate.user}`);
+  if (file.binary) return ctx.fill(h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This is not a text file'), `${full} cannot be edited here.`, h('div', {class: 'actions', style: {justifyContent: 'center', marginTop: '14px'}}, button('Back to folder', {onClick: back}), button('Download', {icon: 'download', kind: 'primary', onClick: download})))));
+  const original = new TextDecoder().decode(fromBase64(file.contentBase64));
+  let modifiedAt = file.modifiedAt, saved = original, editor = null, area = null;
+  const value = () => editor ? editor.getValue() : area.value;
+  const dirty = () => value() !== saved;
+  const status = h('span', {class: 'editor-status'}, `${bytes(file.size)} · ${file.mode} · as ${fstate.user}${file.persistent ? '' : ' · not persistent'}`);
+  const markDirty = () => { status.textContent = dirty() ? 'Unsaved changes' : 'Saved'; status.classList.toggle('dirty', dirty()); };
+  const save = async (force = false) => {
+    saveButton.disabled = true;
+    try {
+      const text = value();
+      const result = await api.post(`${ctx.base}/fs`, {user: fstate.user, action: 'write', path: full, contentBase64: toBase64(new TextEncoder().encode(text)), ...(force ? {} : {expectModifiedAt: modifiedAt})});
+      modifiedAt = result.modifiedAt; saved = text; markDirty(); status.textContent = `Saved ${new Date().toLocaleTimeString()}`;
+    } catch (error) {
+      if (error.code === 'file_changed' && await confirmDialog({title: 'File changed on disk', message: 'Someone or something changed this file after you opened it. Overwrite it with your version?', confirm: 'Overwrite', danger: true})) return save(true);
+      fail(error);
+    } finally { saveButton.disabled = false; }
+  };
+  const saveButton = button('Save', {icon: 'check', kind: 'primary', small: true, onClick: () => save()});
+  const host = h('div', {class: 'code-host'});
+  const segments = full.slice(1).split('/');
+  ctx.fill([
+    full.startsWith('/var/www/html/storage') || file.persistent ? null : h('div', {class: 'banner warn'}, icon('alert'), 'Not persistent. Changes outside /var/www/html/storage are lost when the container is upgraded or recreated.'),
+    h('div', {class: 'card table-card editor-card'},
+      h('div', {class: 'toolbar'},
+        h('div', {class: 'path'}, button('', {icon: 'arrowLeft', small: true, kind: 'ghost', title: 'Back to folder', onClick: back}), segments.map((part, i) => [i ? h('span', {class: 'sep'}, '/') : h('span', {class: 'sep'}, '/'), i < segments.length - 1 ? h('button', {type: 'button', onclick: () => go(`#/tenant/${ctx.region}/${ctx.id}/files?path=${encodeURIComponent('/' + segments.slice(0, i + 1).join('/'))}`)}, part) : h('strong', null, part)])),
+        h('div', {class: 'group'}, h('span', {class: 'chip static'}, languageOf(full)), status, button('Download', {icon: 'download', small: true, onClick: download}), saveButton)),
+      host)]);
+  leaveGuard = dirty;
+  try {
+    const monaco = await loadMonaco();
+    if (!ctx.alive()) return;
+    editor = monaco.editor.create(host, {value: original, language: languageOf(full), theme: 'vs', automaticLayout: true, minimap: {enabled: original.length < 400000}, fontSize: 13, tabSize: 4, insertSpaces: true, scrollBeyondLastLine: false, renderWhitespace: 'selection', wordWrap: 'off', fixedOverflowWidgets: true});
+    editor.onDidChangeModelContent(markDirty);
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => save());
+    editor.focus();
+    // Monaco keeps models alive until disposed; free it when this page goes away.
+    const watch = setInterval(() => { if (!ctx.alive()) { clearInterval(watch); editor.getModel()?.dispose(); editor.dispose(); } }, 1000);
+  } catch {
+    if (!ctx.alive()) return;
+    area = h('textarea', {class: 'editor', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', wrap: 'off'});
+    area.value = original;
+    area.addEventListener('input', markDirty);
     area.addEventListener('keydown', event => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); save(); }
-      if (event.key === 'Tab' && !event.shiftKey) { event.preventDefault(); const {selectionStart: s, selectionEnd: e} = area; area.setRangeText('    ', s, e, 'end'); dirty = true; }
+      if (event.key === 'Tab' && !event.shiftKey) { event.preventDefault(); const {selectionStart: a, selectionEnd: b} = area; area.setRangeText('    ', a, b, 'end'); markDirty(); }
     });
-    const ref = modal({wide: true, body: h('div', null, h('div', {class: 'editor-head'}, h('div', {style: {minWidth: '0'}}, h('div', {class: 'mono', style: {fontWeight: '600'}}, full), status), h('div', {class: 'actions'}, closeButton, saveButton)), area), onClose: () => resolve(saved)});
-    setTimeout(() => area.focus(), 0);
-  });
+    host.replaceWith(area);
+    area.focus();
+  }
 }
 async function uploadFiles(ctx, fstate, files) {
   const CHUNK = 4 * 1024 * 1024;
@@ -905,7 +1007,7 @@ async function activityPage(ctx) {
 /* ---------------------------------------------------------------- create instance */
 const PRODUCT_PREFIXES = [['SPARTANSTARTER_', 'Starter'], ['SPARTANCLOUD_', 'Cloud'], ['SPARTANCLOUDPLUS_', 'Cloud Plus'], ['SPARTANPROFESSIONAL_', 'Professional'], ['SPARTANULTIMATE_', 'Ultimate'], ['SPARTANDEV_', 'Developer']];
 const productOf = key => (PRODUCT_PREFIXES.find(([prefix]) => key.startsWith(prefix)) || [])[1] || null;
-const INSTANCE_STATUS = {awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], queued: ['Queued', 'amber'], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
+const INSTANCE_STATUS = {suspended: ['Suspended', ''], terminated: ['Terminated', ''], awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], queued: ['Queued', 'amber'], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
 const instanceStatus = item => { const [label, tone] = INSTANCE_STATUS[item.status] || [item.status, '']; return {label, tone}; };
 function copyButton(text) {
   return h('button', {type: 'button', class: 'icon-btn', title: 'Copy', 'aria-label': 'Copy', onclick: async () => { try { await navigator.clipboard.writeText(typeof text === 'function' ? text() : text); toast('Copied'); } catch { toast('Copy failed; select the text instead', {error: true}); } }}, icon('copy'));
@@ -1070,7 +1172,7 @@ async function instancePage(ctx, id, polling = false) {
   const status = instanceStatus(item);
   const reload = () => { if (ctx.alive()) render(); };
   const discard = async () => {
-    if (!await confirmDialog({title: 'Discard this instance?', message: ['The dashboard forgets this draft. Nothing has been deployed for it.', item.custom ? 'The pending domain reservation stays on the routing Worker until it expires or is reused.' : ''].filter(Boolean), confirm: 'Discard', danger: true})) return;
+    if (!await confirmDialog({title: 'Discard this instance?', message: item.status === 'terminated' ? ['Removes this terminated instance from the list. Nothing changes on the nodes.'] : ['The dashboard forgets this draft. Nothing has been deployed for it.', item.custom ? 'The pending domain reservation stays on the routing Worker until it expires or is reused.' : ''].filter(Boolean), confirm: 'Discard', danger: true})) return;
     try { await api.post(`/api/instances/${id}/discard`); go('#/instances'); } catch (error) { fail(error); }
   };
   const verify = async event => {
@@ -1078,7 +1180,7 @@ async function instancePage(ctx, id, polling = false) {
     try { const next = await api.post(`/api/instances/${id}/verify`); toast(next.dns?.readyToProvision ? 'Domain verified. Ready to deploy.' : 'Not verified yet. Records can take a few minutes to propagate.', {error: !next.dns?.readyToProvision}); reload(); }
     catch (error) { fail(error); if (btn) btn.disabled = false; }
   };
-  const canDiscard = !['ready', 'deploying', 'queued'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done';
+  const canDiscard = item.status === 'terminated' || (!['ready', 'deploying', 'queued', 'suspended'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done');
   const details = h('div', {class: 'card'}, h('dl', {class: 'details'},
     detail('URL', item.url), detail('Tenant ID', h('span', {class: 'mono'}, item.id)),
     detail('Home region', h('span', {class: 'label-icon'}, flag(item.primary), regionName(item.primary))), detail('Standby', h('span', {class: 'label-icon'}, flag(item.secondary), regionName(item.secondary))),
@@ -1100,7 +1202,9 @@ async function instancePage(ctx, id, polling = false) {
           q.since ? h('div', {class: 'sub'}, liveText(() => `In the queue for ${clock(Date.now() - Date.parse(q.since))}`)) : null)))));
   }
   if (item.status === 'deploying') { const watch = await nodeWatch(item).catch(() => null); if (watch) body.push(watch); }
-  if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. Suspend, resume and terminate stay with the billing system; this dashboard only creates instances.'));
+  if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. If a master website also bills this tenant, suspend and resume it in one place only, so the two do not undo each other.'));
+  if (item.status === 'suspended') body.push(h('div', {class: 'banner info'}, icon('lock'), 'Suspended. Visitors see the suspended page; the database and files are kept. Resume to bring it back.'));
+  if (item.status === 'terminated') body.push(h('div', {class: 'banner info'}, icon('info'), 'Terminated. The containers are gone; the database, storage folder and backups remain on the nodes. Discard removes this record from the list.'));
   if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
   if (item.custom && item.status === 'ready_to_deploy') body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records')), dnsCard(item)));
   body.push(activityLog(item));
@@ -1110,7 +1214,9 @@ async function instancePage(ctx, id, polling = false) {
       item.custom && ['awaiting_dns', 'ready_to_deploy', 'failed'].includes(item.status) ? button('Verify DNS', {icon: 'refresh', kind: item.status === 'awaiting_dns' ? 'primary' : '', onClick: verify}) : null,
       item.status === 'queued' ? button('Leave queue', {icon: 'stop', onClick: async () => { try { await api.post(`/api/instances/${id}/cancel`); toast('Removed from the queue'); reload(); } catch (error) { fail(error); } }}) : null,
       canDiscard ? button('Discard', {icon: 'trash', kind: 'danger', onClick: discard}) : null,
-      item.status === 'ready' ? h('a', {class: 'btn', href: `#/tenant/${item.primary}/${item.id}`}, icon('docker'), 'Manage tenant') : null,
+      item.status === 'suspended' ? button('Resume', {icon: 'play', kind: 'primary', onClick: () => changeLifecycle(item.id, item.hostname, 'resume', reload)}) : null,
+      ['ready', 'suspended'].includes(item.status) ? h('button', {type: 'button', class: 'btn', 'aria-label': 'Lifecycle actions', title: 'Suspend or terminate', onclick: event => openMenu(event.currentTarget, lifecycleItems(item.id, item.hostname, item.status, reload).filter(entry => entry !== '-' && !(item.status === 'suspended' && entry.label === 'Resume tenant')))}, icon('more')) : null,
+      ['ready', 'suspended'].includes(item.status) ? h('a', {class: 'btn', href: `#/tenant/${item.primary}/${item.id}`}, icon('docker'), 'Manage tenant') : null,
       item.status === 'ready' ? h('a', {class: 'btn primary', href: item.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null]}),
     body,
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Details')), details)]);

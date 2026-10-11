@@ -145,7 +145,7 @@ Increase the persisted lifecycle version. Publish `suspended` to the routing Wor
 
 ### Resume a service
 
-Increase the version again. Reuse `POST /control/provision` on both nodes with the original keys and fingerprint and the new version. When both are ready, publish `ready` with that version to the routing Worker. There is no `active` or `resume` action on `/control/lifecycle`.
+Increase the version again. Reuse `POST /control/provision` on both nodes with the original keys and fingerprint and the new version. When the URL is the one the tenant already has, nodes do not require a new `domainVerificationToken` (onboarding refuses suspended routes, so one could not be obtained); a different URL still does. When both are ready, publish `ready` with that version to the routing Worker. There is no `active` or `resume` action on `/control/lifecycle`.
 
 ### Terminate a service
 
@@ -349,7 +349,7 @@ Public JSON diagnostics on the routing control hostname. No signature is require
 
 ## Routing behavior and current limits
 
-The Worker selects Germany for the country set in `workers/shared.js`; other countries use the US node. It does not currently implement measured latency, health-based failover, or automatic primary promotion.
+The Worker proxies every tenant request straight to the tenant's primary node, since only the primary runs the application (earlier revisions picked the node nearest the visitor, which then forwarded to the primary). Hostname and route lookups are cached in each Worker isolate for `ROUTE_CACHE_SECONDS` (configure sets 10; unset disables), so a status change reaches visitors within that time; reads use D1's nearest replica when read replication is enabled. There is no health-based failover or automatic primary promotion.
 
 The primary owns the tenant's MariaDB database, and its node agent serves the application. A node where the tenant is not primary forwards **all application requests** to the primary rather than serving them locally, so a regional route does not mean the application executes in that region. There is no cross-node data replication: a non-primary node holds no tenant data at all. Do not treat this as an active-active database or an automatic failover setup.
 
