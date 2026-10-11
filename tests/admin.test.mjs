@@ -28,6 +28,7 @@ test('admin parsers convert docker figures to bytes and percentages', () => {
   assert.equal(stats.memoryLimitBytes, 2 * 1024 ** 3);
   assert.equal(stats.processes, 17);
   assert.equal(planOf('SPARTANCLOUDPLUS_abc'), 'cloudplus');
+  assert.equal(planOf('SPARTANCLOUD_abc'), 'cloud');
   const net = readNetDev('Inter-|  Receive\n face |bytes\n    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0\n  eth0: 5000 10 0 0 0 0 0 0 7000 9 0 0 0 0 0 0\n  ifb0: 5000 10 0 0 0 0 0 0 7000 9 0 0 0 0 0 0\nveth12: 900 1 0 0 0 0 0 0 900 1 0 0 0 0 0 0\ndocker0: 9 1 0 0 0 0 0 0 9 1 0 0 0 0 0 0\n');
   assert.deepEqual(net, {rx: 5000, tx: 7000, names: ['eth0']}, 'loopback, shaping, bridge and container interfaces are not counted');
 });

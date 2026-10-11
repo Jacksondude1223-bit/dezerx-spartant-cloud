@@ -4048,7 +4048,7 @@
           },
           "licenseKey": {
             "type": "string",
-            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "pattern": "^(SPARTANSTARTER_|SPARTANCLOUD_|SPARTANCLOUDPLUS_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
             "minLength": 16,
             "maxLength": 256,
             "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
@@ -4402,7 +4402,7 @@
           },
           "licenseKey": {
             "type": "string",
-            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "pattern": "^(SPARTANSTARTER_|SPARTANCLOUD_|SPARTANCLOUDPLUS_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
             "minLength": 16,
             "maxLength": 256,
             "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
@@ -4641,7 +4641,7 @@
           },
           "licenseKey": {
             "type": "string",
-            "pattern": "^(SPARTANSTARTER_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
+            "pattern": "^(SPARTANSTARTER_|SPARTANCLOUD_|SPARTANCLOUDPLUS_|SPARTANPROFESSIONAL_|SPARTANULTIMATE_|SPARTANDEV_)[A-Za-z0-9_-]+$",
             "minLength": 16,
             "maxLength": 256,
             "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."

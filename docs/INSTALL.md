@@ -75,7 +75,7 @@ Origin endpoints still use `X-Spartan-Origin`; API endpoints still require times
 
 New tenants default to a 2 GiB memory limit. An existing explicit `TENANT_MEMORY` setting is preserved by node updates. Set it to `2g` on each node to match the tested deployment; changing that setting does not resize existing containers automatically.
 
-CloudPlus licences use `PRODUCT_ID=9`. The node derives it from `SPARTANCLOUDPLUS_`, and the runtime synchronizes it into Spartan's persisted `.env` even when the application template omits that key. Node updates install node code only: runtime changes require rebuilding and publishing the Spartan image, then upgrading the selected instances through `/control/upgrade`. Existing containers retain their current environment until recreated.
+Cloud licences use `PRODUCT_ID=8` and CloudPlus licences `PRODUCT_ID=9`. The node derives them from `SPARTANCLOUD_` and `SPARTANCLOUDPLUS_`, and the runtime synchronizes it into Spartan's persisted `.env` even when the application template omits that key. Node updates install node code only: runtime changes require rebuilding and publishing the Spartan image, then upgrading the selected instances through `/control/upgrade`. Existing containers retain their current environment until recreated.
 
 The agent defaults to `/etc/spartan-cloud/docker` for Docker credentials, including recovery commands. This works with older systemd units whose `ProtectHome=true` prevents access to `/root/.docker`. An explicit `DOCKER_CONFIG` still takes priority. Registry authentication and encryption keys remain local to each node.
 
