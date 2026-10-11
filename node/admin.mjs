@@ -2,6 +2,7 @@ import path from 'node:path';
 import {readdir, stat} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {apiError} from './management.mjs';
+import {cpuSummary} from './resources.mjs';
 
 // Operator API used by the dashboard. Every route here is signed with ADMIN_API_SECRET,
 // which is never given to the routing Worker or the master website: these routes can
@@ -399,7 +400,7 @@ export function createAdmin({cfg, root, load, management, launch = spawn, env = 
       let summary;
       try {
         const value = await load(id);
-        summary = value ? tenantSummary(value) : {id, status: 'missing_state'};
+        summary = value ? {...tenantSummary(value), ...cpuSummary(cfg, value)} : {id, status: 'missing_state'};
       } catch { summary = {id, status: 'unreadable_state'}; }
       try { summary.createdAt = (await stat(path.join(root, id))).birthtime.toISOString(); } catch {}
       summary.container = state ? state.get(id) || {state: 'missing', running: false} : null;

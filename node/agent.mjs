@@ -18,6 +18,9 @@ import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
 import {createAdmin} from './admin.mjs';
+import {proxyCacheControl} from './cache-policy.mjs';
+import {migrateCacheEnvironment} from './tenant-env.mjs';
+import {cpuSummary, requestedCpuLimit, tenantCpus} from './resources.mjs';
 import {centralDatabase, validateDatabaseMode, databaseEnvironment, localTenant, remoteDatabaseReady, primaryConnection, DE_DATABASE_IP, US_DATABASE_IP} from './central-database.mjs';
 import {networkPublicKey} from './network-key.mjs';
 
@@ -128,8 +131,8 @@ async function refreshPort(id) {
   portChecks.set(id, check);
   return check;
 }
-function runArgs({id, role, fingerprint, envFile, directory, image}) {
-  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '2g', '--memory-swap', cfg.TENANT_MEMORY || '2g', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, ...(!(centralDatabase(cfg) && cfg.NODE_REGION === 'de') ? ['--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`] : []), image];
+function runArgs({id, role, fingerprint, envFile, directory, image, cpus}) {
+  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cpus, '--memory', cfg.TENANT_MEMORY || '2g', '--memory-swap', cfg.TENANT_MEMORY || '2g', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, ...(!(centralDatabase(cfg) && cfg.NODE_REGION === 'de') ? ['--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`] : []), image];
 }
 async function assignedPortOf(id) {
   const inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
@@ -176,6 +179,10 @@ async function provisionOnce(input, progress) {
   const existing = await load(id);
   persistedInput.adminInitialized = existing?.adminInitialized === true || existing?.status === 'ready';
   persistedInput.image = existing?.image || cfg.SPARTAN_IMAGE;
+  // An override set through /admin/resources or /control/resources survives re-provisioning;
+  // a provision request may also set one (null returns the tenant to the node default).
+  const cpuLimit = Object.hasOwn(input, 'cpuLimit') ? requestedCpuLimit(input.cpuLimit) : existing?.cpuLimit;
+  if (cpuLimit) persistedInput.cpuLimit = cpuLimit; else delete persistedInput.cpuLimit;
   const version = input.lifecycleVersion || 0;
   if (!Number.isSafeInteger(version) || version < 0) throw new Error('invalid_input');
   if (existing?.status === 'terminated') throw new Error('service_terminated');
@@ -195,7 +202,7 @@ async function provisionOnce(input, progress) {
   const dbPassword = connection.password || proposedPassword;
   persistedInput.dbPassword = dbPassword;
   persistedInput.databaseMode = centralDatabase(cfg) ? 'us-central' : 'local';
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', ...databaseEnvironment(cfg, {...connection, password: dbPassword}, socketPath), SESSION_DRIVER: centralDatabase(cfg) ? 'database' : 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', ...databaseEnvironment(cfg, {...connection, password: dbPassword}, socketPath), SESSION_DRIVER: centralDatabase(cfg) ? 'database' : 'redis', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'redis', CACHE_DRIVER: 'redis', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');
@@ -223,13 +230,14 @@ async function provisionOnce(input, progress) {
     progress.stage = 'pull';
     await docker(['pull', persistedInput.image]);
     progress.stage = 'launch';
-    await docker(runArgs({id, role, fingerprint, envFile, directory, image: persistedInput.image}));
+    await docker(runArgs({id, role, fingerprint, envFile, directory, image: persistedInput.image, cpus: tenantCpus(cfg, persistedInput)}));
     persistedInput.containerEnvHash = persistedInput.envHash;
     persistedInput.containerDatabaseMode = persistedInput.databaseMode;
     persistedInput.containerUrl = appUrlValue;
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
     if (existing?.status === 'suspended') await docker(['update', '--restart=unless-stopped', container(id)]);
+    if (tenantCpus(cfg, persistedInput) !== tenantCpus(cfg, existing)) await docker(['update', '--cpus', tenantCpus(cfg, persistedInput), container(id)]);
     if (!inspect.State.Running) { progress.stage = 'start'; await docker(['start', container(id)]); }
   }
   inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
@@ -255,7 +263,7 @@ async function provisionOnce(input, progress) {
   }
   return {id, status: 'provisioning', role};
 }
-const PERMANENT_PROVISION_ERRORS = {invalid_input: 422, invalid_license_key: 422, invalid_laravel_env: 422, invalid_initial_admin: 422, initial_admin_failed: 422, tenant_conflict: 409, container_conflict: 409, node_capacity: 409, domain_verification_required: 409, stale_operation: 409, service_terminated: 409};
+const PERMANENT_PROVISION_ERRORS = {invalid_input: 422, invalid_cpu_limit: 422, invalid_license_key: 422, invalid_laravel_env: 422, invalid_initial_admin: 422, initial_admin_failed: 422, tenant_conflict: 409, container_conflict: 409, node_capacity: 409, domain_verification_required: 409, stale_operation: 409, service_terminated: 409};
 async function provision(input) {
   const before = validId(input.id) ? await load(input.id) : null;
   const mayRecover = !before || before.status !== 'ready';
@@ -296,10 +304,23 @@ async function upgrade(input) {
   await docker(['pull', targetImage]);
   const directory = path.join(root, id);
   const envFile = path.join(directory, 'app.env');
+  // Once per tenant, on the first recreation by this agent: move a legacy app.env from the
+  // file cache and file sessions to the container's own Redis (see tenant-env.mjs).
+  let legacyEnvironment = null;
+  if (!record.redisCacheMigrated) {
+    const text = await readFile(envFile, 'utf8');
+    const migrated = migrateCacheEnvironment(text);
+    if (migrated.changed) {
+      legacyEnvironment = {text, envHash: record.envHash};
+      await writeFile(envFile, migrated.text, {mode: 0o600});
+      record.envHash = createHash('sha256').update(migrated.text).digest('hex');
+    }
+    record.redisCacheMigrated = true;
+  }
   await docker(['stop', '--time', '30', container(id)]);
   await docker(['rm', '--force', container(id)]);
   const create = async image => {
-    await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
+    await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image, cpus: tenantCpus(cfg, record)}));
     const assigned = await assignedPortOf(id);
     await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerDatabaseMode: record.databaseMode || 'local', containerUrl: record.url, status: 'provisioning'});
     return assigned;
@@ -323,6 +344,13 @@ async function upgrade(input) {
         return {id, status: 'provisioning', previousImage, image: targetImage, role: record.role};
       }
       await docker(['rm', '--force', container(id)]);
+    }
+    // The previous image starts Redis only under supervisord, after its migrations, so it
+    // goes back to the environment it ran with; the next upgrade migrates again.
+    if (legacyEnvironment) {
+      await writeFile(envFile, legacyEnvironment.text, {mode: 0o600});
+      record.envHash = legacyEnvironment.envHash;
+      delete record.redisCacheMigrated;
     }
     try {
       const restoredPort = await create(previousImage);
@@ -376,6 +404,32 @@ async function reloadTenant(input) {
   await docker(['exec', '--user', '33:33', container(input.id), 'php', 'artisan', 'octane:reload', '--no-interaction']);
   return {id: input.id, reloaded: true};
 }
+// Changes one tenant's CPU limit. Docker applies it to the running container at once
+// (no restart), and the record keeps it for every later recreation (upgrade, re-provision).
+async function setCpuLimit(input) {
+  const record = await load(input.id);
+  if (!record) throw apiError('not_provisioned', 404);
+  if (record.fingerprint !== input.fingerprint) throw apiError('tenant_conflict', 409);
+  if (record.status === 'terminated') throw apiError('service_terminated', 410);
+  if (!Object.hasOwn(input, 'cpuLimit')) throw apiError('invalid_cpu_limit', 422);
+  const cpuLimit = requestedCpuLimit(input.cpuLimit);
+  const next = {...record};
+  if (cpuLimit) next.cpuLimit = cpuLimit; else delete next.cpuLimit;
+  let exists = true;
+  try { await docker(['inspect', '--type', 'container', '--format', '{{.Id}}', container(input.id)]); }
+  catch (error) { if (/No such (?:object|container)/i.test(String(error.stderr || error.message))) exists = false; else throw error; }
+  if (exists) {
+    try { await docker(['update', '--cpus', tenantCpus(cfg, next), container(input.id)]); }
+    catch (error) {
+      // Docker refuses a limit above the host's CPU count; say so instead of a generic 503.
+      if (/range of CPUs/i.test(String(error.stderr || error.message))) throw apiError('cpu_limit_exceeds_host', 422);
+      throw error;
+    }
+  }
+  await save(next);
+  security.audit('tenant_cpu_limit', {id: input.id, cpuLimit: tenantCpus(cfg, next)});
+  return {id: input.id, ...cpuSummary(cfg, next), applied: exists};
+}
 // Docker-level power control for operators. Billing state (suspend, terminate, resume)
 // stays with the master website through /control/lifecycle and /control/provision.
 async function containerAction(input) {
@@ -418,7 +472,7 @@ function proxyDashboard(req, res, url) {
   res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
   req.pipe(upstream);
 }
-const ADMIN_ROUTES = ['/admin/ping', '/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download', '/admin/resume'];
+const ADMIN_ROUTES = ['/admin/ping', '/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download', '/admin/resume', '/admin/resources'];
 async function adminRoute(req, res, url) {
   if (!adminSecret || !ADMIN_ROUTES.includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   if (!plausible(req)) return deny(res, adminSecurity, true);
@@ -445,6 +499,7 @@ async function adminRoute(req, res, url) {
   if (operation === 'container') return reply(res, 200, await queued(record.id, () => containerAction(tenant)));
   if (operation === 'reload') return reply(res, 200, await queued(record.id, () => reloadTenant(tenant)));
   if (operation === 'upgrade') return reply(res, 200, await queued(record.id, () => upgrade({id: record.id, fingerprint: record.fingerprint})));
+  if (operation === 'resources') return reply(res, 200, await queued(record.id, () => setCpuLimit({id: record.id, fingerprint: record.fingerprint, ...(Object.hasOwn(input, 'cpuLimit') ? {cpuLimit: input.cpuLimit} : {})})));
   // Resumes a suspended tenant from the node's own record (app key, licence, URL), so the
   // dashboard can resume tenants the master website created. Same rules as a resume
   // through /control/provision: a newer lifecycle version, and never after termination.
@@ -461,7 +516,7 @@ async function control(req, res, url) {
   const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
   if (!signedWith(cfg.NODE_CONTROL_SECRET, req, url, payload)) return deny(res, security);
   if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
-  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list', '/control/database/connection', '/control/network/key'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list', '/control/database/connection', '/control/network/key', '/control/resources'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(res, 400, {error: 'invalid_input'});
   if (url.pathname === '/control/network/key') {
@@ -505,6 +560,7 @@ async function control(req, res, url) {
       return upgrade({id: record.id, fingerprint: record.fingerprint, image: record.image});
     }
     if (url.pathname === '/control/reload') return reloadTenant(input);
+    if (url.pathname === '/control/resources') return setCpuLimit(input);
     return provision(input);
   });
   jobs.set(input.id, job);
@@ -558,7 +614,7 @@ const server = http.createServer(async (req, res) => {
     }
     const transport = info.url.protocol === 'https:' ? https : http;
     const upstream = transport.request(info.url, {method: req.method, headers: proxyHeaders(req, info)}, response => {
-      const headers = {...response.headers, 'cache-control': 'private, no-store'};
+      const headers = {...response.headers, 'cache-control': proxyCacheControl(req.method, response.headers)};
       delete headers['x-powered-by'];
       res.writeHead(response.statusCode, headers);
       response.pipe(res);

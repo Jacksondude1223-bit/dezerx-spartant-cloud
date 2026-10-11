@@ -101,6 +101,7 @@ Every route is `POST` to a node origin. Requests are signed exactly like `/contr
 | `/admin/container` | `id`, `action` (`start`/`stop`/`restart`) | Docker power control. Start and restart are refused for suspended or terminated tenants |
 | `/admin/reload` | `id` | Clears Laravel caches and reloads Octane workers |
 | `/admin/upgrade` | `id` | Same as `/control/upgrade` with the node image |
+| `/admin/resources` | `id`, `cpuLimit` (`"2.5"`, 0.1–64, or `null` for the node default) | Same as `/control/resources`: sets the tenant's CPU limit live with `docker update` and keeps it for recreations. The dashboard's **More actions → Change CPU limit** calls it |
 | `/admin/resume` | `id`, `lifecycleVersion` | Resumes a suspended tenant from the node's own record (app key, licence, URL); the version must exceed the stored one |
 | `/admin/database/download` | `id` | SQL export (primary node only) |
 

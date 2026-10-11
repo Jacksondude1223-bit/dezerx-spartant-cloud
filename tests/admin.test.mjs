@@ -77,6 +77,7 @@ if(args[0]==='ps'){console.log(JSON.stringify({Names:'spartan-'+state.id,State:s
 if(args[0]==='stats'){console.log(JSON.stringify({Name:'spartan-'+state.id,CPUPerc:'12.50%',MemUsage:'48.5MiB / 2GiB',MemPerc:'2.37%',NetIO:'1.2kB / 648B',BlockIO:'4.1MB / 0B',PIDs:'17'}));process.exit(0);}
 if(args[0]==='logs'){console.log('2026-10-11T10:00:01.000000000Z out-line');console.error('2026-10-11T10:00:00.500000000Z err-line');process.exit(0);}
 if(['start','stop','restart'].includes(args[0])){log({power:args[0]});process.exit(0);}
+if(args[0]==='update'){const cpus=args[args.indexOf('--cpus')+1];if(Number(cpus)>8){console.error('Error response from daemon: range of CPUs is from 0.01 to 8.00, as there are only 8 CPUs available');process.exit(1);}log({update:args.slice(1)});process.exit(0);}
 if(args[0]==='exec'){
   let i=1;const options=[];
   while(args[i].startsWith('-')){if(['--user','-e','-w'].includes(args[i])){options.push(args[i],args[i+1]);i+=2;}else{options.push(args[i]);i++;}}
@@ -162,6 +163,52 @@ test('admin API authenticates separately and lists tenants with live resource us
     assert.equal((await agent.json('/admin/container', {id, action: 'destroy'})).status, 400);
     assert.match(await readFile(path.join(agent.dir, 'exec.log'), 'utf8'), /"power":"restart"/);
     assert.match(agent.stderr(), /"operation":"admin\/container"/);
+  } finally { await agent.stop(); }
+});
+
+test('CPU limit is set per tenant through the admin and control APIs and applied live', async () => {
+  const agent = await startAgent({env: {TENANT_CPUS: ''}});
+  const stateFile = path.join(agent.data, id, 'state.json');
+  const updates = async () => (await readFile(path.join(agent.dir, 'exec.log'), 'utf8').catch(() => '')).split('\n').filter(Boolean).map(line => JSON.parse(line)).filter(entry => entry.update).map(entry => entry.update);
+  try {
+    const detail = await agent.json('/admin/tenant', {id});
+    assert.equal(detail.status, 200, JSON.stringify(detail.body));
+    assert.deepEqual([detail.body.cpuLimit, detail.body.cpuLimitSource, detail.body.nodeCpuDefault], ['2.5', 'node', '2.5'], 'new default is 2.5 CPUs');
+    const set = await agent.json('/admin/resources', {id, cpuLimit: 3});
+    assert.equal(set.status, 200, JSON.stringify(set.body));
+    assert.deepEqual(set.body, {id, cpuLimit: '3', cpuLimitSource: 'tenant', nodeCpuDefault: '2.5', applied: true});
+    assert.deepEqual((await updates()).at(-1), ['--cpus', '3', `spartan-${id}`], 'docker update applies it without a restart');
+    assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).cpuLimit, '3', 'the record keeps it for later recreations');
+    const listed = await agent.json('/admin/tenants', {});
+    assert.equal(listed.body.tenants[0].cpuLimit, '3');
+    for (const invalid of [0, -1, 65, '1e3', 'two', '2.555', true, {}]) {
+      const refused = await agent.json('/admin/resources', {id, cpuLimit: invalid});
+      assert.equal(refused.status, 422, `refused ${JSON.stringify(invalid)}`);
+      assert.equal(refused.body.error, 'invalid_cpu_limit');
+    }
+    assert.equal((await agent.json('/admin/resources', {id})).body.error, 'invalid_cpu_limit', 'a missing value is not a reset');
+    const tooMany = await agent.json('/admin/resources', {id, cpuLimit: '12'});
+    assert.deepEqual([tooMany.status, tooMany.body.error], [422, 'cpu_limit_exceeds_host']);
+    assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).cpuLimit, '3', 'a refused limit is not stored');
+    const control = await agent.json('/control/resources', {id, fingerprint, cpuLimit: '1.5'}, originSecret);
+    assert.equal(control.status, 200, JSON.stringify(control.body));
+    assert.equal(control.body.cpuLimit, '1.5');
+    assert.equal((await agent.json('/control/resources', {id, fingerprint: 'e'.repeat(64), cpuLimit: '2'}, originSecret)).status, 409);
+    assert.equal((await agent.call('/control/resources', {id, fingerprint, cpuLimit: '2'}, adminSecret)).status, 401);
+    const reset = await agent.json('/admin/resources', {id, cpuLimit: null});
+    assert.deepEqual([reset.body.cpuLimit, reset.body.cpuLimitSource], ['2.5', 'node']);
+    assert.deepEqual((await updates()).at(-1), ['--cpus', '2.5', `spartan-${id}`]);
+    assert.equal('cpuLimit' in JSON.parse(await readFile(stateFile, 'utf8')), false);
+    const instance = await agent.json('/control/instance', {id, fingerprint}, originSecret);
+    assert.equal(instance.body.cpuLimit, '2.5');
+  } finally { await agent.stop(); }
+});
+
+test('a node default from TENANT_CPUS applies to tenants without an override', async () => {
+  const agent = await startAgent({env: {TENANT_CPUS: '4'}});
+  try {
+    const detail = await agent.json('/admin/tenant', {id});
+    assert.deepEqual([detail.body.cpuLimit, detail.body.cpuLimitSource], ['4', 'node']);
   } finally { await agent.stop(); }
 });
 

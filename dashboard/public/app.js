@@ -64,6 +64,7 @@ const MESSAGES = {
   dashboard_restarted: 'The dashboard restarted during deployment. Deploy again; it continues where it stopped.', not_ready_in_time: 'The node did not report ready in time. Deploy again to keep waiting.',
   operation_failed: 'The node could not finish. Check journalctl -u spartan-agent on that node.', tenant_conflict: 'A different tenant already uses this ID on the node.',
   saas_configuration_required: 'Custom domains are not configured on the routing Worker (Cloudflare for SaaS).',
+  invalid_cpu_limit: 'Enter a CPU limit between 0.1 and 64, with at most two decimals (for example 2.5).', cpu_limit_exceeds_host: 'The node does not have that many CPUs. Pick a lower limit.',
   symlink_mode: 'Symbolic links have no permissions of their own.', no_space_left: 'The disk is full.', python_unavailable: 'python3 is missing from this container image.'
 };
 const explain = error => MESSAGES[error?.code || error?.message] || String(error?.code || error?.message || 'Something went wrong').replace(/_/g, ' ');
@@ -623,11 +624,20 @@ async function tenantPage(ctx, region, id, tab) {
     try { await api.post(`${base}/${path}`, body); note.update(`${label}: done`); note.close(2500); state.overview = null; await loadDetail(region, id, true); if (ctx.alive()) render(); }
     catch (error) { note.close(); fail(error); }
   };
+  // Docker applies a new limit to the running container immediately; no restart.
+  const changeCpuLimit = async () => {
+    const value = await promptDialog({title: 'CPU limit', label: 'CPUs for this tenant (for example 2.5)', value: data.cpuLimitSource === 'tenant' ? String(data.cpuLimit) : '', confirm: 'Apply',
+      hint: `Leave empty to use the node default (${data.nodeCpuDefault || '2.5'} CPUs). Currently ${data.cpuLimit || '—'} CPUs${data.cpuLimitSource === 'tenant' ? ', set for this tenant' : ', from the node default'}. Applies at once, without a restart.`});
+    if (value === null) return;
+    const cpuLimit = value === '' || value.toLowerCase() === 'default' ? null : value;
+    await act('CPU limit', 'resources', {cpuLimit});
+  };
   const actions = [
     button('Reload', {icon: 'zap', title: 'Clear Laravel caches and reload Octane workers', disabled: !running, onClick: () => act('Reload', 'reload', {})}),
     running ? button('Restart', {icon: 'refresh', onClick: () => act('Restart', 'container', {action: 'restart'}, {confirmText: `Restart the container for ${host}? Visitors see errors for a few seconds.`})})
       : button('Start', {icon: 'play', disabled: ['suspended', 'terminated'].includes(data.status), onClick: () => act('Start', 'container', {action: 'start'})}),
     h('button', {type: 'button', class: 'btn', 'aria-label': 'More actions', title: 'More actions', onclick: event => openMenu(event.currentTarget, [
+      {label: 'Change CPU limit', icon: 'cpu', onClick: () => changeCpuLimit()},
       {label: 'Upgrade to node image', icon: 'upgrade', onClick: () => act('Upgrade', 'upgrade', {}, {confirmText: ['Recreate the container on the image configured on this node.', 'The new image is pulled first; if it fails to start, the previous image is restored. Storage and the database are untouched.']})},
       ...(data.role === 'primary' ? [{label: 'Download database (SQL)', icon: 'database', onClick: () => { api.download(`${base}/database`); toast('Preparing the SQL export… the download starts when it is ready.'); }}] : []),
       '-',
@@ -668,6 +678,7 @@ function overviewTab(ctx, data) {
       detail('Restarts', String(c.restartCount ?? '—')), detail('Application health', data.applicationHealthy === undefined ? '—' : data.applicationHealthy ? 'Healthy' : 'Not answering'),
       detail('Network in / out', r ? r.networkIO : '—'), detail('Block I/O', r ? r.blockIO : '—'),
       detail('Storage used', bytes(data.storageBytes)), detail('Loopback port', data.port ? String(data.port) : '—'),
+      detail('CPU limit', data.cpuLimit ? `${data.cpuLimit} CPUs${data.cpuLimitSource === 'tenant' ? ' (this tenant)' : ' (node default)'}` : '—'), detail('Memory limit', r ? bytes(dockerSize(String(r.memoryUsage || '').split('/')[1]), 0) : '—'),
       detail('Lifecycle version', String(data.lifecycleVersion ?? 0)), detail('Out-of-memory kills', c.oomKilled ? 'Yes, last exit' : 'None'),
       detail('Home region', h('span', {class: 'label-icon'}, flag(data.primary), regionName(data.primary || '—'))), detail('This copy', data.role === 'primary' ? 'Home (serves visitors, owns the database)' : 'Standby (no data, no visitors)'),
       detail('Plan', data.plan || '—'), detail('Image', shortImage(data.image)),

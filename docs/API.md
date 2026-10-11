@@ -198,6 +198,7 @@ Example request to the primary node:
 | `licenseKey` | Required; the Spartan licence issued for this service |
 | `lifecycleVersion` | Nonnegative safe integer; defaults to zero if omitted |
 | `initialAdmin` | Optional; supply on the primary when creating the first user |
+| `cpuLimit` | Optional CPU limit for this instance, 0.1–64 (for example `"2.5"`), or `null` for the node default. Omitted keeps the instance's current limit; new instances use `TENANT_CPUS` (2.5 on new nodes). See [MANAGEMENT-API.md](MANAGEMENT-API.md#cpu-limit) |
 
 The illustrated key, fingerprint and licence are placeholders, not values to deploy.
 
@@ -211,7 +212,7 @@ Example response, HTTP 200:
 {"id":"t-111111111111111111111111","status":"ready","role":"primary"}
 ```
 
-`role` is `primary` or `secondary`; `status` may instead be `provisioning` after the startup health wait. Provisioning uses the digest-pinned image configured on the node. Image selection and container resource limits are node settings, not per-request fields.
+`role` is `primary` or `secondary`; `status` may instead be `provisioning` after the startup health wait. Provisioning uses the digest-pinned image configured on the node. Image selection and the memory limit are node settings, not per-request fields; the CPU limit defaults to the node setting and can be set per instance with `cpuLimit` or `/control/resources`.
 
 ### POST /control/lifecycle
 

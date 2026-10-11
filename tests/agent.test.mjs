@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import {spawn} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {issueDomainPermit} from '../node/domain-permit.mjs';
 import {signature} from '../workers/shared.js';
 import routing from '../workers/routing.js';
@@ -20,6 +21,8 @@ test('node agent authenticates control requests and proxies only the correct ten
   const backend = http.createServer((req, res) => {
     requests.push({path: req.url, host: req.headers.host, credential: req.headers['x-spartan-origin'], clientIp: req.headers['x-spartan-client-ip'], forwarded: req.headers['x-forwarded-for'], ingress: req.headers['x-spartan-ingress-key']});
     if (req.url === '/__cloud_health' && req.headers.host !== licensedHost) { res.writeHead(403); res.end('license_domain_mismatch'); return; }
+    if (req.url.startsWith('/build/assets/')) { res.setHeader('cache-control', 'public, max-age=31536000, immutable'); res.end('bundle'); return; }
+    if (req.url === '/public-with-cookie') { res.setHeader('cache-control', 'public, max-age=600'); res.setHeader('set-cookie', 'session=test; Secure; HttpOnly'); res.end('page'); return; }
     res.setHeader('set-cookie', 'session=test; Secure; HttpOnly');
     res.end(req.url === '/__cloud_health' ? '{"status":"ready"}' : 'tenant-app');
   });
@@ -158,6 +161,9 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     const launch = JSON.parse(await readFile(path.join(dir, 'docker.json.launch'), 'utf8'));
     assert.equal(launch.config, '/etc/spartan-cloud/docker');
     assert.equal(launch.args[launch.args.indexOf('--memory') + 1], '2g');
+    assert.equal(launch.args[launch.args.indexOf('--cpus') + 1], '2.5', 'tenants default to 2.5 CPUs');
+    assert.ok(envFile.includes('CACHE_STORE=redis') && envFile.includes('CACHE_DRIVER=redis'), 'the cache uses the container Redis');
+    assert.ok(envFile.includes('SESSION_DRIVER=redis'), 'sessions use the container Redis outside the US-central mode');
     assert.equal(launch.args[launch.args.indexOf('--memory-swap') + 1], '2g');
     assert.equal(stderr.includes(license), false, 'the licence never reaches the log');
     assert.equal(JSON.parse(state).domainVerificationToken, undefined, 'short-lived permits are not persisted');
@@ -194,6 +200,11 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.equal(proxy.headers.get('set-cookie'), 'session=test; Secure; HttpOnly');
     assert.equal(proxy.headers.get('cache-control'), 'private, no-store');
     assert.deepEqual(requests.at(-1), {path: '/billing?invoice=1', host: `${id}.cloud.test`, credential: undefined, clientIp: '198.51.100.42', forwarded: '198.51.100.42', ingress: input.appKey});
+    const bundle = await fetch(`${origin}/tenant/${id}/build/assets/app-0123abcd.js`, {headers});
+    assert.equal(await bundle.text(), 'bundle');
+    assert.equal(bundle.headers.get('cache-control'), 'public, max-age=31536000, immutable', 'hashed bundles keep their long-lived cache policy');
+    const cookiePage = await fetch(`${origin}/tenant/${id}/public-with-cookie`, {headers});
+    assert.equal(cookiePage.headers.get('cache-control'), 'private, no-store', 'a response that sets a cookie is never shared-cacheable');
     headers['x-spartan-host'] = `t-${'2'.repeat(24)}.cloud.test`;
     assert.equal((await fetch(`${origin}/tenant/${id}/billing`, {headers})).status, 404);
     headers['x-spartan-host'] = 'billing.customer.test';
@@ -207,12 +218,21 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
     assert.equal((await send()).status, 200);
     const stagedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
     assert.equal(stagedState.containerUrl, `https://${id}.cloud.test`);
+    const envPath = path.join(dir, 'data', id, 'app.env');
+    // A tenant provisioned before the Redis change: the first recreation migrates it once.
+    await writeFile(envPath, (await readFile(envPath, 'utf8')).replace('CACHE_STORE=redis', 'CACHE_STORE=file').replace('CACHE_DRIVER=redis', 'CACHE_DRIVER="file"').replace('SESSION_DRIVER=redis', 'SESSION_DRIVER=file'));
     licensedHost = 'panel.customer.test';
     const upgradeBody = JSON.stringify({id, fingerprint: input.fingerprint});
     const upgradeStamp = String(Date.now());
     const upgraded = await fetch(`${origin}/control/upgrade`, {method: 'POST', body: upgradeBody, headers: {'x-spartan-timestamp': upgradeStamp, 'x-spartan-signature': await signature(secret, upgradeStamp, 'POST', '/control/upgrade', upgradeBody)}});
     assert.equal(upgraded.status, 200);
     assert.equal((await upgraded.json()).status, 'upgraded');
+    const migratedEnv = await readFile(envPath, 'utf8');
+    assert.ok(migratedEnv.includes('CACHE_STORE=redis') && migratedEnv.includes('CACHE_DRIVER=redis') && migratedEnv.includes('SESSION_DRIVER=redis'), 'a legacy file cache moves to Redis on upgrade');
+    const migratedState = JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8'));
+    assert.equal(migratedState.redisCacheMigrated, true);
+    assert.equal(migratedState.envHash, createHash('sha256').update(migratedEnv).digest('hex'));
+    assert.equal(migratedState.envHash, migratedState.containerEnvHash, 'the recreated container runs the migrated environment');
     assert.equal(JSON.parse(await readFile(path.join(dir, 'data', id, 'state.json'), 'utf8')).containerUrl, 'https://panel.customer.test');
     headers['x-spartan-host'] = `${id}.cloud.test`;
     const canonical = await fetch(`${origin}/tenant/${id}/billing?invoice=1`, {headers, redirect: 'manual'});

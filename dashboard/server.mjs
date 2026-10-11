@@ -220,7 +220,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     return {nodes: results, sampledAt: new Date(now()).toISOString()};
   }
 
-  const TENANT = /^\/api\/nodes\/(us|de)\/tenants\/(t-[a-f0-9]{24})\/(detail|logs|exec|fs|fs\/download|container|reload|upgrade|database)$/;
+  const TENANT = /^\/api\/nodes\/(us|de)\/tenants\/(t-[a-f0-9]{24})\/(detail|logs|exec|fs|fs\/download|container|reload|upgrade|database|resources)$/;
   async function api(req, res, url) {
     const ip = clientIp(req);
     if (url.pathname === '/api/session' && req.method === 'GET') {
@@ -297,6 +297,12 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     if (operation === 'container') { audit(`container_${String(input.action).slice(0, 12)}`); return send(res, 200, await node(region, 'container', {id, action: input.action}, {timeout: 90000})); }
     if (operation === 'reload') { audit('reload'); return send(res, 200, await node(region, 'reload', {id}, {timeout: 90000})); }
     if (operation === 'upgrade') { audit('upgrade'); return send(res, 200, await node(region, 'upgrade', {id}, {timeout: 300000})); }
+    if (operation === 'resources') {
+      // null returns the tenant to the node default; the node validates the value.
+      if (!Object.hasOwn(input, 'cpuLimit')) return send(res, 422, {error: 'invalid_cpu_limit'});
+      audit('cpu_limit', {cpuLimit: String(input.cpuLimit).slice(0, 12)});
+      return send(res, 200, await node(region, 'resources', {id, cpuLimit: input.cpuLimit}, {timeout: 60000}));
+    }
     return send(res, 404, {error: 'not_found'});
   }
 

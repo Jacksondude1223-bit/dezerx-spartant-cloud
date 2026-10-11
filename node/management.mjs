@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {readFile, writeFile, rename, statfs, mkdtemp, rm, open} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {databaseName} from './mysql.mjs';
+import {cpuSummary} from './resources.mjs';
 import {fileProgram, validFileRequest} from './tenant-files.mjs';
 
 export function apiError(code, status = 400) {
@@ -140,7 +141,7 @@ export function createManagement({cfg, root, load, save, docker, mysql, applicat
   }
   async function information(input, health = false) {
     const {record, inspect} = await tenant(input);
-    const result = {id: record.id, region: cfg.NODE_REGION, primary: record.primary, role: record.role, databaseMode: record.containerDatabaseMode || 'local', databaseRegion: record.containerDatabaseMode === 'us-central' ? 'us' : cfg.NODE_REGION, status: record.status, url: record.url, activeUrl: record.containerUrl || record.url, lifecycleVersion: record.lifecycleVersion || 0, image: inspect?.Config?.Image || record.image, running: inspect?.State?.Running === true, containerHealth: inspect?.State?.Health?.Status || 'not_configured'};
+    const result = {id: record.id, region: cfg.NODE_REGION, primary: record.primary, role: record.role, databaseMode: record.containerDatabaseMode || 'local', databaseRegion: record.containerDatabaseMode === 'us-central' ? 'us' : cfg.NODE_REGION, status: record.status, url: record.url, activeUrl: record.containerUrl || record.url, lifecycleVersion: record.lifecycleVersion || 0, image: inspect?.Config?.Image || record.image, running: inspect?.State?.Running === true, containerHealth: inspect?.State?.Health?.Status || 'not_configured', ...cpuSummary(cfg, record)};
     if (health && inspect?.State?.Running) {
       const raw = await docker(['stats', '--no-stream', '--format', '{{json .}}', `spartan-${record.id}`]);
       const stats = JSON.parse(raw);

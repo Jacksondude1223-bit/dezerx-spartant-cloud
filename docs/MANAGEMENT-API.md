@@ -16,6 +16,7 @@ For instance operations, include `id` and `fingerprint`, the stable identities s
 | `/control/files` | `action`, `path`, and operation-specific fields | Restricted file manager |
 | `/control/domain` | `url`, `licenseKey` | Change the instance's canonical domain and recreate its container |
 | `/control/reload` | None | Clear Laravel caches and reload Octane workers |
+| `/control/resources` | `cpuLimit` | Set this instance's CPU limit (`"2.5"`, 0.1–64, up to two decimals) or `null` for the node default. Applied to the running container at once, without a restart, and kept for later recreations |
 | `/control/provision` | Existing provisioning fields | Provision or resume this instance |
 | `/control/lifecycle` | `action`, `lifecycleVersion` | Suspend or terminate this instance |
 
@@ -26,6 +27,16 @@ Example identity body:
 ```
 
 Health information does not return database passwords, app keys, licences or environment contents. Node CPU usage is sampled once per second and can be null immediately after agent startup. Container CPU percentage is Docker's percentage and can exceed 100% when more than one CPU is used. Memory, network and block I/O usage strings retain Docker's units. A stopped container returns `running: false` and `resources: null`. Application health tests the local container; a secondary container's check does not prove the primary database or primary forwarding path is healthy. There is no historical metrics database. Health reports `degraded` when Docker or MariaDB is unavailable. `versions.json` must be valid JSON, at most 64 KiB, readable by uid 33, and present at the application root; it cannot be a symlink. The version endpoint requires a running container and returns the file's JSON shape without inventing a version field.
+
+## CPU limit
+
+Every instance runs with the node default (`TENANT_CPUS`, 2.5 CPUs on new nodes) unless it has its own limit. `/control/resources` sets one:
+
+```json
+{"id":"t-111111111111111111111111","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","cpuLimit":"3"}
+```
+
+The reply is `{"id", "cpuLimit", "cpuLimitSource": "tenant"|"node", "nodeCpuDefault", "applied"}`. `applied: false` means no container exists yet; the limit is used when one is created. Send `"cpuLimit": null` to return to the node default. Docker refuses a limit above the host's CPU count (`422 cpu_limit_exceeds_host`); an invalid value returns `422 invalid_cpu_limit`. `/control/provision` also accepts an optional `cpuLimit` with the same rules; without it, re-provisioning keeps the instance's current limit. `/control/instance` and `/control/health` report `cpuLimit`, `cpuLimitSource` and `nodeCpuDefault`. In two-region setups, set the limit on each node that holds a copy.
 
 ## Default instance hostname
 
