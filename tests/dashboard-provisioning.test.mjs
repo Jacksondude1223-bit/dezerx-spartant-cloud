@@ -14,7 +14,7 @@ const nodes = {us: 'http://127.0.0.1:8788', de: 'https://node-de.example.test'};
 const license = 'SPARTANPROFESSIONAL_abcdefghijklmnop';
 const admin = {displayName: 'Owner', email: 'owner@customer.test', password: 'a-good-password'};
 
-async function setup({nodeReply, routerReply} = {}) {
+async function setup({nodeReply, routerReply, nodeStatus} = {}) {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'spartan-dash-'));
   const provisioning = {...loadProvisioningConfig({ORIGIN_SECRET: originSecret, BASE_DOMAIN: 'load.example.test'}, adminSecret), stateFile: path.join(dir, 'instances.json')};
   const calls = [];
@@ -28,7 +28,7 @@ async function setup({nodeReply, routerReply} = {}) {
     return new Response(JSON.stringify(data), {status});
   };
   const events = [];
-  const provisioner = createProvisioner({provisioning}, {nodes, fetchImpl, sleep: async () => {}, record: (action, fields) => events.push({action, ...fields})});
+  const provisioner = createProvisioner({provisioning}, {nodes, fetchImpl, nodeStatus, queueInterval: 3600000, sleep: async () => {}, record: (action, fields) => events.push({action, ...fields})});
   return {provisioner, calls, events, provisioning};
 }
 async function defaultRouter(pathname, body) {
@@ -216,4 +216,53 @@ test('a failed deploy never leaves a step marked running and says why', async ()
   assert.equal(failed.status, 'failed');
   assert.equal(failed.steps.primary, 'failed');
   assert.match(failed.log.map(entry => entry.text).join('\n'), /Renewing the domain permit with the routing Worker failed: service_not_active/);
+});
+
+const GiB = 1024 ** 3;
+const room = (memory, disk = 50) => ({node: {resources: {memory: {freeBytes: memory * GiB}, disk: {availableBytes: disk * GiB}}}});
+
+test('a deployment waits in the queue until both nodes have room, then starts by itself', async () => {
+  const free = {us: 0.4, de: 8};
+  const {provisioner, calls} = await setup({nodeStatus: async region => room(free[region])});
+  const created = await provisioner.create({primary: 'de', licenseKey: license}, 'admin');
+  const queued = await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  assert.equal(queued.status, 'queued');
+  assert.equal(queued.queue.position, 1);
+  assert.match(queued.queue.reason, /node-us has 0\.4 GB memory free; needs 1\.0 GB/);
+  assert.equal(calls.filter(c => c.pathname === '/control/provision').length, 0, 'nothing is provisioned while a node is short of room');
+  await assert.rejects(provisioner.deploy(created.id, {initialAdmin: admin}, 'admin'), /instance_busy/);
+  free.us = 4;
+  await provisioner.pump();
+  await provisioner.idle();
+  const done = await provisioner.get(created.id);
+  assert.equal(done.status, 'ready');
+  assert.equal(done.queue, null);
+  assert.match(done.log.map(entry => entry.text).join('\n'), /Queued: node-us has 0\.4 GB memory free/);
+});
+
+test('one deployment per node at a time; the next one starts when it finishes', async () => {
+  let release;
+  const gate = new Promise(resolve => { release = resolve; });
+  let first = true;
+  const {provisioner} = await setup({nodeStatus: async () => room(8), nodeReply: async (origin, body) => { if (first) { first = false; await gate; } return [200, {id: body.id, status: 'ready'}]; }});
+  const a = await provisioner.create({primary: 'us', licenseKey: license}, 'admin');
+  const b = await provisioner.create({primary: 'de', licenseKey: license}, 'admin');
+  assert.equal((await provisioner.deploy(a.id, {initialAdmin: admin}, 'admin')).status, 'deploying');
+  const waiting = await provisioner.deploy(b.id, {initialAdmin: admin}, 'admin');
+  assert.equal(waiting.status, 'queued');
+  assert.match(waiting.queue.reason, /waiting for another deployment on node-/);
+  release();
+  await provisioner.idle();
+  assert.equal((await provisioner.get(a.id)).status, 'ready');
+  assert.equal((await provisioner.get(b.id)).status, 'ready', 'the queued deployment started once the first finished');
+});
+
+test('a queued deployment can be cancelled', async () => {
+  const {provisioner} = await setup({nodeStatus: async () => room(0.1)});
+  const created = await provisioner.create({primary: 'us', licenseKey: license}, 'admin');
+  await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  const cancelled = await provisioner.cancel(created.id, 'admin');
+  assert.equal(cancelled.status, 'ready_to_deploy');
+  assert.equal(cancelled.queue, null);
+  await assert.rejects(provisioner.cancel(created.id, 'admin'), /not_queued/);
 });

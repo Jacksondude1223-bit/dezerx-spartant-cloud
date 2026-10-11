@@ -113,7 +113,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     log({source: 'spartan-dashboard', ...entry});
   };
 
-  const provisioner = config.provisioning ? createProvisioner(config, {nodes: config.nodes, now, fetchImpl, record: (action, fields) => record('action', {action, ...fields})}) : null;
+  const provisioner = config.provisioning ? createProvisioner(config, {nodes: config.nodes, now, fetchImpl, record: (action, fields) => record('action', {action, ...fields}), nodeStatus: region => node(region, 'overview', {}, {timeout: 25000})}) : null;
 
   const clientIp = req => {
     const remote = req.socket.remoteAddress || '';
@@ -290,7 +290,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     return send(res, 404, {error: 'not_found'});
   }
 
-  const INSTANCE = /^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(verify|deploy|discard))?$/;
+  const INSTANCE = /^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(verify|deploy|cancel|discard))?$/;
   async function instances(req, res, url, session, ip) {
     if (!provisioner) return send(res, 404, {error: 'provisioning_disabled'});
     try {
@@ -307,6 +307,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
       const input = await readJson(req, 8192);
       if (operation === 'verify') return send(res, 200, await provisioner.verify(id));
       if (operation === 'deploy') return send(res, 202, await provisioner.deploy(id, input, session.user));
+      if (operation === 'cancel') return send(res, 200, await provisioner.cancel(id, session.user));
       if (operation === 'discard') return send(res, 200, await provisioner.discard(id, session.user));
       return send(res, 404, {error: 'not_found'});
     } catch (error) {

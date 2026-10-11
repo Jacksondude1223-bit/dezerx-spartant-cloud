@@ -53,6 +53,7 @@ const MESSAGES = {
   invalid_laravel_env: 'The node rejected its extra Laravel environment file (LARAVEL_ENV_FILE).', node_capacity: 'The node already holds its maximum number of tenants (MAX_TENANTS).',
   stale_operation: 'The node has a newer lifecycle version for this tenant.', service_terminated: 'This tenant was terminated on the node and cannot be provisioned again.',
   container_conflict: 'A container with this name belongs to a different tenant on the node.',
+  not_queued: 'This instance is not in the queue.',
   invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
   ownership_not_verified: 'The DNS records are not visible yet. Add them, wait a few minutes and verify again.', domain_not_verified: 'Verify the domain first.',
   domain_verification_required: 'The node refused the domain permit. Verify the domain again.', instance_busy: 'This instance is being deployed right now.',
@@ -125,6 +126,7 @@ const ICONS = {
   database: "<path d=\"M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0\"/><path d=\"M4 6v6a8 3 0 0 0 16 0v-6\"/><path d=\"M4 12v6a8 3 0 0 0 16 0v-6\"/>",
   clock: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M12 7v5l3 3\"/>",
   arrowDown: "<path d=\"M12 5l0 14\"/><path d=\"M18 13l-6 6\"/><path d=\"M6 13l6 6\"/>",
+  chevron: "<path d=\"M9 6l6 6l-6 6\"/>",
   arrowUp: "<path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/>",
   rocket: "<path d=\"M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3\"/><path d=\"M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3\"/><path d=\"M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/>",
   check: "<path d=\"M5 12l5 5l10 -10\"/>",
@@ -304,6 +306,7 @@ async function overview(force = false) {
   catch (error) { state.overviewError = error; if (!state.overview) throw error; }
   return state.overview;
 }
+const uniqueCount = list => new Set(list.map(t => t.id)).size;
 const allTenants = data => data.nodes.filter(n => n.ok).flatMap(n => n.tenants.map(t => ({...t, region: n.region})));
 const nodeOf = (data, region) => data.nodes.find(n => n.region === region);
 function nodeTone(n) { if (!n) return {tone: '', label: 'Unknown'}; if (!n.ok) return {tone: 'red', label: 'Unreachable'}; if (n.node.status !== 'ready') return {tone: 'amber', label: 'Degraded'}; return {tone: 'green', label: 'Online'}; }
@@ -395,21 +398,46 @@ function loginPage() {
 }
 
 /* ---------------------------------------------------------------- tenant table */
-function tenantTable(list, {region = true, empty = 'No tenants yet'} = {}) {
+// Each tenant lives on both nodes: the primary serves it, the other copy is its standby.
+// Show one row per tenant (the primary) and fold the standby underneath it.
+const expandedTenants = new Set();
+function tenantTable(list, {region = true, empty = 'No tenants yet', group = region} = {}) {
   if (!list.length) return h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, empty), 'Tenants appear here once the master website provisions them.'));
-  const rows = list.map(t => {
+  const open = t => go(`#/tenant/${t.region}/${t.id}`);
+  const cells = t => {
     const r = t.resources;
-    return h('tr', {class: 'clickable', tabindex: '0', onclick: () => go(`#/tenant/${t.region}/${t.id}`), onkeydown: e => { if (e.key === 'Enter') go(`#/tenant/${t.region}/${t.id}`); }},
-      h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'app-icon'}, icon('docker')), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, hostOf(t)), h('div', {class: 'sub mono'}, t.id)))),
-      h('td', null, statusCell(t)),
+    return [h('td', null, statusCell(t)),
       h('td', null, r ? usage(r.cpuPercent) : h('span', {class: 'faint'}, '—')),
       h('td', null, r ? h('span', null, bytes(r.memoryUsedBytes), h('span', {class: 'faint'}, ` / ${bytes(r.memoryLimitBytes, 0)}`)) : h('span', {class: 'faint'}, '—')),
       h('td', null, region ? h('span', {class: 'label-icon'}, flag(t.region), t.role || '—') : t.role || '—'),
-      h('td', {class: 'right mono'}, t.port ? String(t.port) : '—'));
-  });
+      h('td', {class: 'right mono'}, t.port ? String(t.port) : '—')];
+  };
+  // Keep the order of the incoming list (it may be sorted by CPU), keyed by the first copy seen.
+  const groups = new Map();
+  for (const t of list) {
+    const key = group ? t.id : `${t.region}/${t.id}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(t);
+  }
+  const tbody = h('tbody');
+  const paint = () => {
+    tbody.replaceChildren(...[...groups.values()].flatMap(copies => {
+      const main = copies.find(t => t.role === 'primary') || copies[0];
+      const others = copies.filter(t => t !== main);
+      const expanded = expandedTenants.has(main.id);
+      const toggle = others.length ? h('button', {type: 'button', class: `icon-btn expander ${expanded ? 'open' : ''}`, 'aria-expanded': String(expanded), 'aria-label': expanded ? 'Hide standby' : 'Show standby', title: expanded ? 'Hide standby' : `Show standby on node-${others[0].region}`, onclick: event => { event.stopPropagation(); expanded ? expandedTenants.delete(main.id) : expandedTenants.add(main.id); paint(); }}, icon('chevron')) : h('span', {class: 'expander-gap'});
+      const row = h('tr', {class: 'clickable', tabindex: '0', onclick: () => open(main), onkeydown: e => { if (e.key === 'Enter') open(main); }},
+        h('td', null, h('div', {class: 'name-cell'}, toggle, h('span', {class: 'app-icon'}, icon('docker')), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, hostOf(main)), h('div', {class: 'sub mono'}, main.id, others.length && !expanded ? h('span', {class: 'standby-hint'}, ` · standby on node-${others[0].region}`) : null)))),
+        ...cells(main));
+      return [row, ...(expanded ? others.map(t => h('tr', {class: 'clickable standby-row', tabindex: '0', onclick: () => open(t), onkeydown: e => { if (e.key === 'Enter') open(t); }},
+        h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'expander-gap'}), h('span', {class: 'tree'}, '└'), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, `Standby on node-${t.region}`), h('div', {class: 'sub'}, t.role === 'secondary' ? 'Forwards visitors to the primary; holds no data' : t.role || '')))),
+        ...cells(t))) : [])];
+    }));
+  };
+  paint();
   return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null,
     h('thead', null, h('tr', null, h('th', null, 'Tenant'), h('th', null, 'Status'), h('th', null, 'CPU'), h('th', null, 'Memory'), h('th', null, region ? 'Region · role' : 'Role'), h('th', {class: 'right'}, 'Port'))),
-    h('tbody', null, rows))));
+    tbody)));
 }
 
 /* ---------------------------------------------------------------- home */
@@ -447,7 +475,6 @@ async function homePage(ctx) {
   const draw = data => {
     const online = data.nodes.filter(n => n.ok);
     const tenants = allTenants(data);
-    const runningCount = tenants.filter(t => t.container?.running).length;
     const memUsed = online.reduce((s, n) => s + n.node.resources.memory.usedBytes, 0);
     const memTotal = online.reduce((s, n) => s + n.node.resources.memory.totalBytes, 0);
     const cpu = online.length ? online.reduce((s, n) => s + (n.node.resources.cpu.usagePercent || 0), 0) / online.length : null;
@@ -458,7 +485,7 @@ async function homePage(ctx) {
       h('div', {class: 'cards'},
         statCard('cpu', 'CPU', pct(cpu), 'average across nodes'),
         statCard('memory', 'Memory used', bytes(memUsed), `of ${bytes(memTotal, 0)}`),
-        statCard('docker', 'Tenants', String(tenants.length), `${runningCount} running`)),
+        statCard('docker', 'Tenants', String(uniqueCount(tenants)), `${uniqueCount(tenants.filter(t => t.container?.running && t.role !== 'secondary'))} serving`)),
       h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Nodes'), h('span', {class: 'note'}, `Updated ${ago(state.overviewAt)}`)), nodeTable(data.nodes)),
       h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Busiest tenants'), h('a', {class: 'note', href: '#/tenants'}, 'View all')), tenantTable([...tenants].sort((a, b) => (b.resources?.cpuPercent || 0) - (a.resources?.cpuPercent || 0)).slice(0, 8)))]);
     ctx.refreshSidebar();
@@ -484,7 +511,7 @@ async function tenantsPage(ctx) {
   const unreachable = data.nodes.filter(n => !n.ok);
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Tenants'}]),
-    pageHead({title: 'Tenants', subtitle: `${allTenants(data).length} provisioned across ${data.nodes.length} nodes`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
+    pageHead({title: 'Tenants', subtitle: `${uniqueCount(allTenants(data))} tenants across ${data.nodes.length} nodes, each with a standby on the other node`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
     unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(new ApiError(n.error))}`)),
     h('div', {class: 'section-head'}, h('div', {class: 'group', style: {display: 'flex', gap: '8px', flexWrap: 'wrap'}}, h('div', {class: 'search'}, icon('search'), search), regionSelect), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
     tableSlot]);
@@ -878,7 +905,7 @@ async function activityPage(ctx) {
 /* ---------------------------------------------------------------- create instance */
 const PRODUCT_PREFIXES = [['SPARTANSTARTER_', 'Starter'], ['SPARTANCLOUD_', 'Cloud'], ['SPARTANCLOUDPLUS_', 'Cloud Plus'], ['SPARTANPROFESSIONAL_', 'Professional'], ['SPARTANULTIMATE_', 'Ultimate'], ['SPARTANDEV_', 'Developer']];
 const productOf = key => (PRODUCT_PREFIXES.find(([prefix]) => key.startsWith(prefix)) || [])[1] || null;
-const INSTANCE_STATUS = {awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
+const INSTANCE_STATUS = {awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], queued: ['Queued', 'amber'], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
 const instanceStatus = item => { const [label, tone] = INSTANCE_STATUS[item.status] || [item.status, '']; return {label, tone}; };
 function copyButton(text) {
   return h('button', {type: 'button', class: 'icon-btn', title: 'Copy', 'aria-label': 'Copy', onclick: async () => { try { await navigator.clipboard.writeText(typeof text === 'function' ? text() : text); toast('Copied'); } catch { toast('Copy failed; select the text instead', {error: true}); } }}, icon('copy'));
@@ -902,7 +929,7 @@ async function instancesPage(ctx) {
     pageHead({title: 'Instances', subtitle: 'Spartan instances created from this dashboard', actions: [button('Refresh', {icon: 'refresh', onClick: () => render()}), h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance')]}),
     rows.length ? h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Instance'), h('th', null, 'Status'), h('th', null, 'Product'), h('th', null, 'Region'), h('th', null, 'Created'))), h('tbody', null, rows))))
       : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'No instances yet'), 'Create one to provision it on both nodes and publish it to the router.', h('div', {style: {marginTop: '14px'}}, h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance'))))]);
-  if (data.instances.some(item => item.status === 'deploying')) every(5000, () => render());
+  if (data.instances.some(item => ['deploying', 'queued'].includes(item.status))) every(5000, () => render());
 }
 
 function choiceGroup(name, options, value, onChange) {
@@ -1025,7 +1052,7 @@ function adminForm(item, onDone) {
   const deployButton = button(item.status === 'failed' ? 'Retry deployment' : 'Deploy', {kind: 'primary', icon: 'rocket'});
   deployButton.addEventListener('click', async () => {
     deployButton.disabled = true;
-    try { await api.post(`/api/instances/${item.id}/deploy`, {...(license ? {licenseKey: license.value.trim()} : {}), initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast('Deployment started'); onDone(); }
+    try { const next = await api.post(`/api/instances/${item.id}/deploy`, {...(license ? {licenseKey: license.value.trim()} : {}), initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast(next.status === 'queued' ? 'Queued until both nodes have room' : 'Deployment started'); onDone(); }
     catch (error) { fail(error); deployButton.disabled = false; }
   });
   return h('div', {class: 'card form-card'},
@@ -1051,7 +1078,7 @@ async function instancePage(ctx, id, polling = false) {
     try { const next = await api.post(`/api/instances/${id}/verify`); toast(next.dns?.readyToProvision ? 'Domain verified. Ready to deploy.' : 'Not verified yet. Records can take a few minutes to propagate.', {error: !next.dns?.readyToProvision}); reload(); }
     catch (error) { fail(error); if (btn) btn.disabled = false; }
   };
-  const canDiscard = !['ready', 'deploying'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done';
+  const canDiscard = !['ready', 'deploying', 'queued'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done';
   const details = h('div', {class: 'card'}, h('dl', {class: 'details'},
     detail('URL', item.url), detail('Tenant ID', h('span', {class: 'mono'}, item.id)),
     detail('Home region', h('span', {class: 'label-icon'}, flag(item.primary), regionName(item.primary))), detail('Standby', h('span', {class: 'label-icon'}, flag(item.secondary), regionName(item.secondary))),
@@ -1064,6 +1091,14 @@ async function instancePage(ctx, id, polling = false) {
     h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records'), h('span', {class: 'note'}, item.dns?.checkedAt ? `Checked ${ago(item.dns.checkedAt)}${item.dns.stage ? ` · ${item.dns.stage.replace(/_/g, ' ')}` : ''}` : '')), dnsCard(item)));
   if (['deploying', 'ready'].includes(item.status) || (item.status === 'failed' && Object.keys(item.steps || {}).length)) body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Deployment')), h('div', {class: 'card'}, stepList(item))));
+  if (item.status === 'queued') {
+    const q = item.queue || {};
+    body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Queue'), h('span', {class: 'note'}, q.checkedAt ? `Checked ${ago(q.checkedAt)} · re-checked every minute` : 'Re-checked every minute')),
+      h('div', {class: 'card'}, h('div', {class: 'queue-box'}, h('div', {class: 'queue-pos'}, h('strong', null, String(q.position || 1)), h('span', null, `of ${q.length || 1}`)),
+        h('div', null, h('div', {class: 'queue-title'}, q.reason ? `Waiting: ${q.reason}.` : 'Checking that both nodes have room…'),
+          h('div', {class: 'sub'}, 'Deployments start one at a time per node, and only when both nodes have enough free memory and disk (DASHBOARD_MIN_FREE_MEMORY_MB, DASHBOARD_MIN_FREE_DISK_GB). It starts by itself; keep this dashboard running, since a restart clears the queue.'),
+          q.since ? h('div', {class: 'sub'}, liveText(() => `In the queue for ${clock(Date.now() - Date.parse(q.since))}`)) : null)))));
+  }
   if (item.status === 'deploying') { const watch = await nodeWatch(item).catch(() => null); if (watch) body.push(watch); }
   if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. Suspend, resume and terminate stay with the billing system; this dashboard only creates instances.'));
   if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
@@ -1073,12 +1108,13 @@ async function instancePage(ctx, id, polling = false) {
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances', href: '#/instances'}, {label: item.hostname}]),
     pageHead({title: item.hostname, lead: h('span', {class: 'app-icon large'}, icon('rocket')), pill: status, subtitle: h('span', {class: 'mono'}, item.id), actions: [
       item.custom && ['awaiting_dns', 'ready_to_deploy', 'failed'].includes(item.status) ? button('Verify DNS', {icon: 'refresh', kind: item.status === 'awaiting_dns' ? 'primary' : '', onClick: verify}) : null,
+      item.status === 'queued' ? button('Leave queue', {icon: 'stop', onClick: async () => { try { await api.post(`/api/instances/${id}/cancel`); toast('Removed from the queue'); reload(); } catch (error) { fail(error); } }}) : null,
       canDiscard ? button('Discard', {icon: 'trash', kind: 'danger', onClick: discard}) : null,
       item.status === 'ready' ? h('a', {class: 'btn', href: `#/tenant/${item.primary}/${item.id}`}, icon('docker'), 'Manage tenant') : null,
       item.status === 'ready' ? h('a', {class: 'btn primary', href: item.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null]}),
     body,
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Details')), details)]);
-  if (item.status === 'deploying' && !polling) { every(4000, () => { if (ctx.alive()) instancePage(ctx, id, true).catch(() => {}); }); every(1000, tickLive); }
+  if (['deploying', 'queued'].includes(item.status) && !polling) { every(4000, () => { if (ctx.alive()) instancePage(ctx, id, true).catch(() => {}); }); every(1000, tickLive); }
 }
 
 render();

@@ -42,7 +42,11 @@ export function loadProvisioningConfig(env, adminSecret) {
   // Legacy per-plane overrides, as on the nodes and the routing Worker. Permits always use ORIGIN_SECRET.
   // Only shown in the form; the routing Worker decides the real name.
   const instanceDomain = String(env.INSTANCE_DOMAIN || baseDomain.split('.').slice(1).join('.') || baseDomain).toLowerCase();
-  return {originSecret, instanceDomain, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
+  // A deployment waits in the queue until both nodes have this much headroom.
+  const minFreeMemory = Number(env.DASHBOARD_MIN_FREE_MEMORY_MB || 1024) * 1024 * 1024;
+  const minFreeDisk = Number(env.DASHBOARD_MIN_FREE_DISK_GB || 5) * 1024 * 1024 * 1024;
+  if (!(minFreeMemory >= 0) || !(minFreeDisk >= 0)) throw new Error('DASHBOARD_MIN_FREE_MEMORY_MB and DASHBOARD_MIN_FREE_DISK_GB must be numbers');
+  return {originSecret, instanceDomain, minFreeMemory, minFreeDisk, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
 }
 
 // Accepts "panel.example.com", "https://panel.example.com/" and the like.
@@ -51,11 +55,17 @@ export function normalizeDomain(value) {
   return HOSTNAME.test(text) && text.length <= 200 ? text : null;
 }
 
-export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))}) {
+export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nodeStatus = null, queueInterval = 60000}) {
   const p = config.provisioning;
   const instances = new Map();
   const permits = new Map();
   const running = new Map();
+  // Deployments waiting for room, oldest first. The administrator password stays in
+  // memory only, so a restart drops the queue (those instances show dashboard_restarted).
+  const queue = [];
+  const queuedAdmins = new Map();
+  let pumping = null;
+  let timer = null;
   let loaded = null;
   const reserved = [p.baseDomain, ...Object.values(nodes).map(origin => new URL(origin).hostname)];
 
@@ -68,7 +78,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       // A deployment cannot survive a restart: it needs the administrator password,
       // which is never written to disk.
       for (const item of instances.values()) {
-        if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null});
+        if (item.status === 'deploying' || item.status === 'queued') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null, queue: null});
         // Records from earlier releases could fail with a step still marked running.
         if (item.status === 'failed') for (const key of Object.keys(item.steps || {})) if (item.steps[key] === 'running') item.steps[key] = 'failed';
       }
@@ -121,7 +131,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     id: item.id, primary: item.primary, secondary: item.secondary, hostname: item.hostname, custom: item.custom, url: `https://${item.hostname}`,
     product: item.licenseKey ? productName(item.licenseKey) : null, licenseHint: item.licenseKey ? `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}` : null,
     customerId: item.customerId, serviceId: item.serviceId, status: item.status, error: item.error || null, steps: item.steps || {},
-    dns: item.dns || null, log: item.log || [], progress: item.progress || null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
+    dns: item.dns || null, log: item.log || [], progress: item.progress || null, queue: item.status === 'queued' ? {position: queue.indexOf(item.id) + 1, length: queue.length, reason: item.queue?.reason || null, since: item.queue?.since || null, checkedAt: item.queue?.checkedAt || null} : null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
   });
   const other = region => region === 'us' ? 'de' : 'us';
   const find = async id => { await load(); const item = instances.get(id); if (!item) throw new ProvisionError(404, 'instance_not_found'); return item; };
@@ -249,6 +259,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         const transient = error instanceof ProvisionError && (error.status >= 500 || error.status === 429 || error.message === 'domain_verification_required');
         if (error.message === 'domain_verification_required') permits.delete(item.id);
         const why = error.permitStage ? `Renewing the domain permit with the routing Worker failed: ${error.message}.` : ({still_running_on_node: `Cloudflare closed the request after 100 s, but ${label} keeps working.`, node_timeout: `${label} did not answer within the request time; it keeps working.`, node_unreachable: `${label} could not be reached.`, domain_verification_required: `${label} refused the domain permit; getting a fresh one.`, rate_limited: `${label} is rate limiting; waiting.`}[error.message] || `${label} answered ${error.message}${error.message === 'operation_failed' ? ' (the exact cause is in the node log: journalctl -u spartan-agent | grep request_failed)' : ''}.`);
+        if (error.message === 'node_capacity') { note(item, `${label} is at its tenant limit (MAX_TENANTS); back to the queue.`, 'warn'); item.steps[role] = undefined; item.progress = null; throw Object.assign(error, {requeue: true}); }
         if (!transient || exhausted(attempt)) { note(item, `${why} Stopping.`, 'bad'); item.steps[role] = 'failed'; item.progress = null; throw error; }
         note(item, why, 'warn');
       }
@@ -275,17 +286,78 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       await update(item, {status: 'ready', error: null, readyAt: new Date(now()).toISOString()});
       record('instance_ready', {region: item.primary, id: item.id});
     } catch (error) {
+      if (error.requeue && admin) {
+        for (const key of Object.keys(item.steps)) if (item.steps[key] === undefined) delete item.steps[key];
+        queuedAdmins.set(item.id, admin);
+        if (!queue.includes(item.id)) queue.push(item.id);
+        await update(item, {status: 'queued', progress: null, queue: {since: new Date(now()).toISOString(), reason: 'node_capacity'}});
+        return;
+      }
       if (item.steps.routing === 'running') { item.steps.routing = 'failed'; note(item, `The routing Worker answered ${error?.message}.`, 'bad'); }
       // Never leave a spinner on a step that is no longer running.
       for (const key of ['primary', 'secondary']) if (item.steps[key] === 'running') { item.steps[key] = 'failed'; note(item, `Stopped: ${error?.message || 'unexpected error'}.`, 'bad'); }
       await update(item, {status: 'failed', error: String(error?.message || 'deploy_failed').slice(0, 80), progress: null});
       record('instance_failed', {region: item.primary, id: item.id, path: item.error});
-    } finally { running.delete(item.id); }
+    } finally { running.delete(item.id); schedule(); }
+  }
+
+  // Capacity of one node, from the admin API overview. Null when it cannot be read.
+  async function headroom(region) {
+    if (!nodeStatus) return {ok: true};
+    try {
+      const data = await nodeStatus(region);
+      const free = data?.node?.resources?.memory?.freeBytes;
+      const disk = data?.node?.resources?.disk?.availableBytes;
+      if (!Number.isFinite(free) || !Number.isFinite(disk)) return {ok: false, reason: `node-${region} did not report its free memory and disk`};
+      const gib = value => `${(value / 1024 ** 3).toFixed(1)} GB`;
+      if (free < p.minFreeMemory) return {ok: false, reason: `node-${region} has ${gib(free)} memory free; needs ${gib(p.minFreeMemory)}`};
+      if (disk < p.minFreeDisk) return {ok: false, reason: `node-${region} has ${gib(disk)} disk free; needs ${gib(p.minFreeDisk)}`};
+      return {ok: true};
+    } catch (error) { return {ok: false, reason: `node-${region} is unreachable (${error.message})`}; }
+  }
+  const busyRegions = () => new Set([...running.keys()].flatMap(id => { const item = instances.get(id); return item ? [item.primary, item.secondary] : []; }));
+
+  // Starts queued deployments in order. One deployment per node at a time, because a
+  // first boot (migrations, seeders) is the heaviest thing a node does.
+  async function pump() {
+    if (pumping) return pumping;
+    pumping = (async () => {
+      for (const id of [...queue]) {
+        const item = instances.get(id);
+        if (!item || item.status !== 'queued') { queue.splice(queue.indexOf(id), 1); continue; }
+        const busy = busyRegions();
+        let reason = null;
+        if (busy.has(item.primary) || busy.has(item.secondary)) reason = `waiting for another deployment on node-${busy.has(item.primary) ? item.primary : item.secondary} to finish`;
+        else {
+          for (const region of [item.primary, item.secondary]) {
+            const room = await headroom(region);
+            if (!room.ok) { reason = room.reason; break; }
+          }
+        }
+        if (reason) {
+          if (item.queue?.reason !== reason) note(item, `Queued: ${reason}.`, 'warn');
+          await update(item, {queue: {...item.queue, reason, checkedAt: new Date(now()).toISOString()}});
+          continue;
+        }
+        queue.splice(queue.indexOf(id), 1);
+        const admin = queuedAdmins.get(id);
+        queuedAdmins.delete(id);
+        note(item, item.queue?.reason ? 'Room is available; starting.' : 'Both nodes have room; starting.');
+        await update(item, {status: 'deploying', queue: null, error: null});
+        running.set(id, run(item, admin));
+      }
+    })().finally(() => { pumping = null; });
+    return pumping;
+  }
+  function schedule() {
+    if (queue.length && !timer) { timer = setInterval(() => { pump().catch(() => {}); }, queueInterval); timer.unref?.(); }
+    if (!queue.length && timer) { clearInterval(timer); timer = null; }
+    if (queue.length) pump().catch(() => {});
   }
 
   async function deploy(id, input, user) {
     const item = await find(id);
-    if (running.has(id)) throw new ProvisionError(409, 'instance_busy');
+    if (running.has(id) || item.status === 'queued') throw new ProvisionError(409, 'instance_busy');
     if (item.status === 'ready') throw new ProvisionError(409, 'already_deployed');
     if (item.status === 'awaiting_dns') throw new ProvisionError(409, 'domain_not_verified');
     const admin = input.initialAdmin;
@@ -294,16 +366,29 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, item.licenseKey ? 'invalid_license_key' : 'license_key_required');
     // Once a node holds the tenant, its licence changes only through the master website's domain flow.
     if (licenseKey !== item.licenseKey && (item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'license_locked');
-    note(item, `Deployment started by ${user}.`);
-    await update(item, {licenseKey, status: 'deploying', error: null});
+    note(item, `Deployment requested by ${user}. Checking that both nodes have room.`);
+    queuedAdmins.set(id, {displayName: admin.displayName, email: admin.email, password: admin.password});
+    queue.push(id);
+    await update(item, {licenseKey, status: 'queued', error: null, queue: {since: new Date(now()).toISOString(), reason: null}});
     record('instance_deploy', {user, region: item.primary, id});
-    running.set(id, run(item, {displayName: admin.displayName, email: admin.email, password: admin.password}));
+    await pump();
+    return view(item);
+  }
+
+  async function cancel(id, user) {
+    const item = await find(id);
+    if (item.status !== 'queued') throw new ProvisionError(409, 'not_queued');
+    queue.splice(queue.indexOf(id), 1);
+    queuedAdmins.delete(id);
+    note(item, `Removed from the queue by ${user}.`);
+    await update(item, {status: item.custom && !item.dns?.readyToProvision ? 'awaiting_dns' : 'ready_to_deploy', queue: null});
+    schedule();
     return view(item);
   }
 
   async function discard(id, user) {
     const item = await find(id);
-    if (running.has(id) || item.status === 'deploying') throw new ProvisionError(409, 'instance_busy');
+    if (running.has(id) || ['deploying', 'queued'].includes(item.status)) throw new ProvisionError(409, 'instance_busy');
     if (item.status === 'ready' || item.steps?.primary === 'done' || item.steps?.secondary === 'done') throw new ProvisionError(409, 'instance_deployed');
     instances.delete(id);
     permits.delete(id);
@@ -312,5 +397,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     return {discarded: true};
   }
 
-  return {list, create, verify, deploy, discard, get: async id => view(await find(id)), idle: () => Promise.all([...running.values()]), products: PRODUCTS};
+  // Resolves when nothing is running; queued work that cannot start yet does not hold it.
+  const idle = async () => { while (running.size || pumping) { await Promise.all([...running.values(), pumping]); } };
+  return {list, create, verify, deploy, cancel, discard, pump, get: async id => view(await find(id)), idle, products: PRODUCTS};
 }
