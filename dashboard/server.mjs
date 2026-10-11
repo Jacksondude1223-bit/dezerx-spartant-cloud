@@ -5,6 +5,7 @@ import {Readable} from 'node:stream';
 import {fileURLToPath} from 'node:url';
 import {createHmac, randomBytes, scrypt as scryptCallback, timingSafeEqual} from 'node:crypto';
 import {promisify} from 'node:util';
+import {createProvisioner, loadProvisioningConfig, ProvisionError} from './provisioning.mjs';
 
 // Operator dashboard for Spartan Cloud nodes. The browser never sees ADMIN_API_SECRET:
 // it talks to this server with a session cookie, and this server signs each call to
@@ -93,7 +94,9 @@ export function loadConfig(env = process.env) {
   if (basePath && !/^\/[a-z0-9-]{1,32}$/.test(basePath)) throw new Error('DASHBOARD_BASE_PATH must look like /panel');
   const totpSecret = env.DASHBOARD_TOTP_SECRET || '';
   if (totpSecret && (!/^[A-Z2-7]{16,128}$/.test(totpSecret) || base32Decode(totpSecret).length < 10)) throw new Error('DASHBOARD_TOTP_SECRET must be a base32 secret of at least 16 characters');
-  return {secret, nodes, user: env.DASHBOARD_USER, passwordHash: env.DASHBOARD_PASSWORD_HASH, host: env.DASHBOARD_HOST || '127.0.0.1', port: Number(env.DASHBOARD_PORT || 8790), secureCookie: env.DASHBOARD_SECURE_COOKIE !== 'false', sessionHours: Number(env.DASHBOARD_SESSION_HOURS || 12), publicLabel: env.DASHBOARD_LABEL || 'Spartan Cloud', basePath, totpSecret};
+  // Optional: with ORIGIN_SECRET and BASE_DOMAIN the dashboard can also create instances.
+  const provisioning = loadProvisioningConfig(env, secret);
+  return {secret, nodes, provisioning, user: env.DASHBOARD_USER, passwordHash: env.DASHBOARD_PASSWORD_HASH, host: env.DASHBOARD_HOST || '127.0.0.1', port: Number(env.DASHBOARD_PORT || 8790), secureCookie: env.DASHBOARD_SECURE_COOKIE !== 'false', sessionHours: Number(env.DASHBOARD_SESSION_HOURS || 12), publicLabel: env.DASHBOARD_LABEL || 'Spartan Cloud', basePath, totpSecret};
 }
 
 class HttpError extends Error { constructor(status, code) { super(code); this.status = status; } }
@@ -109,6 +112,8 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     if (activity.length > 300) activity.shift();
     log({source: 'spartan-dashboard', ...entry});
   };
+
+  const provisioner = config.provisioning ? createProvisioner(config, {nodes: config.nodes, now, fetchImpl, record: (action, fields) => record('action', {action, ...fields})}) : null;
 
   const clientIp = req => {
     const remote = req.socket.remoteAddress || '';
@@ -218,7 +223,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     const ip = clientIp(req);
     if (url.pathname === '/api/session' && req.method === 'GET') {
       const session = sessionOf(req);
-      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host}))} : {authenticated: false, label: config.publicLabel, twoFactor: Boolean(config.totpSecret)});
+      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host})), provisioning: provisioner ? {baseDomain: config.provisioning.baseDomain} : null} : {authenticated: false, label: config.publicLabel, twoFactor: Boolean(config.totpSecret)});
     }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (!limitLogin(ip)) { record('login_rate_limited', {ip}); return send(res, 429, {error: 'too_many_attempts'}); }
@@ -250,6 +255,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     }
     if (url.pathname === '/api/overview' && req.method === 'GET') return send(res, 200, await overview());
     if (url.pathname === '/api/activity' && req.method === 'GET') return send(res, 200, {events: [...activity].reverse()});
+    if (url.pathname === '/api/instances' || url.pathname.startsWith('/api/instances/')) return instances(req, res, url, session, ip);
     const match = url.pathname.match(TENANT);
     if (!match) return send(res, 404, {error: 'not_found'});
     const [, region, id, operation] = match;
@@ -284,6 +290,31 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     return send(res, 404, {error: 'not_found'});
   }
 
+  const INSTANCE = /^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(verify|deploy|discard))?$/;
+  async function instances(req, res, url, session, ip) {
+    if (!provisioner) return send(res, 404, {error: 'provisioning_disabled'});
+    try {
+      if (url.pathname === '/api/instances') {
+        if (req.method === 'GET') return send(res, 200, {instances: await provisioner.list()});
+        if (req.method === 'POST') return send(res, 201, await provisioner.create(await readJson(req, 8192), session.user));
+        return send(res, 405, {error: 'method_not_allowed'});
+      }
+      const match = url.pathname.match(INSTANCE);
+      if (!match) return send(res, 404, {error: 'not_found'});
+      const [, id, operation] = match;
+      if (!operation && req.method === 'GET') return send(res, 200, await provisioner.get(id));
+      if (req.method !== 'POST') return send(res, 405, {error: 'method_not_allowed'});
+      const input = await readJson(req, 8192);
+      if (operation === 'verify') return send(res, 200, await provisioner.verify(id));
+      if (operation === 'deploy') return send(res, 202, await provisioner.deploy(id, input, session.user));
+      if (operation === 'discard') return send(res, 200, await provisioner.discard(id, session.user));
+      return send(res, 404, {error: 'not_found'});
+    } catch (error) {
+      if (error instanceof ProvisionError) return send(res, error.status, {error: error.message});
+      throw error;
+    }
+  }
+
   const assets = new Map();
   async function asset(res, pathname) {
     const [file, type] = STATIC[pathname];
@@ -292,7 +323,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     res.end(assets.get(file));
   }
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
       let url = new URL(req.url, 'http://dashboard.local');
       // Behind the node agent the dashboard lives under a prefix such as /panel.
@@ -310,6 +341,8 @@ export function createDashboard(config, {now = Date.now, log = value => console.
       return send(res, 500, {error: 'dashboard_error'});
     }
   });
+  server.provisioner = provisioner;
+  return server;
 }
 
 async function readStdin() {

@@ -12,7 +12,7 @@ It talks to the node agents through a separate **admin API** (`/admin/*`), signe
 - **Two-factor sign-in.** With `DASHBOARD_TOTP_SECRET` set, sign-in also needs a 6-digit code from an authenticator app (RFC 6238). Each code is accepted once. The installer turns this on by default when the dashboard is served publicly.
 - **Kernel-enforced permissions.** File and console operations run inside the tenant container as `www-data` by default. You can choose `root` per action. Root inside a container can use the bind-mounted MariaDB socket as the database root user, which reaches every tenant database on the node, so prefer `www-data`.
 - **Audit trail.** The agent logs each admin call (`admin_authorized`, with tenant, operation, run-as user and file action, but never paths or commands). The dashboard logs sign-ins and each action, including the first 200 characters of console commands, to its journal and to the Activity page.
-- **Billing state stays with the master website.** The dashboard does not suspend, terminate or resume tenants. If it did, lifecycle versions would conflict with the master website and the routing Worker would not learn the new state. "Stop" is a Docker-level stop for maintenance only.
+- **Billing state stays with the master website.** The dashboard can create instances (below) but does not suspend, terminate or resume tenants. If it did, lifecycle versions would conflict with the master website and the routing Worker would not learn the new state. "Stop" is a Docker-level stop for maintenance only.
 
 ## Persistence
 
@@ -44,13 +44,28 @@ Containers are recreated on upgrade. Only `/var/www/html/storage` (and the `Modu
    - Optional extra lock: in Cloudflare Zero Trust, create an Access application for the path `node-us.example.com/panel` only. Do **not** protect or challenge the whole `node-us`/`node-de` hostname, because the routing Worker and master website call `/control`, `/admin` and `/tenant` on it.
    - Without publishing, use an SSH tunnel: `ssh -L 8790:127.0.0.1:8790 root@your-node`, then visit `http://localhost:8790`. If Safari loops back to the sign-in page over plain `http://localhost`, add `DASHBOARD_SECURE_COOKIE=false` to `dashboard.env` and restart the service.
 
+The installer puts the code in `/opt/spartan-dashboard/dashboard/` (plus the three validation modules it shares with the node in `/opt/spartan-dashboard/node/`); earlier releases used `/opt/spartan-dashboard/public/`.
+
 Other commands: `install-dashboard.sh public` serves an existing install at `/panel/`, `totp` sets up or replaces the authenticator code, and `password` changes the password. Re-running the installer updates the dashboard code while keeping `dashboard.env`. Logs: `journalctl -u spartan-dashboard -f`.
 
 `node.env` additions: `ADMIN_API_SECRET` and, to publish the dashboard, `DASHBOARD_PROXY_PORT="8790"`. Both survive re-running the node installer.
 
-`dashboard.env` keys: `ADMIN_API_SECRET`, `DASHBOARD_USER`, `DASHBOARD_PASSWORD_HASH` (create with `printf '%s\n' 'password' | node dashboard/server.mjs hash-password`), `US_ORIGIN`, `DE_ORIGIN` (https, or `http://127.0.0.1:8788` for the local agent), optional `DASHBOARD_BASE_PATH` (`/panel` when served by the agent), `DASHBOARD_TOTP_SECRET` (create with `node dashboard/server.mjs totp-secret`), `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_SESSION_HOURS` (default 12), `DASHBOARD_SECURE_COOKIE`, `DASHBOARD_LABEL`.
+`dashboard.env` keys: `ADMIN_API_SECRET`, `DASHBOARD_USER`, `DASHBOARD_PASSWORD_HASH` (create with `printf '%s\n' 'password' | node dashboard/server.mjs hash-password`), `US_ORIGIN`, `DE_ORIGIN` (https, or `http://127.0.0.1:8788` for the local agent), optional `DASHBOARD_BASE_PATH` (`/panel` when served by the agent), `DASHBOARD_TOTP_SECRET` (create with `node dashboard/server.mjs totp-secret`), `DASHBOARD_HOST`, `DASHBOARD_PORT`, `DASHBOARD_SESSION_HOURS` (default 12), `DASHBOARD_SECURE_COOKIE`, `DASHBOARD_LABEL`, and for instance creation `ORIGIN_SECRET`, `BASE_DOMAIN`, optional `ROUTING_API_URL`, `NODE_CONTROL_SECRET`, `ROUTING_CONTROL_SECRET`, `DASHBOARD_STATE_FILE`.
 
 To look at the design without a node, run `node dashboard/demo/build-preview.mjs preview.html` and open the file. It uses invented data.
+
+## Creating instances
+
+With `ORIGIN_SECRET` and `BASE_DOMAIN` in `dashboard.env`, the dashboard shows **Instances → Create instance**. Re-running `install-dashboard.sh` on a node copies both from `node.env` (and `NODE_CONTROL_SECRET` if the node uses that legacy override). Without them the page is hidden and the dashboard works as before. Set `ROUTING_API_URL` only if the routing API is not at `https://BASE_DOMAIN`, and `ROUTING_CONTROL_SECRET` only if the Worker uses that legacy override.
+
+The form asks for the home region (`us` or `de`; it owns the database and cannot change), the Spartan licence key (the product is read from its prefix, as on the node), the domain, and an optional customer reference. The dashboard generates the tenant ID, `APP_KEY` and ownership fingerprint with the same recipe as [API.md](API.md), then follows its "Create a service" flow:
+
+1. **Domain.** The default `t-<id>.BASE_DOMAIN` needs no DNS: that hostname is the operator's, so the dashboard issues the node's provisioning permit itself. A customer domain goes through the routing Worker's onboarding (`prepare`, then **Verify DNS** until it reports `readyToProvision`), exactly as in [MARKET_MODULE_API.md](MARKET_MODULE_API.md); the dashboard shows the DNS records to add and uses the permit the Worker issues. The licence must be issued for the chosen domain.
+2. **Deploy.** Enter the first administrator. The dashboard calls `POST /control/provision` on the home node with the administrator, then on the other node without it, retrying while a node reports `provisioning` or is still working behind Cloudflare's 100-second limit, and finally publishes the tenant to the routing Worker as `ready` at lifecycle version 1. The page shows each step; a failed deployment can be retried and continues where it stopped, with the same identity.
+
+Instance records (tenant ID, keys, licence, domain, status) are kept in `/var/lib/spartan-dashboard/instances.json`, mode 600, owned by the service. The administrator password is held in memory only while deploying and is never written to disk; if the dashboard restarts mid-deployment, deploy again. A draft that has not reached either node can be discarded.
+
+Holding `ORIGIN_SECRET` lets the dashboard call `/control/*` and the routing API, so treat `dashboard.env` like `node.env`. Suspend, resume and terminate remain with the billing system: if a master website also manages these tenants, give each instance one owner so lifecycle versions do not conflict.
 
 ## Admin API
 

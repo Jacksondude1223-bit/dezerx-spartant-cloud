@@ -44,6 +44,17 @@ const MESSAGES = {
   invalid_archive: 'That archive could not be read.', unsupported_archive: 'Only .zip and .tar(.gz/.bz2/.xz) archives can be extracted.',
   not_a_file: 'That is not a regular file.', not_a_directory: 'That is not a folder.', file_not_found: 'File not found.',
   primary_node_required: 'Database downloads are only available on the primary node.', unknown_owner: 'Unknown user or group.',
+  invalid_license_key: 'That licence key is not valid. It must start with SPARTANSTARTER_, SPARTANCLOUDPLUS_, SPARTANPROFESSIONAL_, SPARTANULTIMATE_ or SPARTANDEV_.',
+  invalid_domain: 'Enter a bare domain such as panel.customer.com.', reserved_hostname: 'That domain belongs to the platform itself. Leave it blank to use the default subdomain.',
+  hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
+  invalid_initial_admin: 'Check the administrator: name, a valid email and a password of 8 to 128 characters.', invalid_customer_id: 'Customer reference: letters, digits, _ and - only.',
+  ownership_not_verified: 'The DNS records are not visible yet. Add them, wait a few minutes and verify again.', domain_not_verified: 'Verify the domain first.',
+  domain_verification_required: 'The node refused the domain permit. Verify the domain again.', instance_busy: 'This instance is being deployed right now.',
+  instance_deployed: 'This instance is deployed, so it cannot be discarded here.', both_nodes_required: 'Both nodes must be configured in the dashboard.',
+  routing_unauthorized: 'The routing Worker rejected the signature. Check ORIGIN_SECRET in dashboard.env.', provisioning_disabled: 'Instance creation is off. Add ORIGIN_SECRET and BASE_DOMAIN to dashboard.env.',
+  dashboard_restarted: 'The dashboard restarted during deployment. Deploy again; it continues where it stopped.', not_ready_in_time: 'The node did not report ready in time. Deploy again to keep waiting.',
+  operation_failed: 'The node could not finish. Check journalctl -u spartan-agent on that node.', tenant_conflict: 'A different tenant already uses this ID on the node.',
+  saas_configuration_required: 'Custom domains are not configured on the routing Worker (Cloudflare for SaaS).',
   symlink_mode: 'Symbolic links have no permissions of their own.', no_space_left: 'The disk is full.', python_unavailable: 'python3 is missing from this container image.'
 };
 const explain = error => MESSAGES[error?.code || error?.message] || String(error?.code || error?.message || 'Something went wrong').replace(/_/g, ' ');
@@ -108,7 +119,10 @@ const ICONS = {
   database: "<path d=\"M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0\"/><path d=\"M4 6v6a8 3 0 0 0 16 0v-6\"/><path d=\"M4 12v6a8 3 0 0 0 16 0v-6\"/>",
   clock: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M12 7v5l3 3\"/>",
   arrowDown: "<path d=\"M12 5l0 14\"/><path d=\"M18 13l-6 6\"/><path d=\"M6 13l6 6\"/>",
-  arrowUp: "<path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/>"
+  arrowUp: "<path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/>",
+  rocket: "<path d=\"M4 13a8 8 0 0 1 7 7a6 6 0 0 0 3 -5a9 9 0 0 0 6 -8a3 3 0 0 0 -3 -3a9 9 0 0 0 -8 6a6 6 0 0 0 -5 3\"/><path d=\"M7 14a6 6 0 0 0 -3 6a6 6 0 0 0 6 -3\"/><path d=\"M14 9a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/>",
+  check: "<path d=\"M5 12l5 5l10 -10\"/>",
+  key: "<path d=\"M16.555 3.843l3.602 3.602a2.877 2.877 0 0 1 0 4.069l-2.643 2.643a2.877 2.877 0 0 1 -4.069 0l-.301 -.301l-6.558 6.558a2 2 0 0 1 -1.239 .578l-.175 .008h-1.172a1 1 0 0 1 -.993 -.883l-.007 -.117v-1.172a2 2 0 0 1 .467 -1.284l.119 -.13l.414 -.414h2v-2h2v-2l2.144 -2.144l-.301 -.301a2.877 2.877 0 0 1 0 -4.069l2.643 -2.643a2.877 2.877 0 0 1 4.069 0\"/><path d=\"M15 9h.01\"/>"
 };
 function icon(name) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -298,6 +312,7 @@ function sidebar(current) {
     h('div', {class: 'nav-label'}, 'Infrastructure'),
     nodes.map(n => { const tone = nodeTone(state.overview && nodeOf(state.overview, n.region)); return h('a', {class: `nav-item ${current === `node:${n.region}` ? 'active' : ''}`, href: `#/node/${n.region}`}, flag(n.region) || icon('server'), `node-${n.region}`, h('span', {class: `dot ${state.overview ? tone.tone : ''}`, title: tone.label})); }),
     item('#/tenants', 'layers', 'Tenants', current === 'tenants'),
+    state.session?.provisioning ? item('#/instances', 'rocket', 'Instances', current === 'instances') : null,
     h('div', {class: 'nav-label'}, 'Monitoring'),
     item('#/activity', 'activity', 'Activity', current === 'activity'),
     h('div', {class: 'nav-spacer'}),
@@ -343,6 +358,9 @@ async function render() {
     if (!parts.length) await homePage(ctx);
     else if (parts[0] === 'tenants') await tenantsPage(ctx);
     else if (parts[0] === 'activity') await activityPage(ctx);
+    else if (parts[0] === 'instances' && !parts[1]) await instancesPage(ctx);
+    else if (parts[0] === 'instances' && parts[1] === 'new') await newInstancePage(ctx);
+    else if (parts[0] === 'instances' && /^t-[a-f0-9]{24}$/.test(parts[1])) await instancePage(ctx, parts[1]);
     else if (parts[0] === 'node' && /^(us|de)$/.test(parts[1])) await nodePage(ctx, parts[1]);
     else if (parts[0] === 'tenant' && /^(us|de)$/.test(parts[1]) && /^t-[a-f0-9]{24}$/.test(parts[2] || '')) await tenantPage(ctx, parts[1], parts[2], parts[3] || 'overview');
     else fill(errorBox(new ApiError('not_found')));
@@ -430,7 +448,7 @@ async function homePage(ctx) {
     const tone = online.length === data.nodes.length ? 'green' : online.length ? 'amber' : 'red';
     ctx.fill([
       crumbs([{label: state.session.label}, {label: 'Overview'}]),
-      pageHead({title: 'Overview', pill: {tone, label: `${online.length} of ${data.nodes.length} nodes online`}, actions: [button('Refresh', {icon: 'refresh', onClick: () => refresh(true)}), h('a', {class: 'btn primary', href: '#/tenants'}, icon('layers'), 'All tenants')]}),
+      pageHead({title: 'Overview', pill: {tone, label: `${online.length} of ${data.nodes.length} nodes online`}, actions: [button('Refresh', {icon: 'refresh', onClick: () => refresh(true)}), state.session.provisioning ? h('a', {class: 'btn', href: '#/instances/new'}, icon('plus'), 'Create instance') : null, h('a', {class: 'btn primary', href: '#/tenants'}, icon('layers'), 'All tenants')]}),
       h('div', {class: 'cards'},
         statCard('cpu', 'CPU', pct(cpu), 'average across nodes'),
         statCard('memory', 'Memory used', bytes(memUsed), `of ${bytes(memTotal, 0)}`),
@@ -460,7 +478,7 @@ async function tenantsPage(ctx) {
   const unreachable = data.nodes.filter(n => !n.ok);
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Tenants'}]),
-    pageHead({title: 'Tenants', subtitle: `${allTenants(data).length} provisioned across ${data.nodes.length} nodes`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]}),
+    pageHead({title: 'Tenants', subtitle: `${allTenants(data).length} provisioned across ${data.nodes.length} nodes`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
     unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(new ApiError(n.error))}`)),
     h('div', {class: 'section-head'}, h('div', {class: 'group', style: {display: 'flex', gap: '8px', flexWrap: 'wrap'}}, h('div', {class: 'search'}, icon('search'), search), regionSelect), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
     tableSlot]);
@@ -845,6 +863,155 @@ async function activityPage(ctx) {
     pageHead({title: 'Activity', subtitle: 'Sign-ins and actions since the dashboard last started. Also written to the journal.', actions: [button('Refresh', {icon: 'refresh', onClick: () => render()})]}),
     rows.length ? h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'User'), h('th', null, 'Event'), h('th', null, 'Target'), h('th', null, 'Detail'))), h('tbody', null, rows))))
       : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'Nothing yet'), 'Actions you take appear here.'))]);
+}
+
+/* ---------------------------------------------------------------- create instance */
+const PRODUCT_PREFIXES = [['SPARTANSTARTER_', 'Starter'], ['SPARTANCLOUDPLUS_', 'Cloud Plus'], ['SPARTANPROFESSIONAL_', 'Professional'], ['SPARTANULTIMATE_', 'Ultimate'], ['SPARTANDEV_', 'Developer']];
+const productOf = key => (PRODUCT_PREFIXES.find(([prefix]) => key.startsWith(prefix)) || [])[1] || null;
+const INSTANCE_STATUS = {awaiting_dns: ['Waiting for DNS', 'amber'], ready_to_deploy: ['Ready to deploy', ''], deploying: ['Deploying', 'amber'], ready: ['Live', 'green'], failed: ['Failed', 'red']};
+const instanceStatus = item => { const [label, tone] = INSTANCE_STATUS[item.status] || [item.status, '']; return {label, tone}; };
+function copyButton(text) {
+  return h('button', {type: 'button', class: 'icon-btn', title: 'Copy', 'aria-label': 'Copy', onclick: async () => { try { await navigator.clipboard.writeText(typeof text === 'function' ? text() : text); toast('Copied'); } catch { toast('Copy failed; select the text instead', {error: true}); } }}, icon('copy'));
+}
+function disabledNotice(ctx) {
+  ctx.fill([crumbs([{label: state.session.label, href: '#/'}, {label: 'Create instance'}]), pageHead({title: 'Create instance'}),
+    h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'Instance creation is not configured'), 'Re-run sudo bash scripts/install-dashboard.sh on this node. It adds ORIGIN_SECRET and BASE_DOMAIN from node.env to dashboard.env.'))]);
+}
+
+async function instancesPage(ctx) {
+  if (!state.session.provisioning) return disabledNotice(ctx);
+  const data = await api.get('/api/instances');
+  const rows = data.instances.map(item => h('tr', {class: 'clickable', tabindex: '0', onclick: () => go(`#/instances/${item.id}`), onkeydown: e => { if (e.key === 'Enter') go(`#/instances/${item.id}`); }},
+    h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'app-icon'}, icon('rocket')), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, item.hostname), h('div', {class: 'sub mono'}, item.id)))),
+    h('td', null, (s => h('span', {class: 'status'}, h('span', {class: `dot ${s.tone}`}), s.label))(instanceStatus(item))),
+    h('td', null, item.product || '—'),
+    h('td', null, h('span', {class: 'label-icon'}, flag(item.primary), regionName(item.primary))),
+    h('td', {class: 'muted', title: item.createdAt}, ago(item.createdAt))));
+  ctx.fill([
+    crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances'}]),
+    pageHead({title: 'Instances', subtitle: 'Spartan instances created from this dashboard', actions: [button('Refresh', {icon: 'refresh', onClick: () => render()}), h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance')]}),
+    rows.length ? h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Instance'), h('th', null, 'Status'), h('th', null, 'Product'), h('th', null, 'Region'), h('th', null, 'Created'))), h('tbody', null, rows))))
+      : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'No instances yet'), 'Create one to provision it on both nodes and publish it to the router.', h('div', {style: {marginTop: '14px'}}, h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance'))))]);
+  if (data.instances.some(item => item.status === 'deploying')) every(5000, () => render());
+}
+
+function choiceGroup(name, options, value, onChange) {
+  return h('div', {class: 'choices', role: 'radiogroup'}, options.map(option => {
+    const input = h('input', {type: 'radio', name, value: option.value, checked: option.value === value, disabled: option.disabled, onchange: () => onChange(option.value)});
+    return h('label', {class: `choice ${option.disabled ? 'disabled' : ''}`}, input, h('span', {class: 'choice-body'}, h('span', {class: 'choice-title'}, option.lead || null, option.title), option.text ? h('span', {class: 'choice-text'}, option.text) : null));
+  }));
+}
+
+async function newInstancePage(ctx) {
+  if (!state.session.provisioning) return disabledNotice(ctx);
+  const base = state.session.provisioning.baseDomain;
+  const nodes = state.session.nodes.map(n => n.region);
+  const form = {primary: nodes.includes('us') ? 'us' : nodes[0], domainMode: 'default'};
+  const license = h('input', {class: 'input mono', placeholder: 'SPARTANPROFESSIONAL_…', spellcheck: 'false', autocomplete: 'off'});
+  const product = h('span', {class: 'hint'});
+  const syncProduct = () => { const name = productOf(license.value.trim()); product.replaceChildren(...(license.value.trim() ? (name ? [icon('check'), `Product: ${name}`] : ['Unknown prefix']) : ['The product is read from the key prefix.'])); product.className = `hint ${license.value.trim() && !name ? 'bad' : name ? 'good' : ''}`; };
+  license.addEventListener('input', syncProduct);
+  syncProduct();
+  const domain = h('input', {class: 'input mono', placeholder: 'panel.customer.com', spellcheck: 'false', autocomplete: 'off', autocapitalize: 'off'});
+  const domainField = h('label', {class: 'field', style: {display: 'none'}}, h('span', null, 'Customer domain'), domain, h('span', {class: 'hint'}, 'The licence must be issued for this domain. You will get DNS records to add before deploying.'));
+  const customer = h('input', {class: 'input mono', placeholder: 'dashboard', spellcheck: 'false', autocomplete: 'off'});
+  const submit = button('Continue', {kind: 'primary', icon: 'rocket'});
+  const message = h('div', {class: 'banner error', style: {display: 'none'}});
+  const regionChoices = choiceGroup('primary', [['us', 'Home: United States'], ['de', 'Home: Germany']].map(([value]) => ({value, lead: flag(value), title: regionName(value), text: value === 'us' ? 'Database and app run in the US; Germany holds the standby.' : 'Database and app run in Germany; the US holds the standby.', disabled: !nodes.includes(value)})), form.primary, value => { form.primary = value; });
+  const domainChoices = choiceGroup('domain', [{value: 'default', title: 'Default subdomain', text: `t-<id>.${base}, ready immediately`}, {value: 'custom', title: 'Customer domain', text: 'Verified with DNS before deploying'}], form.domainMode, value => { form.domainMode = value; domainField.style.display = value === 'custom' ? '' : 'none'; if (value === 'custom') domain.focus(); });
+  submit.addEventListener('click', async () => {
+    message.style.display = 'none';
+    submit.disabled = true;
+    try {
+      const item = await api.post('/api/instances', {primary: form.primary, licenseKey: license.value.trim(), domain: form.domainMode === 'custom' ? domain.value.trim() : '', customerId: customer.value.trim() || undefined});
+      go(`#/instances/${item.id}`);
+    } catch (error) { if (error.code !== 'not_signed_in') { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; } }
+    finally { submit.disabled = false; }
+  });
+  ctx.fill([
+    crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances', href: '#/instances'}, {label: 'New'}]),
+    pageHead({title: 'Create instance', subtitle: 'Provisions on both nodes, then publishes the tenant to the router.'}),
+    nodes.length < 2 ? h('div', {class: 'banner warn'}, icon('alert'), 'Both nodes must be configured in this dashboard to create instances.') : null,
+    h('div', {class: 'card form-card'},
+      message,
+      h('div', {class: 'form-section'}, h('h2', null, 'Region'), h('p', {class: 'muted'}, 'The home region owns the database. It cannot be changed later.'), regionChoices),
+      h('div', {class: 'form-section'}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, 'Spartan licence key'), license, product)),
+      h('div', {class: 'form-section'}, h('h2', null, 'Domain'), domainChoices, domainField),
+      h('div', {class: 'form-section'}, h('h2', null, 'Reference'), h('label', {class: 'field'}, h('span', null, 'Customer reference (optional)'), customer, h('span', {class: 'hint'}, 'Stored with the routing record. Letters, digits, _ and -.'))),
+      h('div', {class: 'form-foot'}, h('a', {class: 'btn', href: '#/instances'}, 'Cancel'), submit))]);
+  setTimeout(() => license.focus(), 0);
+}
+
+function dnsCard(item) {
+  const records = item.dns?.records || [];
+  const purpose = {routing: 'Points the domain at Spartan', spartan_ownership: 'Proves you own the domain', cloudflare_ownership: 'Cloudflare hostname check', certificate_validation: 'SSL certificate check'};
+  const rows = records.map(r => { const value = r.value || r.target || ''; return h('tr', null,
+    h('td', null, h('span', {class: 'chip static'}, r.type)),
+    h('td', null, h('div', {class: 'copy-cell'}, h('span', {class: 'mono'}, r.name), copyButton(r.name))),
+    h('td', null, h('div', {class: 'copy-cell'}, h('span', {class: 'mono wrap'}, value), copyButton(value))),
+    h('td', {class: 'muted'}, purpose[r.purpose] || r.purpose || '', r.type === 'CNAME' && r.purpose === 'routing' ? h('div', {class: 'sub'}, 'DNS only (grey cloud) recommended') : null)); });
+  return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Type'), h('th', null, 'Name'), h('th', null, 'Value'), h('th', null, 'Purpose'))), h('tbody', null, rows.length ? rows : h('tr', null, h('td', {colspan: '4', class: 'faint'}, 'No records returned yet. Verify to refresh.'))))));
+}
+function stepList(item) {
+  const steps = [['primary', `Provision on node-${item.primary} with the administrator`], ['secondary', `Provision standby on node-${item.secondary}`], ['routing', 'Publish to the router as ready']];
+  return h('ol', {class: 'steps'}, steps.map(([key, label]) => { const value = item.steps?.[key]; return h('li', {class: value || 'pending'}, h('span', {class: 'step-mark'}, value === 'done' ? icon('check') : value === 'running' ? h('span', {class: 'spinner'}) : value === 'failed' ? icon('alert') : null), label); }));
+}
+function adminForm(item, onDone) {
+  const name = h('input', {class: 'input', autocomplete: 'off', placeholder: 'Customer Owner'});
+  const email = h('input', {class: 'input', type: 'email', autocomplete: 'off', placeholder: 'owner@customer.com'});
+  const password = h('input', {class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', value: `${randomHex(6)}-${randomHex(6)}`});
+  const deployButton = button(item.status === 'failed' ? 'Retry deployment' : 'Deploy', {kind: 'primary', icon: 'rocket'});
+  deployButton.addEventListener('click', async () => {
+    deployButton.disabled = true;
+    try { await api.post(`/api/instances/${item.id}/deploy`, {initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast('Deployment started'); onDone(); }
+    catch (error) { fail(error); deployButton.disabled = false; }
+  });
+  return h('div', {class: 'card form-card'},
+    h('div', {class: 'form-section'}, h('h2', null, 'First administrator'), h('p', {class: 'muted'}, 'Created as superadmin on the first deployment only. The password is never stored by the dashboard; copy it now.'),
+      h('div', {class: 'form-grid'}, h('label', {class: 'field'}, h('span', null, 'Name'), name), h('label', {class: 'field'}, h('span', null, 'Email'), email)),
+      h('label', {class: 'field'}, h('span', null, 'Password (8 to 128 characters)'), h('div', {class: 'copy-cell'}, password, copyButton(() => password.value)))),
+    h('div', {class: 'form-foot'}, deployButton));
+}
+
+async function instancePage(ctx, id) {
+  if (!state.session.provisioning) return disabledNotice(ctx);
+  const item = await api.get(`/api/instances/${id}`);
+  const status = instanceStatus(item);
+  const reload = () => { if (ctx.alive()) render(); };
+  const discard = async () => {
+    if (!await confirmDialog({title: 'Discard this instance?', message: ['The dashboard forgets this draft. Nothing has been deployed for it.', item.custom ? 'The pending domain reservation stays on the routing Worker until it expires or is reused.' : ''].filter(Boolean), confirm: 'Discard', danger: true})) return;
+    try { await api.post(`/api/instances/${id}/discard`); go('#/instances'); } catch (error) { fail(error); }
+  };
+  const verify = async event => {
+    const btn = event?.currentTarget; if (btn) btn.disabled = true;
+    try { const next = await api.post(`/api/instances/${id}/verify`); toast(next.dns?.readyToProvision ? 'Domain verified. Ready to deploy.' : 'Not verified yet. Records can take a few minutes to propagate.', {error: !next.dns?.readyToProvision}); reload(); }
+    catch (error) { fail(error); if (btn) btn.disabled = false; }
+  };
+  const canDiscard = !['ready', 'deploying'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done';
+  const details = h('div', {class: 'card'}, h('dl', {class: 'details'},
+    detail('URL', item.url), detail('Tenant ID', h('span', {class: 'mono'}, item.id)),
+    detail('Home region', h('span', {class: 'label-icon'}, flag(item.primary), regionName(item.primary))), detail('Standby', h('span', {class: 'label-icon'}, flag(item.secondary), regionName(item.secondary))),
+    detail('Product', item.product || '—'), detail('Licence', h('span', {class: 'mono'}, item.licenseHint)),
+    detail('Customer reference', item.customerId), detail('Created', `${ago(item.createdAt)} by ${item.createdBy || '—'}`)));
+  const body = [];
+  if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(item.error))));
+  if (item.status === 'awaiting_dns') body.push(
+    h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records'), h('span', {class: 'note'}, item.dns?.checkedAt ? `Checked ${ago(item.dns.checkedAt)}${item.dns.stage ? ` · ${item.dns.stage.replace(/_/g, ' ')}` : ''}` : '')), dnsCard(item)));
+  if (['deploying', 'ready'].includes(item.status) || (item.status === 'failed' && Object.keys(item.steps || {}).length)) body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Deployment')), h('div', {class: 'card'}, stepList(item))));
+  if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. Suspend, resume and terminate stay with the billing system; this dashboard only creates instances.'));
+  if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
+  if (item.custom && item.status === 'ready_to_deploy') body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records')), dnsCard(item)));
+  ctx.fill([
+    crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances', href: '#/instances'}, {label: item.hostname}]),
+    pageHead({title: item.hostname, lead: h('span', {class: 'app-icon large'}, icon('rocket')), pill: status, subtitle: h('span', {class: 'mono'}, item.id), actions: [
+      item.custom && ['awaiting_dns', 'ready_to_deploy', 'failed'].includes(item.status) ? button('Verify DNS', {icon: 'refresh', kind: item.status === 'awaiting_dns' ? 'primary' : '', onClick: verify}) : null,
+      canDiscard ? button('Discard', {icon: 'trash', kind: 'danger', onClick: discard}) : null,
+      item.status === 'ready' ? h('a', {class: 'btn', href: `#/tenant/${item.primary}/${item.id}`}, icon('docker'), 'Manage tenant') : null,
+      item.status === 'ready' ? h('a', {class: 'btn primary', href: item.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null]}),
+    body,
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Details')), details)]);
+  if (item.status === 'deploying') every(4000, reload);
 }
 
 render();
