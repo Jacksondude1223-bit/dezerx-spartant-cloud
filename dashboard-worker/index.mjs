@@ -95,7 +95,7 @@ export function createWorker(fetchImpl = fetch) {
         await db.audit('action', {user: userSession.username, region, id, action: operation, runAs: input.user || 'www-data'});
         const payload = {...input, id};
         return response(await client.node(region, operation, payload, {timeout: ['upgrade', 'fs', 'reload', 'container', 'exec'].includes(operation) ? 90000 : 25000}));
-      } catch (error) {return response({error: error instanceof ApiError ? error.message : 'dashboard_operation_failed'}, error instanceof ApiError ? error.status : 503);}
+      } catch (error) {return response({error: error instanceof ApiError ? error.message : 'dashboard_operation_failed', ...(error instanceof ApiError && error.message === 'dashboard_configuration_required' && error.invalidSettings ? {invalidSettings: error.invalidSettings} : {})}, error instanceof ApiError ? error.status : 503);}
     },
     async scheduled(controller, env, ctx) {
       ctx.waitUntil((async () => {

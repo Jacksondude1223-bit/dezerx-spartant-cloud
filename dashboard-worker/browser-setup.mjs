@@ -1,6 +1,6 @@
 import {equal, hashPassword, seal, open} from './crypto.mjs';
 import {ApiError} from './store.mjs';
-import {configuration} from './nodes.mjs';
+import {configuration, configurationIssues} from './nodes.mjs';
 import {limitLogin, jsonBody} from './auth.mjs';
 export async function credentials(env, db) {
   if (env.DASHBOARD_PASSWORD_HASH) return env;
@@ -14,15 +14,19 @@ export async function browserSetup(request, env, db) {
   if (identity?.value !== 'spartan-dashboard') throw new ApiError(503, 'wrong_dashboard_database');
   const initialized = Boolean(await credentials(env, db));
   const missingSettings = ['ADMIN_API_SECRET', 'ORIGIN_SECRET', 'DASHBOARD_DATA_KEY', 'DASHBOARD_SETUP_TOKEN'].filter(key => !env[key]);
-  if (request.method === 'GET') return {initialized, missingSettings};
+  if (request.method === 'GET') {
+    const invalidSettings = configurationIssues(env).filter(issue => !missingSettings.includes(issue.name));
+    if (env.DASHBOARD_SETUP_TOKEN && (typeof env.DASHBOARD_SETUP_TOKEN !== 'string' || env.DASHBOARD_SETUP_TOKEN.length < 32)) invalidSettings.push({name: 'DASHBOARD_SETUP_TOKEN', reason: 'Must be at least 32 characters. Use the generated setup token.'});
+    return {initialized, missingSettings, invalidSettings};
+  }
   if (request.method !== 'POST') throw new ApiError(405, 'method_not_allowed');
   if (initialized) throw new ApiError(409, 'setup_already_completed');
   if (request.headers.get('origin') !== new URL(request.url).origin) throw new ApiError(403, 'csrf_failed');
   if (typeof env.DASHBOARD_SETUP_TOKEN !== 'string' || env.DASHBOARD_SETUP_TOKEN.length < 32) throw new ApiError(503, 'setup_token_required');
+  configuration(env);
   await limitLogin(request, db);
   const input = await jsonBody(request, 4096);
   if (!equal(input.setupToken, env.DASHBOARD_SETUP_TOKEN)) throw new ApiError(401, 'invalid_setup_token');
-  configuration(env);
   if (!/^[a-zA-Z0-9_.@-]{1,64}$/.test(input.username || '')) throw new ApiError(400, 'invalid_username');
   if (typeof input.password !== 'string' || input.password.length < 12 || input.password.length > 1024) throw new ApiError(400, 'invalid_password');
   const account = {username: input.username, passwordHash: await hashPassword(input.password)};

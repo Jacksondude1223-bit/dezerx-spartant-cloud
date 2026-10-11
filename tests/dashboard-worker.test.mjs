@@ -312,6 +312,40 @@ test('browser setup requires its private token, saves only a password hash, and 
   } finally {sqlite.close();}
 });
 
+test('setup identifies invalid secret settings without exposing their values or using login attempts', async () => {
+  const cases = [
+    [{ADMIN_API_SECRET: 'short-admin-secret'}, 'ADMIN_API_SECRET'],
+    [{ADMIN_API_SECRET: 'o'.repeat(64)}, 'ADMIN_API_SECRET'],
+    [{ORIGIN_SECRET: 'o'.repeat(64) + '\n'}, 'ORIGIN_SECRET'],
+    [{DASHBOARD_DATA_KEY: 'D'.repeat(64)}, 'DASHBOARD_DATA_KEY'],
+    [{DASHBOARD_TOTP_SECRET: 'invalid-totp-secret'}, 'DASHBOARD_TOTP_SECRET']
+  ];
+  for (const [settings, name] of cases) {
+    const {db, sqlite} = database(), env = environment(db), worker = createWorker();
+    delete env.DASHBOARD_PASSWORD_HASH;
+    env.DASHBOARD_SETUP_TOKEN = 's'.repeat(64);
+    Object.assign(env, settings);
+    try {
+      const status = await worker.fetch(new Request('https://dashboard.example.test/api/setup'), env);
+      const data = await status.json();
+      assert.equal(data.initialized, false);
+      assert.deepEqual(data.missingSettings, []);
+      assert.deepEqual(data.invalidSettings.map(x => x.name), [name]);
+      assert.equal(JSON.stringify(data).includes(env[name]), false);
+      for (let i = 0; i < 12; i++) {
+        const result = await worker.fetch(new Request('https://dashboard.example.test/api/setup', {method: 'POST', headers: {origin: 'https://dashboard.example.test', 'content-type': 'application/json'}, body: JSON.stringify({setupToken: env.DASHBOARD_SETUP_TOKEN, username: 'owner', password})}), env);
+        assert.equal(result.status, 503);
+        const error = await result.json();
+        assert.equal(error.error, 'dashboard_configuration_required');
+        assert.deepEqual(error.invalidSettings.map(x => x.name), [name]);
+        assert.equal(JSON.stringify(error).includes(env[name]), false);
+      }
+      assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM dashboard_rate_limits').get().n, 0);
+      assert.equal(sqlite.prepare("SELECT value FROM dashboard_metadata WHERE name = 'auth_account'").get(), undefined);
+    } finally {sqlite.close();}
+  }
+});
+
 test('a database write cannot forge a dashboard session by copying a valid session proof', async () => {
   const {db, sqlite} = database(), env = environment(db), worker = createWorker();
   try {
