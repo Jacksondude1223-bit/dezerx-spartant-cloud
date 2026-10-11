@@ -330,3 +330,16 @@ table.nodes td { padding-top: 14px; padding-bottom: 14px; }
 .step-mark svg.icon { width: 14px; height: 14px; }
 .step-mark .spinner { width: 12px; height: 12px; }
 @media (max-width: 860px) { .choices, .form-grid { grid-template-columns: 1fr; } .form-card { padding: 0 16px; } }
+
+/* Deploy progress */
+.step-text { display: grid; gap: 3px; min-width: 0; }
+.step-text .sub { font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.term.short { min-height: 0; max-height: 300px; font-size: 12px; }
+.timeline { list-style: none; margin: 0; padding: 6px 20px; }
+.timeline li { display: grid; grid-template-columns: 84px 1fr; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line-2); font-size: 13px; color: var(--ink-2); }
+.timeline li:last-child { border-bottom: 0; }
+.timeline time { color: var(--faint); font-variant-numeric: tabular-nums; }
+.timeline li.good span { color: var(--green); }
+.timeline li.warn span { color: var(--amber); }
+.timeline li.bad span { color: var(--red-strong); }
+@media (max-width: 860px) { .timeline li { grid-template-columns: 1fr; gap: 0; } }

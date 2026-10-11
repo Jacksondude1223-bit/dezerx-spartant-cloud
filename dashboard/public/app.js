@@ -955,9 +955,53 @@ function dnsCard(item) {
     h('td', {class: 'muted'}, purpose[r.purpose] || r.purpose || '', r.type === 'CNAME' && r.purpose === 'routing' ? h('div', {class: 'sub'}, 'DNS only (grey cloud) recommended') : null)); });
   return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Type'), h('th', null, 'Name'), h('th', null, 'Value'), h('th', null, 'Purpose'))), h('tbody', null, rows.length ? rows : h('tr', null, h('td', {colspan: '4', class: 'faint'}, 'No records returned yet. Verify to refresh.'))))));
 }
+const clock = ms => { const s = Math.max(0, Math.round(ms / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`; };
+// Text that counts up or down every second without re-rendering the page.
+function liveText(compute) { const el = h('span', {class: 'live-text'}, compute()); el._compute = compute; return el; }
+function tickLive() { document.querySelectorAll('.live-text').forEach(el => { el.textContent = el._compute(); }); }
 function stepList(item) {
-  const steps = [['primary', `Provision on node-${item.primary} with the administrator`], ['secondary', `Provision standby on node-${item.secondary}`], ['routing', 'Publish to the router as ready']];
-  return h('ol', {class: 'steps'}, steps.map(([key, label]) => { const value = item.steps?.[key]; return h('li', {class: value || 'pending'}, h('span', {class: 'step-mark'}, value === 'done' ? icon('check') : value === 'running' ? h('span', {class: 'spinner'}) : value === 'failed' ? icon('alert') : null), label); }));
+  const p = item.progress;
+  const steps = [
+    ['primary', `Provision on node-${item.primary} (home) with the administrator`, 'Creates the database, pulls the image if needed, starts the container, waits for the app, then creates the admin.'],
+    ['secondary', `Provision the standby on node-${item.secondary}`, 'A lightweight copy that forwards visitors to the home node.'],
+    ['routing', 'Publish to the router', 'Tells the routing Worker the instance is ready so its address starts working.']];
+  return h('ol', {class: 'steps'}, steps.map(([key, label, hint]) => {
+    const value = item.steps?.[key];
+    const live = value === 'running' && p && p.role === key ? h('div', {class: 'sub'}, liveText(() => {
+      const elapsed = clock(Date.now() - Date.parse(p.startedAt));
+      const retry = p.retryAt ? Date.parse(p.retryAt) - Date.now() : null;
+      return `Attempt ${p.attempt} · ${elapsed} elapsed · ${retry !== null && retry > 0 ? `asking again in ${clock(retry)}` : `waiting on node-${p.region} for ${clock(Date.now() - Date.parse(p.callStartedAt))}`} · gives up after 20 min`;
+    })) : value === 'running' || !value ? h('div', {class: 'sub'}, hint) : null;
+    return h('li', {class: value || 'pending'}, h('span', {class: 'step-mark'}, value === 'done' ? icon('check') : value === 'running' ? h('span', {class: 'spinner'}) : value === 'failed' ? icon('alert') : null), h('div', {class: 'step-text'}, label, live));
+  }));
+}
+function activityLog(item) {
+  const entries = item.log || [];
+  if (!entries.length) return null;
+  return h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'What happened'), h('span', {class: 'note'}, 'Newest last')),
+    h('div', {class: 'card'}, h('ol', {class: 'timeline'}, entries.map(entry => h('li', {class: entry.tone || ''}, h('time', {title: entry.time}, new Date(entry.time).toLocaleTimeString()), h('span', null, entry.text))))));
+}
+// While a node works on the tenant, show what its container is doing.
+async function nodeWatch(item) {
+  const p = item.progress;
+  if (!p) return null;
+  const base = `/api/nodes/${p.region}/tenants/${item.id}`;
+  const [detail, logs] = await Promise.allSettled([api.get(`${base}/detail`), api.post(`${base}/logs`, {tail: 25})]);
+  const d = detail.status === 'fulfilled' ? detail.value : null;
+  const state = !d ? 'The node has not created the container yet (it may be pulling the image or preparing the database).'
+    : !d.container?.running ? `Container ${d.container?.state || 'not running'}.`
+    : d.applicationHealthy ? 'Container running and the app answers. The node finishes on its next check.'
+    : `Container running for ${d.container.startedAt ? ago(d.container.startedAt).replace(' ago', '') : 'a moment'}; the app is still starting (migrations and seeders run on first start).`;
+  const lines = logs.status === 'fulfilled' ? logs.value.lines.slice(-25) : [];
+  return h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, `Live from node-${p.region}`), h('span', {class: 'note'}, 'Refreshes every 4 seconds')),
+    h('div', {class: 'card table-card'}, h('div', {class: 'toolbar'}, h('span', {class: 'status'}, h('span', {class: `dot ${d?.applicationHealthy ? 'green' : 'amber'}`}), state)),
+      h('div', {class: 'term short', role: 'log'}, lines.length ? lines.map(line => h('div', {class: `log-line ${line.stream}`}, h('time', null, line.time ? line.time.replace('T', ' ').slice(11, 19) : ''), h('span', null, line.text))) : h('span', {class: 'sys'}, d ? 'No container output yet.' : 'Waiting for the container…'))));
+}
+function dnsStages(item) {
+  const order = ['spartan_ownership', 'cloudflare_validation', 'routing_setup', 'ready_to_provision'];
+  const labels = [['Ownership', 'The _spartan-verification TXT record proves you control the domain.'], ['SSL certificate', 'Cloudflare checks the _acme-challenge / _cf-custom-hostname records and issues the certificate. Usually 2 to 10 minutes.'], ['Routing', 'The Worker route for the domain is attached automatically.'], ['Ready', 'You can deploy.']];
+  const current = Math.max(0, order.indexOf(item.dns?.stage));
+  return h('div', {class: 'card'}, h('ol', {class: 'steps'}, labels.map(([label, hint], i) => h('li', {class: i < current ? 'done' : i === current ? 'running' : 'pending'}, h('span', {class: 'step-mark'}, i < current ? icon('check') : i === current ? h('span', {class: 'spinner'}) : null), h('div', {class: 'step-text'}, label, h('div', {class: 'sub'}, hint))))));
 }
 function adminForm(item, onDone) {
   const name = h('input', {class: 'input', autocomplete: 'off', placeholder: 'Customer Owner'});
@@ -980,7 +1024,8 @@ function adminForm(item, onDone) {
     h('div', {class: 'form-foot'}, deployButton));
 }
 
-async function instancePage(ctx, id) {
+// Polls in place while deploying, so the page does not blink back to a loading spinner.
+async function instancePage(ctx, id, polling = false) {
   if (!state.session.provisioning) return disabledNotice(ctx);
   const item = await api.get(`/api/instances/${id}`);
   const status = instanceStatus(item);
@@ -1003,12 +1048,15 @@ async function instancePage(ctx, id) {
   const body = [];
   if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(item.error))));
   if (item.status === 'awaiting_dns') body.push(
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Domain checks'), h('span', {class: 'note'}, 'Press Verify DNS to re-check')), dnsStages(item)),
     h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records'), h('span', {class: 'note'}, item.dns?.checkedAt ? `Checked ${ago(item.dns.checkedAt)}${item.dns.stage ? ` · ${item.dns.stage.replace(/_/g, ' ')}` : ''}` : '')), dnsCard(item)));
   if (['deploying', 'ready'].includes(item.status) || (item.status === 'failed' && Object.keys(item.steps || {}).length)) body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Deployment')), h('div', {class: 'card'}, stepList(item))));
+  if (item.status === 'deploying') { const watch = await nodeWatch(item).catch(() => null); if (watch) body.push(watch); }
   if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. Suspend, resume and terminate stay with the billing system; this dashboard only creates instances.'));
   if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
   if (item.custom && item.status === 'ready_to_deploy') body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records')), dnsCard(item)));
+  body.push(activityLog(item));
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances', href: '#/instances'}, {label: item.hostname}]),
     pageHead({title: item.hostname, lead: h('span', {class: 'app-icon large'}, icon('rocket')), pill: status, subtitle: h('span', {class: 'mono'}, item.id), actions: [
@@ -1018,7 +1066,7 @@ async function instancePage(ctx, id) {
       item.status === 'ready' ? h('a', {class: 'btn primary', href: item.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null]}),
     body,
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Details')), details)]);
-  if (item.status === 'deploying') every(4000, reload);
+  if (item.status === 'deploying' && !polling) { every(4000, () => { if (ctx.alive()) instancePage(ctx, id, true).catch(() => {}); }); every(1000, tickLive); }
 }
 
 render();

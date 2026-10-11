@@ -162,7 +162,14 @@
     if (item.status !== 'deploying') return;
     const elapsed = Date.now() - item.started;
     item.steps = {primary: elapsed > 6000 ? 'done' : 'running', ...(elapsed > 6000 ? {secondary: elapsed > 10000 ? 'done' : 'running'} : {}), ...(elapsed > 10000 ? {routing: elapsed > 12000 ? 'done' : 'running'} : {})};
-    if (elapsed > 12000) { item.status = 'ready'; note(item.primary, item.id, 'instance_ready'); }
+    const say = (key, text, tone = '') => { if (!item.said.has(key)) { item.said.add(key); item.log.push({time: new Date().toISOString(), text, tone}); } };
+    if (elapsed > 3000) say('a', `node-${item.primary} answered after 30 s: the container is running but the app is not answering yet. A first start runs database migrations and seeders, which can take a few minutes.`);
+    if (elapsed > 6000) say('b', `node-${item.primary} is ready after 4 s; the app answers its health check and the first administrator exists.`, 'good');
+    if (elapsed > 6000) say('c', `Provisioning the standby on node-${item.secondary}. It holds no data and forwards traffic to the home node.`);
+    if (elapsed > 10000) say('d', 'Both nodes are ready. Publishing the instance to the routing Worker so visitors reach it.');
+    const role = elapsed > 6000 ? 'secondary' : 'primary';
+    item.progress = elapsed > 10000 ? null : {role, region: role === 'primary' ? item.primary : item.secondary, attempt: elapsed > 3000 && role === 'primary' ? 2 : 1, startedAt: new Date(item.started + (role === 'secondary' ? 6000 : 0)).toISOString(), callStartedAt: new Date(item.started + (elapsed > 3000 ? 3000 : 0)).toISOString(), retryAt: null};
+    if (elapsed > 12000) { item.status = 'ready'; item.progress = null; say('e', `Live at https://${item.hostname}.`, 'good'); note(item.primary, item.id, 'instance_ready'); }
   };
   async function instanceRequest(method, path, body) {
     if (path === '/api/instances' && method === 'GET') { instances.forEach(advance); return {instances: [...instances.values()].reverse()}; }
@@ -199,7 +206,7 @@
         Object.assign(item, {product: PRODUCTS[prefix], licenseHint: `${prefix}…${body.licenseKey.slice(-4)}`});
       }
       if (!a.displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email || '') || String(a.password || '').length < 8) throw err('invalid_initial_admin', 400);
-      Object.assign(item, {status: 'deploying', started: Date.now(), steps: {primary: 'running'}, error: null});
+      Object.assign(item, {status: 'deploying', started: Date.now(), steps: {primary: 'running'}, error: null, said: new Set(), log: [...(item.log || []), {time: new Date().toISOString(), text: 'Deployment started by admin.'}, {time: new Date().toISOString(), text: `Provisioning on node-${item.primary} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.`}]});
       note(item.primary, item.id, 'instance_deploy');
       return item;
     }

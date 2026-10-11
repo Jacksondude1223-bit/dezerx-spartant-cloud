@@ -135,6 +135,12 @@ test('a deployment retries a node that is still provisioning and reports failure
   assert.equal(failed.status, 'failed');
   assert.equal(failed.error, 'tenant_conflict');
   assert.deepEqual(failed.steps, {primary: 'done', secondary: 'failed'});
+  const story = failed.log.map(entry => entry.text).join('\n');
+  assert.match(story, /container is running but the app is not answering yet/);
+  assert.match(story, /Asking node-us again \(attempt 3\)/);
+  assert.match(story, /node-us is ready after/);
+  assert.match(story, /node-de answered tenant_conflict\. Stopping\./);
+  assert.equal(failed.progress, null);
 });
 
 test('the dashboard exposes instance creation only when configured, behind session and CSRF', async () => {
