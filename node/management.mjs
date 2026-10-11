@@ -51,7 +51,7 @@ function parseEnv(text, docker = false) {
   }
   return result;
 }
-const protectedKey = key => /^(APP_(KEY|URL|ENV|DEBUG)|ASSET_URL|LICENSE_KEY|PRODUCT_ID|DB_.*|CLOUD_ROLE|TENANT_ID|OCTANE_.*|SESSION_.*|NODE_.*|ORIGIN_SECRET)$/.test(key);
+const protectedKey = key => /^(APP_(KEY|URL|ENV|DEBUG)|ASSET_URL|LICENSE_KEY|PRODUCT_ID|DB_.*|CLOUD_ROLE|CLOUD_DATABASE_MODE|TENANT_ID|OCTANE_.*|SESSION_.*|NODE_.*|ORIGIN_SECRET)$/.test(key);
 export function validateEnvironment(before, after) {
   const previous = parseEnv(before, true), next = parseEnv(after);
   for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
@@ -135,12 +135,12 @@ export function createManagement({cfg, root, load, save, docker, mysql, applicat
     try { dockerVersion = String(await docker(['info', '--format', '{{.ServerVersion}}'])).trim().slice(0, 40) || null; dockerReady = true; } catch {}
     const databaseReady = await mysql.ready();
     const disk = await statfs(root, {bigint: true});
-    return {region: cfg.NODE_REGION, status: dockerReady && databaseReady ? 'ready' : 'degraded', dockerReady, dockerVersion, databaseReady,
+    return {region: cfg.NODE_REGION, status: dockerReady && databaseReady ? 'ready' : 'degraded', dockerReady, dockerVersion, databaseReady, ...(cfg.DATABASE_MODE === 'us-central' ? {databaseRegion: 'us', databaseMode: 'us-central'} : {}),
       resources: {cpu: {cores: os.cpus().length, usagePercent: cpuPercent, loadAverage: os.loadavg()}, memory: {totalBytes: os.totalmem(), usedBytes: os.totalmem() - os.freemem(), freeBytes: os.freemem()}, disk: {totalBytes: Number(disk.blocks * disk.bsize), availableBytes: Number(disk.bavail * disk.bsize), usedBytes: Number((disk.blocks - disk.bfree) * disk.bsize)}, network: {...network}, uptimeSeconds: os.uptime()}, sampledAt: new Date().toISOString()};
   }
   async function information(input, health = false) {
     const {record, inspect} = await tenant(input);
-    const result = {id: record.id, region: cfg.NODE_REGION, primary: record.primary, role: record.role, status: record.status, url: record.url, activeUrl: record.containerUrl || record.url, lifecycleVersion: record.lifecycleVersion || 0, image: inspect?.Config?.Image || record.image, running: inspect?.State?.Running === true, containerHealth: inspect?.State?.Health?.Status || 'not_configured'};
+    const result = {id: record.id, region: cfg.NODE_REGION, primary: record.primary, role: record.role, databaseMode: record.containerDatabaseMode || 'local', databaseRegion: record.containerDatabaseMode === 'us-central' ? 'us' : cfg.NODE_REGION, status: record.status, url: record.url, activeUrl: record.containerUrl || record.url, lifecycleVersion: record.lifecycleVersion || 0, image: inspect?.Config?.Image || record.image, running: inspect?.State?.Running === true, containerHealth: inspect?.State?.Health?.Status || 'not_configured'};
     if (health && inspect?.State?.Running) {
       const raw = await docker(['stats', '--no-stream', '--format', '{{json .}}', `spartan-${record.id}`]);
       const stats = JSON.parse(raw);

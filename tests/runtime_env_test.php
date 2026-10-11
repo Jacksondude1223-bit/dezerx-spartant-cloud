@@ -26,6 +26,14 @@ try {
             throw new RuntimeException('Application encryption key changed');
         }
     }
+    file_put_contents($file, "DB_SOCKET=/run/mysqld/mysqld.sock\nDB_HOST=127.0.0.1\nAPP_KEY=preserved-test-key\n");
+    putenv('DB_SOCKET=');
+    putenv('DB_HOST=10.77.0.1');
+    exec(escapeshellarg(PHP_BINARY).' -n '.escapeshellarg($script).' '.escapeshellarg($file), $output, $status);
+    $updated = file_get_contents($file);
+    if ($status !== 0 || !preg_match('/^DB_SOCKET=$/m', $updated) || !str_contains($updated, 'DB_HOST=10.77.0.1')) {
+        throw new RuntimeException('Remote database environment was not synchronized');
+    }
     echo "Runtime product ID synchronization passed\n";
 } finally {
     unlink($file);

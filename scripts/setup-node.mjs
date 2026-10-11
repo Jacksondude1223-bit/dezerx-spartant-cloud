@@ -53,6 +53,8 @@ export function validateNodeEnvironment(env, region) {
   const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
   if (origins[0] === origins[1] || origins.some(host => host === env.BASE_DOMAIN || host.endsWith(`.${env.BASE_DOMAIN}`))) throw new Error('Origin hostnames must differ and be outside the tenant base domain');
   if (env.AGENT_PORT !== '8788' || env.DATA_ROOT !== '/srv/spartan-cloud' || env.MYSQL_SOCKET !== '/run/mysqld/mysqld.sock' || env.LARAVEL_ENV_FILE !== '/etc/spartan-cloud/laravel-env.json') throw new Error('Invalid node paths or port');
+  if (env.DATABASE_MODE !== undefined && !['local', 'us-central'].includes(env.DATABASE_MODE)) throw new Error('Invalid DATABASE_MODE');
+  if (env.DATABASE_MODE === 'us-central' && (env.US_DATABASE_HOST !== '10.77.0.1' || env.DE_DATABASE_HOST !== '10.77.0.2')) throw new Error('Invalid database network');
   if (env.DOMAIN_VERIFICATION_REQUIRED !== undefined && !['true', 'false'].includes(env.DOMAIN_VERIFICATION_REQUIRED)) throw new Error('Invalid DOMAIN_VERIFICATION_REQUIRED');
   if (env.AI_RECOVERY_ENABLED === 'true') {
     let url;
@@ -145,6 +147,7 @@ async function main(args) {
       env.AI_RECOVERY_URL = await ask('AI_RECOVERY_URL', {label: 'Existing recovery Worker URL (https://worker.workers.dev/v1/recovery)', valid: value => { try { const url = new URL(value); return url.protocol === 'https:' && url.pathname === '/v1/recovery'; } catch { return false; } }});
       env.AI_RECOVERY_SECRET = await ask('AI_RECOVERY_SECRET', {label: 'Shared recovery Worker secret', valid: secret, hidden: true});
     }
+    for (const key of ['DATABASE_MODE', 'US_DATABASE_HOST', 'DE_DATABASE_HOST']) if (supplied[key] !== undefined) env[key] = supplied[key];
     validateNodeEnvironment(env, region);
     let token = options['--token'] ? await readFile(path.resolve(options['--token']), 'utf8') : await optionalFile('/etc/spartan-cloud/tunnel-token') ?? await optionalFile(path.join(root, 'generated', `${region}.tunnel-token`));
     const tokenField = {label: `Cloudflare Tunnel token for the ${region} node (ingress http://127.0.0.1:8788)`, hidden: true, valid: value => /^[A-Za-z0-9+/=_-]{20,16384}$/.test(value)};

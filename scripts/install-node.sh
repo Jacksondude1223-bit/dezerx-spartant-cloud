@@ -59,15 +59,23 @@ install -d -m 700 /etc/spartan-cloud /srv/spartan-cloud /srv/spartan-backups
 # public interface. Each Octane worker, queue worker and scheduler holds a connection,
 # so the default 151 is far too low for a full node; MAX_USER_CONNECTIONS caps each tenant.
 install -d -m 755 /etc/mysql/mariadb.conf.d
+central_de=false
+if node -e 'const fs=require("fs");const s=fs.readFileSync(process.argv[1],"utf8");process.exit(/^DATABASE_MODE="us-central"$/m.test(s)&&/^NODE_REGION="de"$/m.test(s)?0:1)' "$staging/node.env"; then central_de=true; fi
+if [ "$central_de" = false ]; then
+if ! node -e 'const fs=require("fs");process.exit(/^DATABASE_MODE="us-central"$/m.test(fs.readFileSync(process.argv[1],"utf8"))?0:1)' "$staging/node.env"; then
 cat > /etc/mysql/mariadb.conf.d/99-spartan.cnf <<'CNF'
 [mysqld]
 bind-address = 127.0.0.1
 max_connections = 500
 CNF
 chmod 644 /etc/mysql/mariadb.conf.d/99-spartan.cnf
+fi
 systemctl enable mariadb
 systemctl restart mariadb
 mysqladmin --protocol=socket -uroot ping
+else
+systemctl mask --now mariadb
+fi
 install -d -m 755 /opt/spartan-cloud
 if [ -f /etc/spartan-cloud/node.env ]; then
   install -d -m 700 /etc/spartan-cloud/history
@@ -81,6 +89,14 @@ if [ ! -s /etc/spartan-cloud/laravel-env.json ]; then printf '{}\n' > /etc/spart
 chmod 600 /etc/spartan-cloud/laravel-env.json
 for module in node/*.mjs; do install -m 644 "$module" "/opt/spartan-cloud/$(basename "$module")"; done
 install -m 755 scripts/backup.sh /opt/spartan-cloud/backup.sh
+install -m 755 scripts/setup-db-network.py /opt/spartan-cloud/setup-db-network.py
+cat > /usr/local/bin/spartan-db-network <<'NETWORK'
+#!/usr/bin/env bash
+set -euo pipefail
+set +x
+exec python3 /opt/spartan-cloud/setup-db-network.py "$@"
+NETWORK
+chmod 755 /usr/local/bin/spartan-db-network
 node /opt/spartan-cloud/backup-crypto.mjs init
 SPARTAN_INSTALL_LOCK_HELD=1 bash scripts/install-node-updates.sh
 node_path="$(command -v node)"
@@ -138,9 +154,13 @@ RandomizedDelaySec=120
 WantedBy=timers.target
 EOF
 systemctl daemon-reload
-systemctl enable spartan-agent spartan-tunnel spartan-backup.timer
+systemctl enable spartan-agent spartan-tunnel
 systemctl restart spartan-agent spartan-tunnel
-systemctl start spartan-backup.timer
+if [ "$central_de" = false ]; then
+systemctl enable --now spartan-backup.timer
+else
+systemctl disable --now spartan-backup.timer
+fi
 node scripts/setup-node.mjs "$location" --check-health --env /etc/spartan-cloud/node.env
 systemctl is-active --quiet spartan-tunnel
 printf 'Installed %s node. Agent and tunnel start automatically; backups run hourly.\n' "$location"

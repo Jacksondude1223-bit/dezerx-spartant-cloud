@@ -82,3 +82,8 @@ The agent defaults to `/etc/spartan-cloud/docker` for Docker credentials, includ
 Cloudflare settings remain separate from node updates. Set `CF_SAAS_API_TOKEN` as a Worker secret with SSL and Certificates edit permission for the SaaS zone. Keep signed node API calls to `node-us.dezerx.cloud` and `node-de.dezerx.cloud` outside browser challenges and Browser Integrity Check rules; these calls cannot complete an interactive browser challenge. Customer-facing challenge rules can remain enabled separately.
 
 For the market module's domain-first workflow, read [MARKET_MODULE_API.md](MARKET_MODULE_API.md). New installations require a signed domain verification permit before provisioning. Existing nodes retain legacy behavior until `DOMAIN_VERIFICATION_REQUIRED=true` is added to their node environment and the agent is restarted. The Worker needs a `CF_ROUTING_API_TOKEN` secret with Workers Routes write permission on the SaaS zone to attach verified customer hostnames automatically. No new D1 migration or image rebuild is needed for this onboarding feature.
+
+
+## US-only database mode
+
+See [US-DATABASE.md](US-DATABASE.md) for WireGuard setup and activation. In `DATABASE_MODE=us-central`, all instances must have a US primary. Germany runs the web application against US MariaDB and has no running local database. The default legacy mode remains unchanged until explicit activation.

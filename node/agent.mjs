@@ -18,6 +18,7 @@ import {productId, validLicenseKey} from './license.mjs';
 import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
 import {createAdmin} from './admin.mjs';
+import {centralDatabase, validateDatabaseMode, databaseEnvironment, localTenant, remoteDatabaseReady, primaryConnection, DE_DATABASE_IP, US_DATABASE_IP} from './central-database.mjs';
 
 const run = promisify(execFile);
 const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRET || process.env.ORIGIN_SECRET};
@@ -46,6 +47,7 @@ const adminSecret = (() => {
   }
   return value;
 })();
+validateDatabaseMode(cfg);
 const root = cfg.DATA_ROOT || '/srv/spartan-cloud';
 const port = Number(cfg.AGENT_PORT || 8788);
 // Opt-in: serve the operator dashboard (running on this host's loopback) at
@@ -82,7 +84,9 @@ const recovery = createRecovery({config: cfg, root, docker: async args => {
   const result = await run('docker', args, {timeout: 20000, maxBuffer: 1024 * 1024, env: dockerEnvironment});
   return args[0] === 'logs' ? `${result.stdout}\n${result.stderr}` : result.stdout.trim();
 }, run});
-const mysql = createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20});
+const mysql = centralDatabase(cfg) && cfg.NODE_REGION === 'de'
+  ? {ready: () => remoteDatabaseReady(run), ensureTenant: (id, password, identity) => primaryConnection(cfg, {id, ...identity})}
+  : createMysql({run, socket: socketPath, maxConnections: cfg.MYSQL_MAX_USER_CONNECTIONS || 20, ...(centralDatabase(cfg) ? {remoteClientHost: DE_DATABASE_IP} : {})});
 const management = createManagement({cfg, root, load, save, docker, mysql, applicationHealth});
 const admin = createAdmin({cfg, root, load, management, env: dockerEnvironment});
 const adminSecurity = createSecurity({limit: 900});
@@ -106,7 +110,7 @@ async function refreshPort(id) {
   if (jobs.has(id)) return null;
   const check = (async () => {
     const record = await load(id);
-    if (!record || record.role !== 'primary' || record.status !== 'ready') return null;
+    if (!record || !localTenant(cfg, record) || record.status !== 'ready') return null;
     let inspect;
     try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; } catch { return null; }
     if (!inspect?.State?.Running || inspect.Config?.Labels?.['spartan.fingerprint'] !== record.fingerprint) return null;
@@ -124,7 +128,7 @@ async function refreshPort(id) {
   return check;
 }
 function runArgs({id, role, fingerprint, envFile, directory, image}) {
-  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '2g', '--memory-swap', cfg.TENANT_MEMORY || '2g', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, '--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`, image];
+  return ['run', '-d', '--name', container(id), '--label', 'spartan.managed=true', '--label', `spartan.tenant=${id}`, '--label', `spartan.role=${role}`, '--label', `spartan.fingerprint=${fingerprint}`, '--restart', 'unless-stopped', '--cpus', cfg.TENANT_CPUS || '1', '--memory', cfg.TENANT_MEMORY || '2g', '--memory-swap', cfg.TENANT_MEMORY || '2g', '--pids-limit', '256', '--security-opt', 'no-new-privileges:true', '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', '--env-file', envFile, '-p', '127.0.0.1::8080', '--mount', `type=bind,src=${directory}/storage,dst=/var/www/html/storage`, ...(!(centralDatabase(cfg) && cfg.NODE_REGION === 'de') ? ['--mount', `type=bind,src=${socketDirectory},dst=${socketDirectory},readonly`] : []), image];
 }
 async function assignedPortOf(id) {
   const inspect = JSON.parse(await docker(['inspect', container(id)]))[0];
@@ -163,6 +167,7 @@ async function provisionOnce(input, progress) {
   if ((cfg.DOMAIN_VERIFICATION_REQUIRED === 'true' && !sameUrl) || input.domainVerificationToken !== undefined) {
     if (!await verifyDomainPermit(input.domainVerificationToken, cfg.ORIGIN_SECRET, id, new URL(appUrlValue).hostname)) throw apiError('domain_verification_required', 409);
   }
+  if (centralDatabase(cfg) && primary !== 'us') throw apiError('us_primary_required', 409);
   if (!validLicenseKey(licenseKey)) throw new Error('invalid_license_key');
   if (input.initialAdmin !== undefined && !validInitialAdmin(input.initialAdmin)) throw new Error('invalid_initial_admin');
   const {initialAdmin, domainVerificationToken, ...persistedInput} = input;
@@ -184,10 +189,12 @@ async function provisionOnce(input, progress) {
   if (!await mysql.ready()) throw new Error('database_unavailable');
   // Node-owned: the password never travels over the control API, and ensureTenant
   // resyncs it so a lost state.json cannot orphan the database.
-  const dbPassword = existing?.dbPassword || newPassword();
+  const proposedPassword = existing?.dbPassword || newPassword();
+  const connection = await mysql.ensureTenant(id, proposedPassword, {fingerprint});
+  const dbPassword = connection.password || proposedPassword;
   persistedInput.dbPassword = dbPassword;
-  const {database, user} = await mysql.ensureTenant(id, dbPassword);
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', DB_CONNECTION: 'mysql', DB_SOCKET: socketPath, DB_HOST: '127.0.0.1', DB_PORT: '3306', DB_DATABASE: database, DB_USERNAME: user, DB_PASSWORD: dbPassword, SESSION_DRIVER: 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  persistedInput.databaseMode = centralDatabase(cfg) ? 'us-central' : 'local';
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', ...databaseEnvironment(cfg, {...connection, password: dbPassword}, socketPath), SESSION_DRIVER: centralDatabase(cfg) ? 'database' : 'file', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'file', CACHE_DRIVER: 'file', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');
@@ -202,6 +209,7 @@ async function provisionOnce(input, progress) {
   try { inspect = JSON.parse(await docker(['inspect', container(id)]))[0]; }
   catch { inspect = null; }
   const runningUrl = inspect?.Config?.Env?.find(value => value.startsWith('APP_URL='))?.slice(8);
+  persistedInput.containerDatabaseMode = inspect ? (inspect.Config?.Env?.includes('CLOUD_DATABASE_MODE=us-central') ? 'us-central' : 'local') : existing?.containerDatabaseMode || 'local';
   persistedInput.containerUrl = tenantAppUrl(runningUrl) || tenantAppUrl(existing?.containerUrl) || tenantAppUrl(existing?.url) || appUrlValue;
   // Re-provisioning a serving tenant only rewrites app.env — the container keeps running
   // on the old one until an upgrade recreates it. Taking the tenant out of 'ready' would
@@ -216,6 +224,7 @@ async function provisionOnce(input, progress) {
     progress.stage = 'launch';
     await docker(runArgs({id, role, fingerprint, envFile, directory, image: persistedInput.image}));
     persistedInput.containerEnvHash = persistedInput.envHash;
+    persistedInput.containerDatabaseMode = persistedInput.databaseMode;
     persistedInput.containerUrl = appUrlValue;
   } else {
     if (inspect.Config.Labels?.['spartan.fingerprint'] !== fingerprint) throw new Error('container_conflict');
@@ -291,7 +300,7 @@ async function upgrade(input) {
   const create = async image => {
     await docker(runArgs({id, role: record.role, fingerprint, envFile, directory, image}));
     const assigned = await assignedPortOf(id);
-    await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerUrl: record.url, status: 'provisioning'});
+    await save({...record, image, port: assigned, containerEnvHash: record.envHash, containerDatabaseMode: record.databaseMode || 'local', containerUrl: record.url, status: 'provisioning'});
     return assigned;
   };
   let assignedPort;
@@ -451,7 +460,7 @@ async function control(req, res, url) {
   const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
   if (!signedWith(cfg.NODE_CONTROL_SECRET, req, url, payload)) return deny(res, security);
   if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
-  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list', '/control/database/connection'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(res, 400, {error: 'invalid_input'});
   if (url.pathname === '/control/node-health') return reply(res, 200, await management.nodeHealth());
@@ -465,6 +474,15 @@ async function control(req, res, url) {
   security.audit('control_authorized', {id: input.id, operation});
   const previous = jobs.get(input.id) || Promise.resolve();
   const job = previous.catch(() => {}).then(async () => {
+    if (url.pathname === '/control/database/connection') {
+      if (!centralDatabase(cfg) || cfg.NODE_REGION !== 'us') throw apiError('us_database_required', 409);
+      const record = await load(input.id);
+      if (!record || record.fingerprint !== input.fingerprint) throw apiError('tenant_conflict', 409);
+      if (record.primary !== 'us' || record.role !== 'primary' || record.status !== 'ready' || !record.dbPassword) throw apiError('primary_not_ready', 409);
+      if (!await mysql.ready()) throw apiError('database_unavailable', 503);
+      const connection = await mysql.ensureTenant(record.id, record.dbPassword);
+      return {id: record.id, host: US_DATABASE_IP, ...connection, password: record.dbPassword};
+    }
     if (url.pathname === '/control/lifecycle') return applyLifecycle(input, {root, load, save, docker});
     if (url.pathname === '/control/upgrade') return upgrade(input);
     if (url.pathname === '/control/instance') return management.information(input);
@@ -509,7 +527,7 @@ async function target(req) {
     canonical.search = query === -1 ? '' : match[2].slice(query);
     return {redirect: canonical.toString()};
   }
-  if (record.role === 'primary') return {url: new URL(`http://127.0.0.1:${record.port}${match[2]}`), record, local: true};
+  if (localTenant(cfg, record)) return {url: new URL(`http://127.0.0.1:${record.port}${match[2]}`), record, local: true};
   if (req.headers['x-spartan-hop']) return null;
   const origin = record.primary === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN;
   return {url: new URL(`${origin}${req.url}`), record, local: false};
@@ -519,7 +537,8 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/__cloud_node_health' && req.method === 'GET') {
       if (!equal(req.headers['x-spartan-origin'], cfg.ORIGIN_SECRET)) return reply(res, 401, {error: 'unauthorized'});
-      return reply(res, 200, {status: 'ready', region: cfg.NODE_REGION, updateSafety: 1, pendingControls, maintenance: maintenance()});
+      const databaseReady = !centralDatabase(cfg) || await mysql.ready();
+      return reply(res, databaseReady ? 200 : 503, {status: databaseReady ? 'ready' : 'degraded', region: cfg.NODE_REGION, updateSafety: 1, pendingControls, maintenance: maintenance(), ...(centralDatabase(cfg) ? {databaseMode: 'us-central', databaseRegion: 'us', databaseReady} : {})});
     }
     if (url.pathname.startsWith('/control/')) return await control(req, res, url);
     if (url.pathname.startsWith('/admin/')) return await adminRoute(req, res, url);

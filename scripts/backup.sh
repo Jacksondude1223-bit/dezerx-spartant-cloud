@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 exec 9>/run/spartan-backup.lock
 flock -n 9 || exit 0
+if [ "${DATABASE_MODE:-local}" = us-central ] && [ "${NODE_REGION:-}" = de ]; then exit 0; fi
 data_root="${DATA_ROOT:-/srv/spartan-cloud}"
 backup_root="${BACKUP_ROOT:-/srv/spartan-backups}"
 socket="${MYSQL_SOCKET:-/run/mysqld/mysqld.sock}"

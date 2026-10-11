@@ -237,7 +237,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const deadline = started + DEPLOY_WAIT;
     const exhausted = attempt => attempt >= 60 || now() >= deadline;
     const label = `node-${region}`;
-    note(item, role === 'primary' ? `Provisioning on ${label} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.` : `Provisioning the standby on ${label}. It holds no data and forwards traffic to the home node.`);
+    note(item, role === 'primary' ? `Provisioning on ${label} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.` : `Provisioning the regional container on ${label}. Its configured database mode determines whether it serves locally using the US database or forwards requests to the home node.`);
     for (let attempt = 1; ; attempt++) {
       item.progress = {role, region, attempt, startedAt: new Date(started).toISOString(), callStartedAt: new Date(now()).toISOString(), retryAt: null, deadline: new Date(deadline).toISOString()};
       if (attempt > 1) note(item, `Asking ${label} again (attempt ${attempt}).`);

@@ -10,6 +10,8 @@ try {
     if (match && !cfg[match[1]]) cfg[match[1]] = match[2];
   }
 } catch (error) { if (error.code !== 'ENOENT') throw error; }
+const databaseMode = cfg.DATABASE_MODE || 'us-central';
+if (!['local', 'us-central'].includes(databaseMode)) throw new Error('invalid_database_mode');
 const routingWorkerName = cfg.ROUTING_WORKER_NAME || 'dezerx-spartant-cloud';
 if (!/^[a-z0-9][a-z0-9-]{0,62}$/.test(routingWorkerName)) throw new Error('invalid_routing_worker_name');
 for (const name of ['CLOUDFLARE_ACCOUNT_ID', 'CLOUDFLARE_ZONE_ID', 'CLOUDFLARE_API_TOKEN', 'BASE_DOMAIN', 'US_HOSTNAME', 'DE_HOSTNAME', 'SPARTAN_IMAGE']) {
@@ -106,7 +108,7 @@ if (!state.d1 || state.d1.name !== databaseName) {
 }
 // schema.sql is CREATE TABLE IF NOT EXISTS throughout, so applying it again is a no-op.
 await api('POST', `${account}/d1/database/${state.d1.id}/query`, {sql: await readFile(new URL('../workers/schema.sql', import.meta.url), 'utf8')});
-const vars = {INSTANCE_DOMAIN: zone.name, CLOUDFLARE_ACCOUNT_ID: cfg.CLOUDFLARE_ACCOUNT_ID, ROUTING_WORKER_NAME: routingWorkerName, MAX_CUSTOM_HOSTNAMES: String(hostnameLimit), BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, CLOUDFLARE_ZONE_ID: cfg.CLOUDFLARE_ZONE_ID, SAAS_ZONE_DOMAIN: zone.name, SAAS_CNAME_TARGET: cfg.BASE_DOMAIN, ROUTE_CACHE_SECONDS: '10'};
+const vars = {INSTANCE_DOMAIN: zone.name, CLOUDFLARE_ACCOUNT_ID: cfg.CLOUDFLARE_ACCOUNT_ID, ROUTING_WORKER_NAME: routingWorkerName, MAX_CUSTOM_HOSTNAMES: String(hostnameLimit), BASE_DOMAIN: cfg.BASE_DOMAIN, US_ORIGIN: `https://${cfg.US_HOSTNAME}`, DE_ORIGIN: `https://${cfg.DE_HOSTNAME}`, CLOUDFLARE_ZONE_ID: cfg.CLOUDFLARE_ZONE_ID, SAAS_ZONE_DOMAIN: zone.name, SAAS_CNAME_TARGET: cfg.BASE_DOMAIN, ROUTE_CACHE_SECONDS: '10', DATABASE_MODE: databaseMode};
 const common = {account_id: cfg.CLOUDFLARE_ACCOUNT_ID, compatibility_date: '2026-10-01', vars, observability: {enabled: true}};
 await write('provisioning.json', JSON.stringify({...common, ai: {binding: 'AI'}, vars: {...vars, AI_RECOVERY_ENABLED: String(aiEnabled), AI_MAX_CALLS_PER_DAY: String(aiLimit)}, triggers: {crons: ['0 */6 * * *']}, name: 'spartan-provisioning', main: '../workers/provisioning.js', workers_dev: true, durable_objects: {bindings: [{name: 'TENANTS', class_name: 'Tenant'}, {name: 'DOMAINS', class_name: 'Domains'}, {name: 'RECOVERY', class_name: 'Recovery'}]}, migrations: [{tag: 'v1', new_sqlite_classes: ['Tenant']}, {tag: 'v2', new_sqlite_classes: ['Domains']}, {tag: 'v3', new_sqlite_classes: ['Recovery']}], queues: {producers: [{binding: 'PROVISION_QUEUE', queue: 'spartan-provision'}], consumers: [{queue: 'spartan-provision', max_batch_size: 1, max_retries: 5, dead_letter_queue: 'spartan-provision-dead'}]}}));
 const routes = [{pattern: `${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}, {pattern: `*.${cfg.BASE_DOMAIN}/*`, zone_id: cfg.CLOUDFLARE_ZONE_ID}];

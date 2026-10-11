@@ -57,10 +57,10 @@ foreach ($defaults as $key => $value) {
     $contents = setEnvValue($contents, $key, $value);
 }
 
-foreach (array_unique(array_merge(['PRODUCT_ID'], ...array_map('envKeys', $keySources))) as $key) {
+foreach (array_unique(array_merge(['PRODUCT_ID', 'DB_CONNECTION', 'DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD', 'DB_SOCKET', 'CLOUD_DATABASE_MODE', 'SESSION_DRIVER'], ...array_map('envKeys', $keySources))) as $key) {
     $value = getenv($key);
 
-    if ($value !== false && $value !== '') {
+    if ($value !== false && ($value !== '' || $key === 'DB_SOCKET')) {
         $contents = setEnvValue($contents, $key, $value);
     }
 }

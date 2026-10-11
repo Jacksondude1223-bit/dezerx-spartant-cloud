@@ -18,7 +18,8 @@ export const databaseName = id => `sp_${id.slice(2)}`;
 export const userName = id => `sp_${id.slice(2)}`;
 export const newPassword = () => randomBytes(24).toString('base64url');
 
-export function createMysql({run, socket = SOCKET, maxConnections = 20}) {
+export function createMysql({run, socket = SOCKET, maxConnections = 20, remoteClientHost}) {
+  if (remoteClientHost !== undefined && remoteClientHost !== '10.77.0.2') throw new Error('invalid_remote_database_host');
   const connections = Number(maxConnections);
   if (!Number.isInteger(connections) || connections < 1 || connections > 1000) throw new Error('invalid_max_user_connections');
   const sql = async statements => (await run('mysql', ['--protocol=socket', `--socket=${socket}`, '-uroot', '--batch', '--skip-column-names', '-e', statements], {timeout: 30000})).stdout.trim();
@@ -40,6 +41,11 @@ export function createMysql({run, socket = SOCKET, maxConnections = 20}) {
         `CREATE USER IF NOT EXISTS '${user}'@'localhost' IDENTIFIED BY '${password}'`,
         `ALTER USER '${user}'@'localhost' IDENTIFIED BY '${password}' WITH MAX_USER_CONNECTIONS ${connections}`,
         `GRANT ALL PRIVILEGES ON \`${database}\`.* TO '${user}'@'localhost'`,
+        ...(remoteClientHost ? [
+          `CREATE USER IF NOT EXISTS '${user}'@'${remoteClientHost}' IDENTIFIED BY '${password}'`,
+          `ALTER USER '${user}'@'${remoteClientHost}' IDENTIFIED BY '${password}' WITH MAX_USER_CONNECTIONS ${connections}`,
+          `GRANT ALL PRIVILEGES ON \`${database}\`.* TO '${user}'@'${remoteClientHost}'`
+        ] : []),
         'FLUSH PRIVILEGES'
       ].join('; '));
       return {database, user};

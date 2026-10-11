@@ -349,9 +349,9 @@ Public JSON diagnostics on the routing control hostname. No signature is require
 
 ## Routing behavior and current limits
 
-The Worker proxies every tenant request straight to the tenant's primary node, since only the primary runs the application (earlier revisions picked the node nearest the visitor, which then forwarded to the primary). Hostname and route lookups are cached in each Worker isolate for `ROUTE_CACHE_SECONDS` (configure sets 10; unset disables), so a status change reaches visitors within that time; reads use D1's nearest replica when read replication is enabled. There is no health-based failover or automatic primary promotion.
+In Worker `DATABASE_MODE=us-central`, tenants whose primary is US are routed to US or Germany according to visitor country. Both regional containers use the US database after node activation and container migration. Legacy secondary containers continue forwarding to their primary until migrated. With Worker `DATABASE_MODE=local` or unset, requests go directly to the tenant's primary. Hostname and route lookups are cached in each Worker isolate for `ROUTE_CACHE_SECONDS` (configure sets 10; unset disables), so a status change reaches visitors within that time; reads use D1's nearest replica when read replication is enabled. There is no health-based failover or automatic primary promotion.
 
-The primary owns the tenant's MariaDB database, and its node agent serves the application. A node where the tenant is not primary forwards **all application requests** to the primary rather than serving them locally, so a regional route does not mean the application executes in that region. There is no cross-node data replication: a non-primary node holds no tenant data at all. Do not treat this as an active-active database or an automatic failover setup.
+In legacy mode, the primary owns the tenant's MariaDB database, and its node agent serves the application. A node where the tenant is not primary forwards **all application requests** to the primary rather than serving them locally, so a regional route does not mean the application executes in that region. There is no cross-node data replication: a non-primary node holds no tenant data at all. Do not treat this as an active-active database or an automatic failover setup.
 
 Customer request outcomes include HTTP 403 `service_suspended`, HTTP 410 `service_terminated`, HTTP 503 `provisioning`, HTTP 503 `client_ip_unavailable`, and HTTP 503 `origin_unavailable`. Unmapped browser requests can return the status page with HTTP 404; unmapped API requests return JSON `not_found`.
 
@@ -499,3 +499,8 @@ These controls reduce exposure and provide evidence of suspicious control activi
 ### Pre-provision domain onboarding
 
 The market module can reserve and verify domain ownership, Cloudflare SSL and an exact customer Worker route before creating any container. Signed POST endpoints are `/v1/routing/onboarding/prepare`, `/v1/routing/onboarding/status` and `/v1/routing/onboarding/verify`. The complete request fields, DNS record response, provisioning permit and lifecycle sequence are in [MARKET_MODULE_API.md](MARKET_MODULE_API.md). New installs enforce `DOMAIN_VERIFICATION_REQUIRED=true`; existing node configurations opt in explicitly.
+
+
+## US-only database mode
+
+See [US-DATABASE.md](US-DATABASE.md) for WireGuard setup and activation. In `DATABASE_MODE=us-central`, all instances must have a US primary. Germany runs the web application against US MariaDB and has no running local database. The default legacy mode remains unchanged until explicit activation.

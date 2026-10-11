@@ -74,10 +74,10 @@ export default {
       if (record.status !== 'ready') return json({error: 'provisioning'}, 503);
       const ip = visitorIp(request.headers);
       if (!ip) return json({error: 'client_ip_unavailable'}, 503);
-      // The application and its database run only on the tenant's primary node; the other
-      // node would just forward the request there, adding a second trip (often across the
-      // Atlantic). Go straight to the primary.
-      const origin = (record.primary === 'de' ? 'de' : record.primary === 'us' ? 'us' : region(request.cf?.country || 'US')) === 'us' ? env.US_ORIGIN : env.DE_ORIGIN;
+      const location = env.DATABASE_MODE === 'us-central' && record.primary === 'us'
+        ? region(request.cf?.country || 'US')
+        : record.primary === 'de' ? 'de' : 'us';
+      const origin = location === 'us' ? env.US_ORIGIN : env.DE_ORIGIN;
       const target = new URL(origin);
       target.pathname = `/tenant/${id}${url.pathname}`;
       target.search = url.search;

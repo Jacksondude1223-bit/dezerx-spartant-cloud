@@ -36,8 +36,11 @@ final class SpartanCloudServiceProvider extends ServiceProvider
         $this->app['events']->listen(RequestReceived::class, RestoreVisitorIp::class);
         $this->app['router']->get('/__cloud_health', function () {
             try {
-                if (getenv('CLOUD_ROLE') === 'primary') {
+                if (getenv('CLOUD_ROLE') === 'primary' || getenv('CLOUD_DATABASE_MODE') === 'us-central') {
                     DB::select('SELECT 1');
+                    if (getenv('CLOUD_DATABASE_MODE') === 'us-central' && !Schema::hasTable('sessions')) {
+                        throw new RuntimeException('sessions_missing');
+                    }
                     if (!Schema::hasTable('migrations')) {
                         throw new RuntimeException('migrations_missing');
                     }

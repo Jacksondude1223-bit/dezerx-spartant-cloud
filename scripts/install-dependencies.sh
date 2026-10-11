@@ -13,7 +13,11 @@ esac
 architecture="$(dpkg --print-architecture)"
 case "$architecture" in amd64) node_arch=x64 ;; arm64) node_arch=arm64 ;; *) printf 'amd64 or arm64 is required.\n' >&2; exit 1 ;; esac
 apt-get update
-apt-get install -y ca-certificates curl tar xz-utils util-linux mariadb-server mariadb-client
+central_de=false
+if [ -f /etc/spartan-cloud/node.env ] && grep -q '^DATABASE_MODE="us-central"$' /etc/spartan-cloud/node.env && grep -q '^NODE_REGION="de"$' /etc/spartan-cloud/node.env; then central_de=true; fi
+packages=(ca-certificates curl tar xz-utils util-linux python3 mariadb-client)
+if [ "$central_de" = false ]; then packages+=(mariadb-server); fi
+apt-get install -y "${packages[@]}"
 if ! command -v docker >/dev/null; then
   for package in docker.io podman-docker containerd runc; do
     if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'install ok installed'; then
@@ -59,9 +63,11 @@ if ! command -v node >/dev/null || ! node -e 'process.exit(Number(process.versio
   tar -xJf "$download_dir/$archive" -C /opt/spartan-nodejs
   ln -sfn "/opt/spartan-nodejs/${archive%.tar.xz}/bin/node" /usr/local/bin/node
 fi
+if [ "$central_de" = false ]; then
 systemctl enable --now mariadb
 mysqladmin --protocol=socket -uroot ping
+fi
 node --version
 docker --version
 cloudflared --version
-mysqld --version
+if [ "$central_de" = false ]; then mysqld --version; fi

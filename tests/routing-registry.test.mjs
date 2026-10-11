@@ -140,3 +140,26 @@ test('tenant lookups are cached for ROUTE_CACHE_SECONDS and go straight to the p
   assert.equal(queries, 1, 'one D1 read serves the burst');
   assert.deepEqual(hosts, ['de.origin.test', 'de.origin.test', 'de.origin.test'], 'a US visitor still goes to the German primary');
 });
+
+
+test('central US database mode routes European visitors to the German application node', async () => {
+  const env = {...fixture().env, DATABASE_MODE: 'us-central'};
+  const {registerRoute} = await import('../workers/store.js');
+  await registerRoute(env, {...input, primary: 'us'});
+  const previous = globalThis.fetch;
+  const hosts = [];
+  globalThis.fetch = async request => {hosts.push(new URL(request.url).host); return new Response('ok');};
+  try {
+    for (const country of ['US', 'DE', 'FR']) {
+      const request = new Request(`https://${id}.cloud.test/page`, {headers: {'cf-connecting-ip':'198.51.100.7'}});
+      Object.defineProperty(request, 'cf', {value: {country}});
+      assert.equal((await routing.fetch(request, env)).status, 200);
+    }
+    const legacyDE = {...fixture().env, DATABASE_MODE: 'us-central'};
+    await registerRoute(legacyDE, {...input, primary: 'de'});
+    const request = new Request(`https://${id}.cloud.test/page`, {headers:{'cf-connecting-ip':'198.51.100.7'}});
+    Object.defineProperty(request, 'cf', {value:{country:'US'}});
+    assert.equal((await routing.fetch(request, legacyDE)).status, 200);
+  } finally {globalThis.fetch = previous;}
+  assert.deepEqual(hosts, ['us.origin.test','de.origin.test','de.origin.test','de.origin.test']);
+});
