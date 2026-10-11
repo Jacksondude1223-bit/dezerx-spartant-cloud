@@ -223,7 +223,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     const ip = clientIp(req);
     if (url.pathname === '/api/session' && req.method === 'GET') {
       const session = sessionOf(req);
-      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host})), provisioning: provisioner ? {baseDomain: config.provisioning.baseDomain} : null} : {authenticated: false, label: config.publicLabel, twoFactor: Boolean(config.totpSecret)});
+      return send(res, 200, session ? {authenticated: true, user: session.user, csrf: session.csrf, label: config.publicLabel, nodes: Object.keys(config.nodes).map(region => ({region, label: REGIONS[region], host: new URL(config.nodes[region]).host})), provisioning: provisioner ? {baseDomain: config.provisioning.baseDomain, instanceDomain: config.provisioning.instanceDomain} : null} : {authenticated: false, label: config.publicLabel, twoFactor: Boolean(config.totpSecret)});
     }
     if (url.pathname === '/api/login' && req.method === 'POST') {
       if (!limitLogin(ip)) { record('login_rate_limited', {ip}); return send(res, 429, {error: 'too_many_attempts'}); }

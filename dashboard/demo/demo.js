@@ -132,7 +132,7 @@
   const find = (region, tid) => tenants.find(t => t.region === region && t.id === tid);
   async function request(method, path, body) {
     await sleep(rand(120, 380));
-    if (path === '/api/session') return {authenticated: true, user: 'admin', csrf: 'demo', label: 'Spartan Cloud', nodes: [{region: 'us', label: 'United States', host: host.us}, {region: 'de', label: 'Germany', host: host.de}], provisioning: {baseDomain: 'load.dezerx.cloud'}};
+    if (path === '/api/session') return {authenticated: true, user: 'admin', csrf: 'demo', label: 'Spartan Cloud', nodes: [{region: 'us', label: 'United States', host: host.us}, {region: 'de', label: 'Germany', host: host.de}], provisioning: {baseDomain: 'load.dezerx.cloud', instanceDomain: 'dezerx.cloud'}};
     if (path.startsWith('/api/instances')) return instanceRequest(method, path, body || {});
     if (path === '/api/overview') return {nodes: [node('us'), node('de')], sampledAt: new Date().toISOString()};
     if (path === '/api/activity') return {events: activity};
@@ -168,12 +168,12 @@
     if (path === '/api/instances' && method === 'GET') { instances.forEach(advance); return {instances: [...instances.values()].reverse()}; }
     if (path === '/api/instances') {
       const prefix = Object.keys(PRODUCTS).find(p => String(body.licenseKey).startsWith(p));
-      if (!prefix || body.licenseKey.length < 16) throw err('invalid_license_key', 400);
+      if ((body.domain || body.licenseKey) && (!prefix || body.licenseKey.length < 16)) throw err('invalid_license_key', 400);
       const domain = String(body.domain || '').toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
       if (body.domain && !/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(domain)) throw err('invalid_domain', 400);
       const id = `t-${hex(24)}`;
-      const hostname = domain || `${id}.load.dezerx.cloud`;
-      const item = {id, primary: body.primary, secondary: body.primary === 'us' ? 'de' : 'us', hostname, custom: Boolean(domain), url: `https://${hostname}`, product: PRODUCTS[prefix], licenseHint: `${prefix}…${body.licenseKey.slice(-4)}`, customerId: body.customerId || 'dashboard', status: domain ? 'awaiting_dns' : 'ready_to_deploy', steps: {}, checks: 0, createdAt: new Date().toISOString(), createdBy: 'admin',
+      const hostname = domain || `instance-${1000 + Math.floor(Math.random() * 9000)}.dezerx.cloud`;
+      const item = {id, primary: body.primary, secondary: body.primary === 'us' ? 'de' : 'us', hostname, custom: Boolean(domain), url: `https://${hostname}`, product: prefix ? PRODUCTS[prefix] : null, licenseHint: prefix ? `${prefix}…${body.licenseKey.slice(-4)}` : null, customerId: body.customerId || 'dashboard', status: domain ? 'awaiting_dns' : 'ready_to_deploy', steps: {}, checks: 0, createdAt: new Date().toISOString(), createdBy: 'admin',
         dns: domain ? {stage: 'spartan_ownership', readyToProvision: false, checkedAt: new Date().toISOString(), records: [{type: 'CNAME', name: domain, target: 'load.dezerx.cloud', purpose: 'routing'}, {type: 'TXT', name: `_spartan-verification.${domain}`, value: hex(40), purpose: 'spartan_ownership'}]} : null};
       instances.set(id, item);
       note(item.primary, id, 'instance_create');
@@ -193,6 +193,11 @@
     }
     if (m[2] === 'deploy') {
       const a = body.initialAdmin || {};
+      if (!item.licenseHint) {
+        const prefix = Object.keys(PRODUCTS).find(p => String(body.licenseKey).startsWith(p));
+        if (!prefix || body.licenseKey.length < 16) throw err(body.licenseKey ? 'invalid_license_key' : 'license_key_required', 400);
+        Object.assign(item, {product: PRODUCTS[prefix], licenseHint: `${prefix}…${body.licenseKey.slice(-4)}`});
+      }
       if (!a.displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email || '') || String(a.password || '').length < 8) throw err('invalid_initial_admin', 400);
       Object.assign(item, {status: 'deploying', started: Date.now(), steps: {primary: 'running'}, error: null});
       note(item.primary, item.id, 'instance_deploy');
