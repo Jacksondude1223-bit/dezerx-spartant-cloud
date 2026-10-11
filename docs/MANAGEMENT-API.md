@@ -7,6 +7,7 @@ For instance operations, include `id` and `fingerprint`, the stable identities s
 | Node endpoint | Additional JSON fields | Result |
 | --- | --- | --- |
 | `/control/node-health` | No identity required; send `{}` | Node region, Docker and database readiness, CPU cores/usage/load, memory bytes, disk bytes, uptime |
+| `/control/list` | No identity required; send `{}` | Every tenant on this node: `id`, `fingerprint`, status, role, primary, URLs, image, port, plan, lifecycle version, container state. Never keys, licences or passwords |
 | `/control/instance` | None | URL, active URL, role, primary region, service status, image, running state, lifecycle version |
 | `/control/health` | None | Instance information, Docker CPU/memory/network/block I/O/process statistics, application health |
 | `/control/version` | None | Image reference and the parsed `/var/www/html/versions.json` as `versions` |
