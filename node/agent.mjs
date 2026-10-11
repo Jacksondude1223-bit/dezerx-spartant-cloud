@@ -19,7 +19,7 @@ import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
 import {createAdmin} from './admin.mjs';
 import {proxyCacheControl} from './cache-policy.mjs';
-import {migrateCacheEnvironment} from './tenant-env.mjs';
+import {cacheEnvironment, imageSupportsRedis, switchCacheEnvironment} from './tenant-env.mjs';
 import {cpuSummary, requestedCpuLimit, tenantCpus} from './resources.mjs';
 import {centralDatabase, validateDatabaseMode, databaseEnvironment, localTenant, remoteDatabaseReady, primaryConnection, DE_DATABASE_IP, US_DATABASE_IP} from './central-database.mjs';
 import {networkPublicKey} from './network-key.mjs';
@@ -202,7 +202,7 @@ async function provisionOnce(input, progress) {
   const dbPassword = connection.password || proposedPassword;
   persistedInput.dbPassword = dbPassword;
   persistedInput.databaseMode = centralDatabase(cfg) ? 'us-central' : 'local';
-  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', ...databaseEnvironment(cfg, {...connection, password: dbPassword}, socketPath), SESSION_DRIVER: centralDatabase(cfg) ? 'database' : 'redis', SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', CACHE_STORE: 'redis', CACHE_DRIVER: 'redis', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
+  const env = {APP_NAME: 'Spartan', APP_ENV: 'production', APP_DEBUG: 'false', OCTANE_SERVER: 'roadrunner', OCTANE_HTTPS: 'true', APP_KEY: appKey, APP_URL: appUrlValue, ASSET_URL: appUrlValue, LICENSE_KEY: licenseKey, PRODUCT_ID: productId(licenseKey), LOG_CHANNEL: 'stderr', ...databaseEnvironment(cfg, {...connection, password: dbPassword}, socketPath), ...cacheEnvironment({redis: await imageSupportsRedis(docker, persistedInput.image), databaseSessions: centralDatabase(cfg)}), SESSION_SECURE_COOKIE: 'true', SESSION_SAME_SITE: 'lax', QUEUE_CONNECTION: 'database', CLOUD_ROLE: role, TENANT_ID: id};
   const additional = cfg.LARAVEL_ENV_FILE ? JSON.parse(await readFile(cfg.LARAVEL_ENV_FILE, 'utf8')) : {};
   for (const [key, value] of Object.entries(additional)) {
     if (key in env || !/^[A-Z][A-Z0-9_]*$/.test(key) || typeof value !== 'string' || /[\r\n]/.test(value)) throw new Error('invalid_laravel_env');
@@ -304,18 +304,21 @@ async function upgrade(input) {
   await docker(['pull', targetImage]);
   const directory = path.join(root, id);
   const envFile = path.join(directory, 'app.env');
-  // Once per tenant, on the first recreation by this agent: move a legacy app.env from the
-  // file cache and file sessions to the container's own Redis (see tenant-env.mjs).
+  // Match the cache to the target image (see tenant-env.mjs). An image that starts Redis
+  // before its migrations gets the Redis cache, once per tenant so a deliberate operator
+  // change back to files is kept; an older image always gets the file cache, because a
+  // Redis cache stops it at migrate.
   let legacyEnvironment = null;
-  if (!record.redisCacheMigrated) {
+  const redisReady = await imageSupportsRedis(docker, targetImage);
+  if (!redisReady || !record.redisCacheMigrated) {
     const text = await readFile(envFile, 'utf8');
-    const migrated = migrateCacheEnvironment(text);
-    if (migrated.changed) {
-      legacyEnvironment = {text, envHash: record.envHash};
-      await writeFile(envFile, migrated.text, {mode: 0o600});
-      record.envHash = createHash('sha256').update(migrated.text).digest('hex');
+    const switched = switchCacheEnvironment(text, redisReady);
+    if (switched.changed) {
+      legacyEnvironment = {text, envHash: record.envHash, redisCacheMigrated: record.redisCacheMigrated};
+      await writeFile(envFile, switched.text, {mode: 0o600});
+      record.envHash = createHash('sha256').update(switched.text).digest('hex');
     }
-    record.redisCacheMigrated = true;
+    if (redisReady) record.redisCacheMigrated = true; else delete record.redisCacheMigrated;
   }
   await docker(['stop', '--time', '30', container(id)]);
   await docker(['rm', '--force', container(id)]);
@@ -345,12 +348,12 @@ async function upgrade(input) {
       }
       await docker(['rm', '--force', container(id)]);
     }
-    // The previous image starts Redis only under supervisord, after its migrations, so it
-    // goes back to the environment it ran with; the next upgrade migrates again.
+    // The previous image goes back to the environment it ran with; the next upgrade
+    // switches the cache again.
     if (legacyEnvironment) {
       await writeFile(envFile, legacyEnvironment.text, {mode: 0o600});
       record.envHash = legacyEnvironment.envHash;
-      delete record.redisCacheMigrated;
+      if (legacyEnvironment.redisCacheMigrated) record.redisCacheMigrated = true; else delete record.redisCacheMigrated;
     }
     try {
       const restoredPort = await create(previousImage);
