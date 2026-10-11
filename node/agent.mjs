@@ -155,7 +155,12 @@ async function provisionOnce(input, progress) {
   const {id, primary, appKey, url, fingerprint, licenseKey} = input;
   const appUrlValue = tenantAppUrl(url);
   if (!validId(id) || !['us', 'de'].includes(primary) || !/^base64:[A-Za-z0-9+/]{43}=$/.test(appKey || '') || !appUrlValue || !/^[a-f0-9]{64}$/.test(fingerprint || '')) throw new Error('invalid_input');
-  if (cfg.DOMAIN_VERIFICATION_REQUIRED === 'true' || input.domainVerificationToken !== undefined) {
+  const prior = validId(id) ? await load(id) : null;
+  // The permit proves a hostname is verified before a tenant first uses it. Resuming or
+  // re-provisioning on the URL the tenant already has needs no new proof; otherwise a
+  // suspended tenant could never resume, because onboarding refuses suspended routes.
+  const sameUrl = prior && tenantAppUrl(prior.url) === appUrlValue && input.domainVerificationToken === undefined;
+  if ((cfg.DOMAIN_VERIFICATION_REQUIRED === 'true' && !sameUrl) || input.domainVerificationToken !== undefined) {
     if (!await verifyDomainPermit(input.domainVerificationToken, cfg.ORIGIN_SECRET, id, new URL(appUrlValue).hostname)) throw apiError('domain_verification_required', 409);
   }
   if (!validLicenseKey(licenseKey)) throw new Error('invalid_license_key');
@@ -403,7 +408,7 @@ function proxyDashboard(req, res, url) {
   res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
   req.pipe(upstream);
 }
-const ADMIN_ROUTES = ['/admin/ping', '/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download'];
+const ADMIN_ROUTES = ['/admin/ping', '/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download', '/admin/resume'];
 async function adminRoute(req, res, url) {
   if (!adminSecret || !ADMIN_ROUTES.includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   if (!plausible(req)) return deny(res, adminSecurity, true);
@@ -430,6 +435,15 @@ async function adminRoute(req, res, url) {
   if (operation === 'container') return reply(res, 200, await queued(record.id, () => containerAction(tenant)));
   if (operation === 'reload') return reply(res, 200, await queued(record.id, () => reloadTenant(tenant)));
   if (operation === 'upgrade') return reply(res, 200, await queued(record.id, () => upgrade({id: record.id, fingerprint: record.fingerprint})));
+  // Resumes a suspended tenant from the node's own record (app key, licence, URL), so the
+  // dashboard can resume tenants the master website created. Same rules as a resume
+  // through /control/provision: a newer lifecycle version, and never after termination.
+  if (operation === 'resume') {
+    if (!Number.isSafeInteger(input.lifecycleVersion) || input.lifecycleVersion < 1) throw apiError('invalid_lifecycle_version');
+    if (record.status !== 'suspended') throw apiError(record.status === 'terminated' ? 'service_terminated' : 'not_suspended', 409);
+    const {status, role, port, lifecycleAction, updatedAt, ...stored} = record;
+    return reply(res, 200, await queued(record.id, () => provision({...stored, lifecycleVersion: input.lifecycleVersion})));
+  }
   return reply(res, 404, {error: 'not_found'});
 }
 async function control(req, res, url) {

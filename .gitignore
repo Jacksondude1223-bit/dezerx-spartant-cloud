@@ -6,3 +6,6 @@ generated/
 *.sqlite*
 __pycache__/
 dashboard/demo/preview.html
+
+# Installed by scripts/install-dashboard.sh
+dashboard/public/vendor/

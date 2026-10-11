@@ -234,7 +234,8 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
       return actualFetch(`${origin}${nodeUrl.pathname}${nodeUrl.search}`, {method: request.method, headers: request.headers, body: ['GET', 'HEAD'].includes(request.method) ? undefined : request.body, duplex: 'half', redirect: 'manual'});
     };
     try {
-      for (const [country, node] of [['US', 'us'], ['DE', 'de'], ['BR', 'us'], ['FR', 'de']]) {
+      // Every visitor goes to the primary (US here); the German node would only forward it.
+      for (const [country, node] of [['US', 'us'], ['DE', 'us'], ['BR', 'us'], ['FR', 'us']]) {
         const request = new Request('https://panel.customer.test/billing?invoice=7', {headers: {'cf-connecting-ip': '198.51.100.42', 'x-spartan-host': 'attacker.test', 'x-forwarded-host': 'attacker.test', authorization: 'Bearer customer-token'}});
         Object.defineProperty(request, 'cf', {value: {country}});
         const result = await routing.fetch(request, workerEnv);

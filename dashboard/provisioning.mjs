@@ -42,7 +42,11 @@ export function loadProvisioningConfig(env, adminSecret) {
   // Legacy per-plane overrides, as on the nodes and the routing Worker. Permits always use ORIGIN_SECRET.
   // Only shown in the form; the routing Worker decides the real name.
   const instanceDomain = String(env.INSTANCE_DOMAIN || baseDomain.split('.').slice(1).join('.') || baseDomain).toLowerCase();
-  return {originSecret, instanceDomain, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
+  // A deployment waits in the queue until both nodes have this much headroom.
+  const minFreeMemory = Number(env.DASHBOARD_MIN_FREE_MEMORY_MB || 1024) * 1024 * 1024;
+  const minFreeDisk = Number(env.DASHBOARD_MIN_FREE_DISK_GB || 5) * 1024 * 1024 * 1024;
+  if (!(minFreeMemory >= 0) || !(minFreeDisk >= 0)) throw new Error('DASHBOARD_MIN_FREE_MEMORY_MB and DASHBOARD_MIN_FREE_DISK_GB must be numbers');
+  return {originSecret, instanceDomain, minFreeMemory, minFreeDisk, controlSecret: env.NODE_CONTROL_SECRET || originSecret, routingSecret: env.ROUTING_CONTROL_SECRET || originSecret, baseDomain, routingUrl: routingUrl.origin, stateFile};
 }
 
 // Accepts "panel.example.com", "https://panel.example.com/" and the like.
@@ -51,11 +55,17 @@ export function normalizeDomain(value) {
   return HOSTNAME.test(text) && text.length <= 200 ? text : null;
 }
 
-export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms))}) {
+export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fetch, record = () => {}, sleep = ms => new Promise(resolve => setTimeout(resolve, ms)), nodeStatus = null, adminCall = null, queueInterval = 60000}) {
   const p = config.provisioning;
   const instances = new Map();
   const permits = new Map();
   const running = new Map();
+  // Deployments waiting for room, oldest first. The administrator password stays in
+  // memory only, so a restart drops the queue (those instances show dashboard_restarted).
+  const queue = [];
+  const queuedAdmins = new Map();
+  let pumping = null;
+  let timer = null;
   let loaded = null;
   const reserved = [p.baseDomain, ...Object.values(nodes).map(origin => new URL(origin).hostname)];
 
@@ -68,7 +78,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       // A deployment cannot survive a restart: it needs the administrator password,
       // which is never written to disk.
       for (const item of instances.values()) {
-        if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null});
+        if (item.status === 'deploying' || item.status === 'queued') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null, queue: null});
         // Records from earlier releases could fail with a step still marked running.
         if (item.status === 'failed') for (const key of Object.keys(item.steps || {})) if (item.steps[key] === 'running') item.steps[key] = 'failed';
       }
@@ -95,10 +105,12 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const timestamp = String(now());
     return {'content-type': 'application/json', 'x-spartan-timestamp': timestamp, 'x-spartan-signature': createHmac('sha256', secret).update(`${timestamp}\nPOST\n${pathname}\n${body}`).digest('hex'), 'user-agent': 'spartan-dashboard'};
   };
-  async function call(origin, pathname, payload, timeout, secret) {
-    const body = JSON.stringify(payload);
+  async function call(origin, pathname, payload, timeout, secret, method = 'POST') {
+    const body = method === 'GET' ? '' : JSON.stringify(payload);
     let response;
-    try { response = await fetchImpl(origin + pathname, {method: 'POST', headers: signed(secret, pathname, body), body, redirect: 'manual', signal: AbortSignal.timeout(timeout)}); }
+    const headers = signed(secret, pathname, body);
+    if (method === 'GET') { delete headers['content-type']; headers['x-spartan-signature'] = createHmac('sha256', secret).update(`${headers['x-spartan-timestamp']}\nGET\n${pathname}\n`).digest('hex'); }
+    try { response = await fetchImpl(origin + pathname, {method, headers, body: method === 'GET' ? undefined : body, redirect: 'manual', signal: AbortSignal.timeout(timeout)}); }
     catch (error) { throw new ProvisionError(error?.name === 'TimeoutError' ? 504 : 502, error?.name === 'TimeoutError' ? 'node_timeout' : 'node_unreachable'); }
     const text = await response.text();
     let data;
@@ -121,7 +133,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     id: item.id, primary: item.primary, secondary: item.secondary, hostname: item.hostname, custom: item.custom, url: `https://${item.hostname}`,
     product: item.licenseKey ? productName(item.licenseKey) : null, licenseHint: item.licenseKey ? `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}` : null,
     customerId: item.customerId, serviceId: item.serviceId, status: item.status, error: item.error || null, steps: item.steps || {},
-    dns: item.dns || null, log: item.log || [], progress: item.progress || null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
+    dns: item.dns || null, log: item.log || [], progress: item.progress || null, queue: item.status === 'queued' ? {position: queue.indexOf(item.id) + 1, length: queue.length, reason: item.queue?.reason || null, since: item.queue?.since || null, checkedAt: item.queue?.checkedAt || null} : null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
   });
   const other = region => region === 'us' ? 'de' : 'us';
   const find = async id => { await load(); const item = instances.get(id); if (!item) throw new ProvisionError(404, 'instance_not_found'); return item; };
@@ -249,6 +261,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         const transient = error instanceof ProvisionError && (error.status >= 500 || error.status === 429 || error.message === 'domain_verification_required');
         if (error.message === 'domain_verification_required') permits.delete(item.id);
         const why = error.permitStage ? `Renewing the domain permit with the routing Worker failed: ${error.message}.` : ({still_running_on_node: `Cloudflare closed the request after 100 s, but ${label} keeps working.`, node_timeout: `${label} did not answer within the request time; it keeps working.`, node_unreachable: `${label} could not be reached.`, domain_verification_required: `${label} refused the domain permit; getting a fresh one.`, rate_limited: `${label} is rate limiting; waiting.`}[error.message] || `${label} answered ${error.message}${error.message === 'operation_failed' ? ' (the exact cause is in the node log: journalctl -u spartan-agent | grep request_failed)' : ''}.`);
+        if (error.message === 'node_capacity') { note(item, `${label} is at its tenant limit (MAX_TENANTS); back to the queue.`, 'warn'); item.steps[role] = undefined; item.progress = null; throw Object.assign(error, {requeue: true}); }
         if (!transient || exhausted(attempt)) { note(item, `${why} Stopping.`, 'bad'); item.steps[role] = 'failed'; item.progress = null; throw error; }
         note(item, why, 'warn');
       }
@@ -275,17 +288,78 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       await update(item, {status: 'ready', error: null, readyAt: new Date(now()).toISOString()});
       record('instance_ready', {region: item.primary, id: item.id});
     } catch (error) {
+      if (error.requeue && admin) {
+        for (const key of Object.keys(item.steps)) if (item.steps[key] === undefined) delete item.steps[key];
+        queuedAdmins.set(item.id, admin);
+        if (!queue.includes(item.id)) queue.push(item.id);
+        await update(item, {status: 'queued', progress: null, queue: {since: new Date(now()).toISOString(), reason: 'node_capacity'}});
+        return;
+      }
       if (item.steps.routing === 'running') { item.steps.routing = 'failed'; note(item, `The routing Worker answered ${error?.message}.`, 'bad'); }
       // Never leave a spinner on a step that is no longer running.
       for (const key of ['primary', 'secondary']) if (item.steps[key] === 'running') { item.steps[key] = 'failed'; note(item, `Stopped: ${error?.message || 'unexpected error'}.`, 'bad'); }
       await update(item, {status: 'failed', error: String(error?.message || 'deploy_failed').slice(0, 80), progress: null});
       record('instance_failed', {region: item.primary, id: item.id, path: item.error});
-    } finally { running.delete(item.id); }
+    } finally { running.delete(item.id); schedule(); }
+  }
+
+  // Capacity of one node, from the admin API overview. Null when it cannot be read.
+  async function headroom(region) {
+    if (!nodeStatus) return {ok: true};
+    try {
+      const data = await nodeStatus(region);
+      const free = data?.node?.resources?.memory?.freeBytes;
+      const disk = data?.node?.resources?.disk?.availableBytes;
+      if (!Number.isFinite(free) || !Number.isFinite(disk)) return {ok: false, reason: `node-${region} did not report its free memory and disk`};
+      const gib = value => `${(value / 1024 ** 3).toFixed(1)} GB`;
+      if (free < p.minFreeMemory) return {ok: false, reason: `node-${region} has ${gib(free)} memory free; needs ${gib(p.minFreeMemory)}`};
+      if (disk < p.minFreeDisk) return {ok: false, reason: `node-${region} has ${gib(disk)} disk free; needs ${gib(p.minFreeDisk)}`};
+      return {ok: true};
+    } catch (error) { return {ok: false, reason: `node-${region} is unreachable (${error.message})`}; }
+  }
+  const busyRegions = () => new Set([...running.keys()].flatMap(id => { const item = instances.get(id); return item ? [item.primary, item.secondary] : []; }));
+
+  // Starts queued deployments in order. One deployment per node at a time, because a
+  // first boot (migrations, seeders) is the heaviest thing a node does.
+  async function pump() {
+    if (pumping) return pumping;
+    pumping = (async () => {
+      for (const id of [...queue]) {
+        const item = instances.get(id);
+        if (!item || item.status !== 'queued') { queue.splice(queue.indexOf(id), 1); continue; }
+        const busy = busyRegions();
+        let reason = null;
+        if (busy.has(item.primary) || busy.has(item.secondary)) reason = `waiting for another deployment on node-${busy.has(item.primary) ? item.primary : item.secondary} to finish`;
+        else {
+          for (const region of [item.primary, item.secondary]) {
+            const room = await headroom(region);
+            if (!room.ok) { reason = room.reason; break; }
+          }
+        }
+        if (reason) {
+          if (item.queue?.reason !== reason) note(item, `Queued: ${reason}.`, 'warn');
+          await update(item, {queue: {...item.queue, reason, checkedAt: new Date(now()).toISOString()}});
+          continue;
+        }
+        queue.splice(queue.indexOf(id), 1);
+        const admin = queuedAdmins.get(id);
+        queuedAdmins.delete(id);
+        note(item, item.queue?.reason ? 'Room is available; starting.' : 'Both nodes have room; starting.');
+        await update(item, {status: 'deploying', queue: null, error: null});
+        running.set(id, run(item, admin));
+      }
+    })().finally(() => { pumping = null; });
+    return pumping;
+  }
+  function schedule() {
+    if (queue.length && !timer) { timer = setInterval(() => { pump().catch(() => {}); }, queueInterval); timer.unref?.(); }
+    if (!queue.length && timer) { clearInterval(timer); timer = null; }
+    if (queue.length) pump().catch(() => {});
   }
 
   async function deploy(id, input, user) {
     const item = await find(id);
-    if (running.has(id)) throw new ProvisionError(409, 'instance_busy');
+    if (running.has(id) || item.status === 'queued') throw new ProvisionError(409, 'instance_busy');
     if (item.status === 'ready') throw new ProvisionError(409, 'already_deployed');
     if (item.status === 'awaiting_dns') throw new ProvisionError(409, 'domain_not_verified');
     const admin = input.initialAdmin;
@@ -294,17 +368,30 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, item.licenseKey ? 'invalid_license_key' : 'license_key_required');
     // Once a node holds the tenant, its licence changes only through the master website's domain flow.
     if (licenseKey !== item.licenseKey && (item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'license_locked');
-    note(item, `Deployment started by ${user}.`);
-    await update(item, {licenseKey, status: 'deploying', error: null});
+    note(item, `Deployment requested by ${user}. Checking that both nodes have room.`);
+    queuedAdmins.set(id, {displayName: admin.displayName, email: admin.email, password: admin.password});
+    queue.push(id);
+    await update(item, {licenseKey, status: 'queued', error: null, queue: {since: new Date(now()).toISOString(), reason: null}});
     record('instance_deploy', {user, region: item.primary, id});
-    running.set(id, run(item, {displayName: admin.displayName, email: admin.email, password: admin.password}));
+    await pump();
+    return view(item);
+  }
+
+  async function cancel(id, user) {
+    const item = await find(id);
+    if (item.status !== 'queued') throw new ProvisionError(409, 'not_queued');
+    queue.splice(queue.indexOf(id), 1);
+    queuedAdmins.delete(id);
+    note(item, `Removed from the queue by ${user}.`);
+    await update(item, {status: item.custom && !item.dns?.readyToProvision ? 'awaiting_dns' : 'ready_to_deploy', queue: null});
+    schedule();
     return view(item);
   }
 
   async function discard(id, user) {
     const item = await find(id);
-    if (running.has(id) || item.status === 'deploying') throw new ProvisionError(409, 'instance_busy');
-    if (item.status === 'ready' || item.steps?.primary === 'done' || item.steps?.secondary === 'done') throw new ProvisionError(409, 'instance_deployed');
+    if (running.has(id) || ['deploying', 'queued'].includes(item.status)) throw new ProvisionError(409, 'instance_busy');
+    if (item.status !== 'terminated' && (['ready', 'suspended'].includes(item.status) || item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'instance_deployed');
     instances.delete(id);
     permits.delete(id);
     await persist();
@@ -312,5 +399,81 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     return {discarded: true};
   }
 
-  return {list, create, verify, deploy, discard, get: async id => view(await find(id)), idle: () => Promise.all([...running.values()]), products: PRODUCTS};
+  // Suspend, resume and terminate any tenant on the nodes, created here or by the master
+  // website. The next lifecycle version is one above the highest any party has seen (both
+  // nodes, the routing Worker, this dashboard), so it never collides with a stale one; if
+  // a master website also manages the tenant, it must read versions the same way.
+  const busyLifecycle = new Set();
+  async function lifecycle(id, action, user) {
+    if (!['suspend', 'resume', 'terminate'].includes(action)) throw new ProvisionError(400, 'invalid_action');
+    if (!/^t-[a-f0-9]{24}$/.test(id)) throw new ProvisionError(400, 'invalid_id');
+    if (!nodeStatus || !adminCall) throw new ProvisionError(503, 'provisioning_disabled');
+    await load();
+    if (busyLifecycle.has(id) || running.has(id)) throw new ProvisionError(409, 'instance_busy');
+    busyLifecycle.add(id);
+    const item = instances.get(id);
+    const say = (text, tone) => { if (item) note(item, text, tone); };
+    try {
+      const copies = [];
+      for (const region of Object.keys(nodes)) {
+        let data;
+        try { data = await nodeStatus(region); } catch { throw new ProvisionError(502, `node_${region}_unreachable`); }
+        const copy = (data?.tenants || []).find(t => t.id === id);
+        if (copy) copies.push({region, ...copy});
+      }
+      if (!copies.length) throw new ProvisionError(404, 'tenant_not_found');
+      const fingerprint = copies[0].fingerprint;
+      if (!/^[a-f0-9]{64}$/.test(fingerprint || '') || copies.some(c => c.fingerprint !== fingerprint)) throw new ProvisionError(409, 'tenant_conflict');
+      const route = await call(p.routingUrl, `/v1/routing/instances/${id}`, null, 30000, p.routingSecret, 'GET');
+      if (route.status === 401) throw new ProvisionError(502, 'routing_unauthorized');
+      const routed = route.status === 200 ? route.data : null;
+      const current = copies.find(c => c.role === 'primary')?.status || routed?.status;
+      if (action === 'suspend' && current === 'suspended') throw new ProvisionError(409, 'already_suspended');
+      if (action === 'resume' && current !== 'suspended') throw new ProvisionError(409, 'not_suspended');
+      const version = Math.max(0, ...copies.map(c => c.lifecycleVersion || 0), routed?.lifecycleVersion || 0, item?.lifecycleVersion || 0, item?.status === 'ready' ? 1 : 0) + 1;
+      const publish = async status => {
+        if (!routed) return;
+        const result = await routing('instances', {id, serviceId: routed.serviceId, customerId: routed.customerId, primary: routed.primary, status, lifecycleVersion: version});
+        if (result.status !== 200 && result.status !== 201) throw routingError(result);
+      };
+      const onNodes = async body => {
+        for (const copy of copies) {
+          const result = await call(nodes[copy.region], '/control/lifecycle', body, isLocal(copy.region) ? LOCAL_TIMEOUT : REMOTE_TIMEOUT, p.controlSecret);
+          if (result.status !== 200) throw new ProvisionError(result.status, `node_${copy.region}_${String(result.data.error || 'error').slice(0, 60)}`);
+        }
+      };
+      say(`${{suspend: 'Suspending', resume: 'Resuming', terminate: 'Terminating'}[action]} (lifecycle version ${version}), requested by ${user}.`);
+      if (action === 'suspend') {
+        // Router first, so visitors get the suspended page before containers stop.
+        await publish('suspended');
+        await onNodes({id, fingerprint, lifecycleVersion: version, action: 'suspended'});
+      } else if (action === 'resume') {
+        // Primary first, so the database owner is up before the standby and the router.
+        for (const copy of [...copies].sort((a, b) => (a.role === 'primary' ? -1 : 1) - (b.role === 'primary' ? -1 : 1))) {
+          const result = await adminCall(copy.region, 'resume', {id, lifecycleVersion: version}, {timeout: isLocal(copy.region) ? LOCAL_TIMEOUT : REMOTE_TIMEOUT});
+          if (result?.status !== 'ready') say(`node-${copy.region} is still starting; the router waits until it answers ready on a later resume.`, 'warn');
+        }
+        await publish('ready');
+      } else {
+        // The domain API only works on a ready tenant, so detach a customer domain first.
+        if (item?.custom && routed?.status === 'ready') {
+          const detached = await routing(`instances/${id}/domains/delete`, {hostname: item.hostname});
+          if (detached.status >= 400 && detached.status !== 404) throw routingError(detached);
+        }
+        await publish('terminated');
+        await onNodes({id, fingerprint, lifecycleVersion: version, action: 'terminated'});
+      }
+      const status = {suspend: 'suspended', resume: 'ready', terminate: 'terminated'}[action];
+      if (item) { say({suspend: 'Suspended. Visitors see the suspended page; data is kept.', resume: 'Resumed and live again.', terminate: 'Terminated. Containers are removed; the database, storage and backups stay on the nodes.'}[action], action === 'resume' ? 'good' : ''); await update(item, {status, lifecycleVersion: version, error: null}); }
+      record(`tenant_${action}`, {user, region: copies[0].region, id});
+      return {id, status, lifecycleVersion: version};
+    } catch (error) {
+      if (item) { say(`${action} failed: ${error.message}.`, 'bad'); await persist(); }
+      throw error;
+    } finally { busyLifecycle.delete(id); }
+  }
+
+  // Resolves when nothing is running; queued work that cannot start yet does not hold it.
+  const idle = async () => { while (running.size || pumping) { await Promise.all([...running.values(), pumping]); } };
+  return {list, create, verify, deploy, cancel, discard, pump, lifecycle, get: async id => view(await find(id)), idle, products: PRODUCTS};
 }

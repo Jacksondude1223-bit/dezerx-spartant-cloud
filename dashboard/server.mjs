@@ -17,7 +17,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const REGIONS = {us: 'United States', de: 'Germany'};
 const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/favicon.png': ['favicon.png', 'image/png'], '/logo.png': ['logo.png', 'image/png']};
 const SECURITY_HEADERS = {
-  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+  // Scripts stay same-origin only. Monaco injects <style> elements at runtime, which needs
+  // 'unsafe-inline' for styles; its web workers start from blob: URLs that load this origin's scripts.
+  'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'
 };
 
@@ -113,7 +115,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     log({source: 'spartan-dashboard', ...entry});
   };
 
-  const provisioner = config.provisioning ? createProvisioner(config, {nodes: config.nodes, now, fetchImpl, record: (action, fields) => record('action', {action, ...fields})}) : null;
+  const provisioner = config.provisioning ? createProvisioner(config, {nodes: config.nodes, now, fetchImpl, record: (action, fields) => record('action', {action, ...fields}), nodeStatus: region => node(region, 'overview', {}, {timeout: 25000}), adminCall: (region, operation, payload, options) => node(region, operation, payload, options)}) : null;
 
   const clientIp = req => {
     const remote = req.socket.remoteAddress || '';
@@ -256,6 +258,14 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     if (url.pathname === '/api/overview' && req.method === 'GET') return send(res, 200, await overview());
     if (url.pathname === '/api/activity' && req.method === 'GET') return send(res, 200, {events: [...activity].reverse()});
     if (url.pathname === '/api/instances' || url.pathname.startsWith('/api/instances/')) return instances(req, res, url, session, ip);
+    const lifecycleMatch = url.pathname.match(/^\/api\/tenants\/(t-[a-f0-9]{24})\/lifecycle$/);
+    if (lifecycleMatch) {
+      if (!provisioner) return send(res, 404, {error: 'provisioning_disabled'});
+      if (req.method !== 'POST') return send(res, 405, {error: 'method_not_allowed'});
+      const input = await readJson(req, 1024);
+      try { return send(res, 200, await provisioner.lifecycle(lifecycleMatch[1], input.action, session.user)); }
+      catch (error) { if (error instanceof ProvisionError) return send(res, error.status, {error: error.message}); throw error; }
+    }
     const match = url.pathname.match(TENANT);
     if (!match) return send(res, 404, {error: 'not_found'});
     const [, region, id, operation] = match;
@@ -290,7 +300,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
     return send(res, 404, {error: 'not_found'});
   }
 
-  const INSTANCE = /^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(verify|deploy|discard))?$/;
+  const INSTANCE = /^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(verify|deploy|cancel|discard))?$/;
   async function instances(req, res, url, session, ip) {
     if (!provisioner) return send(res, 404, {error: 'provisioning_disabled'});
     try {
@@ -307,12 +317,29 @@ export function createDashboard(config, {now = Date.now, log = value => console.
       const input = await readJson(req, 8192);
       if (operation === 'verify') return send(res, 200, await provisioner.verify(id));
       if (operation === 'deploy') return send(res, 202, await provisioner.deploy(id, input, session.user));
+      if (operation === 'cancel') return send(res, 200, await provisioner.cancel(id, session.user));
       if (operation === 'discard') return send(res, 200, await provisioner.discard(id, session.user));
       return send(res, 404, {error: 'not_found'});
     } catch (error) {
       if (error instanceof ProvisionError) return send(res, error.status, {error: error.message});
       throw error;
     }
+  }
+
+  // The Monaco editor, copied into public/vendor by install-dashboard.sh. Versioned path,
+  // so it can be cached for good. Only these extensions, and never outside that folder.
+  const VENDOR_TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.ttf': 'font/ttf', '.json': 'application/json'};
+  const vendorRoot = path.join(here, 'public', 'vendor');
+  async function vendor(res, pathname) {
+    let relative;
+    try { relative = decodeURIComponent(pathname.slice('/vendor/'.length)); } catch { return send(res, 404, {error: 'not_found'}); }
+    const file = path.resolve(vendorRoot, relative);
+    const type = VENDOR_TYPES[path.extname(file)];
+    if (!type || !file.startsWith(vendorRoot + path.sep) || relative.includes('\0') || !/^monaco-[0-9.]+\//.test(relative)) return send(res, 404, {error: 'not_found'});
+    let content;
+    try { content = await readFile(file); } catch { return send(res, 404, {error: 'not_found'}); }
+    res.writeHead(200, {...SECURITY_HEADERS, 'content-type': type, 'cache-control': 'public, max-age=31536000, immutable'});
+    res.end(content);
   }
 
   const assets = new Map();
@@ -334,6 +361,7 @@ export function createDashboard(config, {now = Date.now, log = value => console.
       }
       if (url.pathname.startsWith('/api/')) return await api(req, res, url);
       if (req.method === 'GET' && Object.hasOwn(STATIC, url.pathname)) return await asset(res, url.pathname);
+      if (req.method === 'GET' && url.pathname.startsWith('/vendor/')) return await vendor(res, url.pathname);
       return send(res, 404, {error: 'not_found'});
     } catch (error) {
       if (error instanceof HttpError) return send(res, error.status, {error: error.message});

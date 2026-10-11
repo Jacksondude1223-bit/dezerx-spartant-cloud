@@ -19,6 +19,8 @@
     make('billing.hostkraft.test', 'de', 27, 702), make('kunden.alpenserver.test', 'de', 12, 455), make(null, 'de', 2, 190),
     make('app.serverforge.test', 'de', 88, 1640), make('secure.lumenhost.test', 'de', 6, 320, {status: 'suspended', container: {state: 'exited', running: false}})
   ];
+  // Every tenant also has its standby copy on the other node.
+  for (const t of [...tenants]) tenants.push({...t, region: t.region === 'us' ? 'de' : 'us', role: 'secondary', port: t.port + 2, baseCpu: Math.max(1, Math.round(t.baseCpu / 4)), baseMem: Math.round(t.baseMem * 0.6), container: {...t.container}});
   const resources = t => t.container.running ? {cpuPercent: Math.max(0, t.baseCpu + rand(-4, 4)), memoryUsedBytes: (t.baseMem + rand(-12, 12)) * MB, memoryLimitBytes: 2 * GB, memoryPercent: t.baseMem / 20.48, networkRxBytes: 1.2e9, networkTxBytes: 3.4e9, blockReadBytes: 2.1e8, blockWriteBytes: 9.6e8, processes: 14 + Math.floor(rand(0, 9))} : null;
   const strip = ({baseCpu, baseMem, region, ...rest}) => rest;
   const host = {us: 'node-us.dezerx.cloud', de: 'node-de.dezerx.cloud'};

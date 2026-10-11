@@ -119,3 +119,24 @@ test('a Worker deployed without its database binding says so instead of blaming 
   const unmapped = await routing.fetch(new Request('https://unknown.customer.test/', {headers: {accept: 'text/html', 'cf-connecting-ip': '198.51.100.5'}}), env);
   assert.equal(unmapped.headers.get('x-spartan-page'), 'routing-status-v2');
 });
+
+test('tenant lookups are cached for ROUTE_CACHE_SECONDS and go straight to the primary node', async () => {
+  const env = {...fixture().env, ROUTE_CACHE_SECONDS: '10'};
+  const {registerRoute} = await import('../workers/store.js');
+  await registerRoute(env, {...input, primary: 'de'});
+  let queries = 0;
+  const db = env.DB;
+  env.DB = {prepare: sql => { queries++; return db.prepare(sql); }};
+  const previous = globalThis.fetch;
+  const hosts = [];
+  globalThis.fetch = async request => { hosts.push(new URL(request.url).host); return new Response('ok'); };
+  try {
+    for (let i = 0; i < 3; i++) {
+      const request = new Request(`https://${id}.cloud.test/page`, {headers: {'cf-connecting-ip': '198.51.100.7'}});
+      Object.defineProperty(request, 'cf', {value: {country: 'US'}});
+      assert.equal((await routing.fetch(request, env)).status, 200);
+    }
+  } finally { globalThis.fetch = previous; }
+  assert.equal(queries, 1, 'one D1 read serves the burst');
+  assert.deepEqual(hosts, ['de.origin.test', 'de.origin.test', 'de.origin.test'], 'a US visitor still goes to the German primary');
+});
