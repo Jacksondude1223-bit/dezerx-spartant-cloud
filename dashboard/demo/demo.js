@@ -172,7 +172,7 @@
     item.steps = {primary: elapsed > 6000 ? 'done' : 'running', ...(elapsed > 6000 ? {secondary: elapsed > 10000 ? 'done' : 'running'} : {}), ...(elapsed > 10000 ? {routing: elapsed > 12000 ? 'done' : 'running'} : {})};
     const say = (key, text, tone = '') => { if (!item.said.has(key)) { item.said.add(key); item.log.push({time: new Date().toISOString(), text, tone}); } };
     if (elapsed > 3000) say('a', `node-${item.primary} answered after 30 s: the container is running but the app is not answering yet. A first start runs database migrations and seeders, which can take a few minutes.`);
-    if (elapsed > 6000) say('b', `node-${item.primary} is ready after 4 s; the app answers its health check and the first administrator exists.`, 'good');
+    if (elapsed > 6000) say('b', `node-${item.primary} is ready after 4 s; the app answers its health check${item.adminCreation === 'automatic' ? ' and the first administrator exists' : ''}.`, 'good');
     if (elapsed > 6000) say('c', `Provisioning the standby on node-${item.secondary}. It holds no data and forwards traffic to the home node.`);
     if (elapsed > 10000) say('d', 'Both nodes are ready. Publishing the instance to the routing Worker so visitors reach it.');
     const role = elapsed > 6000 ? 'secondary' : 'primary';
@@ -207,14 +207,14 @@
       return item;
     }
     if (m[2] === 'deploy') {
-      const a = body.initialAdmin || {};
+      const a = body.initialAdmin;
       if (!item.licenseHint) {
         const prefix = Object.keys(PRODUCTS).find(p => String(body.licenseKey).startsWith(p));
         if (!prefix || body.licenseKey.length < 16) throw err(body.licenseKey ? 'invalid_license_key' : 'license_key_required', 400);
         Object.assign(item, {product: PRODUCTS[prefix], licenseHint: `${prefix}…${body.licenseKey.slice(-4)}`});
       }
-      if (!a.displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email || '') || String(a.password || '').length < 8) throw err('invalid_initial_admin', 400);
-      Object.assign(item, {status: 'deploying', started: Date.now(), steps: {primary: 'running'}, error: null, said: new Set(), log: [...(item.log || []), {time: new Date().toISOString(), text: 'Deployment started by admin.'}, {time: new Date().toISOString(), text: `Provisioning on node-${item.primary} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.`}]});
+      if (a !== undefined && (!a || !a.displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email || '') || String(a.password || '').length < 8)) throw err('invalid_initial_admin', 400);
+      Object.assign(item, {status: 'deploying', adminCreation: a ? 'automatic' : 'signup', started: Date.now(), steps: {primary: 'running'}, error: null, said: new Set(), log: [...(item.log || []), {time: new Date().toISOString(), text: 'Deployment started by admin.'}, {time: new Date().toISOString(), text: `Provisioning on node-${item.primary} (home): creating the database, pulling the image if needed, starting the container, then waiting for the app to answer.`}]});
       note(item.primary, item.id, 'instance_deploy');
       return item;
     }

@@ -222,6 +222,55 @@ test('a failed deploy never leaves a step marked running and says why', async ()
 const GiB = 1024 ** 3;
 const room = (memory, disk = 50) => ({node: {resources: {memory: {freeBytes: memory * GiB}, disk: {availableBytes: disk * GiB}}}});
 
+test('signup deployment omits initialAdmin on both nodes and publishes ready without account creation', async () => {
+  const {provisioner, calls, provisioning} = await setup();
+  const created = await provisioner.create({primary: 'us', licenseKey: license}, 'admin');
+  for (const initialAdmin of [null, {}, {...admin, role: 'superadmin'}]) {
+    await assert.rejects(provisioner.deploy(created.id, {initialAdmin}, 'admin'), /invalid_initial_admin/);
+  }
+  await provisioner.deploy(created.id, {}, 'admin');
+  await provisioner.idle();
+  const done = await provisioner.get(created.id);
+  assert.equal(done.status, 'ready');
+  assert.equal(done.adminCreation, 'signup');
+  const requests = calls.filter(call => call.pathname === '/control/provision');
+  assert.equal(requests.length, 2);
+  for (const request of requests) assert.equal(Object.hasOwn(request.body, 'initialAdmin'), false);
+  assert.match(done.log.map(entry => entry.text).join('\n'), /first-account signup/);
+  assert.doesNotMatch(done.log.map(entry => entry.text).join('\n'), /administrator exists/);
+  assert.equal(JSON.parse(await readFile(provisioning.stateFile, 'utf8')).instances[0].adminCreation, 'signup');
+});
+
+test('signup deployment retains its queue retry when a node reaches its tenant limit', async () => {
+  let attempts = 0;
+  const {provisioner, calls} = await setup({nodeReply: (origin, body) => {
+    if (origin.includes('127.0.0.1') && ++attempts === 1) return [409, {error: 'node_capacity'}];
+    return [200, {id: body.id, status: 'ready'}];
+  }});
+  const created = await provisioner.create({primary: 'us', licenseKey: license}, 'admin');
+  await provisioner.deploy(created.id, {}, 'admin');
+  await provisioner.idle();
+  const done = await provisioner.get(created.id);
+  assert.equal(done.status, 'ready');
+  assert.equal(attempts, 2);
+  assert.match(done.log.map(entry => entry.text).join('\n'), /back to the queue/);
+  for (const request of calls.filter(call => call.pathname === '/control/provision')) assert.equal(Object.hasOwn(request.body, 'initialAdmin'), false);
+});
+
+test('a failed automatic-admin deployment can retry through normal signup', async () => {
+  const {provisioner, calls} = await setup({nodeReply: (origin, body) => body.initialAdmin ? [422, {error: 'initial_admin_failed'}] : [200, {id: body.id, status: 'ready'}]});
+  const created = await provisioner.create({primary: 'us', licenseKey: license}, 'admin');
+  await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  await provisioner.idle();
+  assert.equal((await provisioner.get(created.id)).error, 'initial_admin_failed');
+  const count = calls.length;
+  await provisioner.deploy(created.id, {}, 'admin');
+  await provisioner.idle();
+  assert.equal((await provisioner.get(created.id)).status, 'ready');
+  assert.equal((await provisioner.get(created.id)).adminCreation, 'signup');
+  for (const request of calls.slice(count).filter(call => call.pathname === '/control/provision')) assert.equal(Object.hasOwn(request.body, 'initialAdmin'), false);
+});
+
 test('a deployment waits in the queue until both nodes have room, then starts by itself', async () => {
   const free = {us: 0.4, de: 8};
   const {provisioner, calls} = await setup({nodeStatus: async region => room(free[region])});

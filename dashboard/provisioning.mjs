@@ -6,7 +6,7 @@ import {validInitialAdmin} from '../node/admin-validation.mjs';
 import {issueDomainPermit} from '../node/domain-permit.mjs';
 
 // Creates Spartan instances from the operator dashboard, following the "Create a
-// service" flow in docs/API.md: provision the primary (with the first administrator),
+// service" flow in docs/API.md: provision the primary,
 // then the secondary, then publish the tenant as ready to the routing Worker.
 //
 // Without a customer domain, the routing Worker assigns instance-NNNN.<zone> as a Worker
@@ -75,8 +75,6 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         const data = JSON.parse(await readFile(p.stateFile, 'utf8'));
         for (const item of Array.isArray(data.instances) ? data.instances : []) instances.set(item.id, item);
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
-      // A deployment cannot survive a restart: it needs the administrator password,
-      // which is never written to disk.
       for (const item of instances.values()) {
         if (item.status === 'deploying' || item.status === 'queued') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null, queue: null});
         // Records from earlier releases could fail with a step still marked running.
@@ -132,7 +130,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
   const view = item => ({
     id: item.id, primary: item.primary, secondary: item.secondary, hostname: item.hostname, custom: item.custom, url: `https://${item.hostname}`,
     product: item.licenseKey ? productName(item.licenseKey) : null, licenseHint: item.licenseKey ? `${item.licenseKey.slice(0, item.licenseKey.indexOf('_') + 1)}…${item.licenseKey.slice(-4)}` : null,
-    customerId: item.customerId, serviceId: item.serviceId, status: item.status, error: item.error || null, steps: item.steps || {},
+    customerId: item.customerId, serviceId: item.serviceId, status: item.status, adminCreation: item.adminCreation || null, error: item.error || null, steps: item.steps || {},
     dns: item.dns || null, log: item.log || [], progress: item.progress || null, queue: item.status === 'queued' ? {position: queue.indexOf(item.id) + 1, length: queue.length, reason: item.queue?.reason || null, since: item.queue?.since || null, checkedAt: item.queue?.checkedAt || null} : null, createdAt: item.createdAt, updatedAt: item.updatedAt, createdBy: item.createdBy
   });
   const other = region => region === 'us' ? 'de' : 'us';
@@ -248,11 +246,11 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         let token;
         try { token = await permit(item); }
         catch (error) { throw Object.assign(new ProvisionError(error.status === 409 ? 409 : 503, error.message), {permitStage: true}); }
-        const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: token, ...(role === 'primary' ? {initialAdmin: admin} : {})};
+        const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: token, ...(role === 'primary' && admin ? {initialAdmin: admin} : {})};
         callStarted = now();
         const result = await provisionOn(region, body);
         if (result.status === 'ready') {
-          note(item, role === 'primary' ? `${label} is ready after ${took()}; the app answers its health check and the first administrator exists.` : `${label} is ready after ${took()}.`, 'good');
+          note(item, role === 'primary' && admin ? `${label} is ready after ${took()}; the app answers its health check and the first administrator exists.` : `${label} is ready after ${took()}; the app answers its health check.`, 'good');
           item.steps[role] = 'done'; item.progress = null; await persist(); return;
         }
         note(item, `${label} answered after ${took()}: the container is running but the app is not answering yet. A first start runs database migrations and seeders, which can take a few minutes.`);
@@ -285,10 +283,11 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       if (result.status !== 200 && result.status !== 201) { item.steps.routing = 'failed'; throw new ProvisionError(result.status, String(result.data.error || 'routing_error').slice(0, 80)); }
       item.steps.routing = 'done';
       note(item, `Live at https://${item.hostname}.`, 'good');
+      if (!admin) note(item, 'Open the instance to complete Spartan’s first-account signup. The first account receives superadmin access.', 'good');
       await update(item, {status: 'ready', error: null, readyAt: new Date(now()).toISOString()});
       record('instance_ready', {region: item.primary, id: item.id});
     } catch (error) {
-      if (error.requeue && admin) {
+      if (error.requeue) {
         for (const key of Object.keys(item.steps)) if (item.steps[key] === undefined) delete item.steps[key];
         queuedAdmins.set(item.id, admin);
         if (!queue.includes(item.id)) queue.push(item.id);
@@ -363,15 +362,15 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     if (item.status === 'ready') throw new ProvisionError(409, 'already_deployed');
     if (item.status === 'awaiting_dns') throw new ProvisionError(409, 'domain_not_verified');
     const admin = input.initialAdmin;
-    if (!validInitialAdmin(admin)) throw new ProvisionError(400, 'invalid_initial_admin');
+    if (admin !== undefined && !validInitialAdmin(admin)) throw new ProvisionError(400, 'invalid_initial_admin');
     const licenseKey = typeof input.licenseKey === 'string' && input.licenseKey.trim() ? input.licenseKey.trim() : item.licenseKey;
     if (!validLicenseKey(licenseKey)) throw new ProvisionError(400, item.licenseKey ? 'invalid_license_key' : 'license_key_required');
     // Once a node holds the tenant, its licence changes only through the master website's domain flow.
     if (licenseKey !== item.licenseKey && (item.steps?.primary === 'done' || item.steps?.secondary === 'done')) throw new ProvisionError(409, 'license_locked');
     note(item, `Deployment requested by ${user}. Checking that both nodes have room.`);
-    queuedAdmins.set(id, {displayName: admin.displayName, email: admin.email, password: admin.password});
+    queuedAdmins.set(id, admin ? {displayName: admin.displayName, email: admin.email, password: admin.password} : undefined);
     queue.push(id);
-    await update(item, {licenseKey, status: 'queued', error: null, queue: {since: new Date(now()).toISOString(), reason: null}});
+    await update(item, {licenseKey, adminCreation: admin ? 'automatic' : 'signup', status: 'queued', error: null, queue: {since: new Date(now()).toISOString(), reason: null}});
     record('instance_deploy', {user, region: item.primary, id});
     await pump();
     return view(item);

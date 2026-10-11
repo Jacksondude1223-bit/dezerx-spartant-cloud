@@ -49,7 +49,7 @@ const MESSAGES = {
   hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
   license_key_required: 'Enter the Spartan licence issued for this hostname.', license_locked: 'The licence cannot change after a node holds this tenant.',
   instance_domain_configuration_required: 'The routing Worker cannot assign hostnames yet. Set CF_INSTANCE_API_TOKEN on it (npm run configure does this).', instance_hostname_setup_failed: 'Cloudflare did not attach the hostname. Try again in a minute.',
-  initial_admin_failed: 'Spartan refused to create the first administrator. Use a stronger password (upper and lower case, a number and a symbol). If an earlier attempt already created the admin, enter exactly the same name, email and password as then.',
+  initial_admin_failed: 'Automatic administrator creation failed. Retry with Create administrator automatically turned off, then complete Spartan’s signup. If an account already exists, sign in or use Spartan’s password reset.',
   invalid_laravel_env: 'The node rejected its extra Laravel environment file (LARAVEL_ENV_FILE).', node_capacity: 'The node already holds its maximum number of tenants (MAX_TENANTS).',
   stale_operation: 'The node has a newer lifecycle version for this tenant.', service_terminated: 'This tenant was terminated on the node and cannot be provisioned again.',
   container_conflict: 'A container with this name belongs to a different tenant on the node.',
@@ -1156,23 +1156,28 @@ function strongPassword() {
   return `${pick('ABCDEFGHJKLMNPQRSTUVWXYZ', 3)}${pick('abcdefghijkmnopqrstuvwxyz', 6)}-${pick('23456789', 4)}!${pick('ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789', 6)}`;
 }
 function adminForm(item, onDone) {
+  const automatic = h('input', {type: 'checkbox'});
   const name = h('input', {class: 'input', autocomplete: 'off', placeholder: 'Customer Owner'});
   const email = h('input', {class: 'input', type: 'email', autocomplete: 'off', placeholder: 'owner@customer.com'});
   const password = h('input', {class: 'input mono', type: 'text', autocomplete: 'off', spellcheck: 'false', value: strongPassword()});
+  const adminFields = h('div', {hidden: true},
+    h('p', {class: 'muted'}, 'Created as superadmin on the primary only. The password is never stored by the dashboard; copy it now.'),
+    h('div', {class: 'form-grid'}, h('label', {class: 'field'}, h('span', null, 'Name'), name), h('label', {class: 'field'}, h('span', null, 'Email'), email)),
+    h('label', {class: 'field'}, h('span', null, 'Password (8 to 128 characters)'), h('div', {class: 'copy-cell'}, password, copyButton(() => password.value))));
+  automatic.addEventListener('change', () => { adminFields.hidden = !automatic.checked; });
   const license = item.licenseHint ? null : h('input', {class: 'input mono', placeholder: 'SPARTANCLOUD_…', spellcheck: 'false', autocomplete: 'off'});
   const product = h('span', {class: 'hint'}, `Get the Spartan licence for ${item.hostname} from DezerX and paste it here.`);
   license?.addEventListener('input', () => { const name = productOf(license.value.trim()); product.className = `hint ${name ? 'good' : 'bad'}`; product.replaceChildren(...(name ? [icon('check'), `Product: ${name}`] : ['Unknown prefix'])); });
   const deployButton = button(item.status === 'failed' ? 'Retry deployment' : 'Deploy', {kind: 'primary', icon: 'rocket'});
   deployButton.addEventListener('click', async () => {
     deployButton.disabled = true;
-    try { const next = await api.post(`/api/instances/${item.id}/deploy`, {...(license ? {licenseKey: license.value.trim()} : {}), initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}}); toast(next.status === 'queued' ? 'Queued until both nodes have room' : 'Deployment started'); onDone(); }
+    try { const next = await api.post(`/api/instances/${item.id}/deploy`, {...(license ? {licenseKey: license.value.trim()} : {}), ...(automatic.checked ? {initialAdmin: {displayName: name.value.trim(), email: email.value.trim(), password: password.value}} : {})}); toast(next.status === 'queued' ? 'Queued until both nodes have room' : 'Deployment started'); onDone(); }
     catch (error) { fail(error); deployButton.disabled = false; }
   });
   return h('div', {class: 'card form-card'},
     license ? h('div', {class: 'form-section'}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, `Spartan licence key for ${item.hostname}`), license, product)) : null,
-    h('div', {class: 'form-section'}, h('h2', null, 'First administrator'), h('p', {class: 'muted'}, 'Created as superadmin on the first deployment only. The password is never stored by the dashboard; copy it now.'),
-      h('div', {class: 'form-grid'}, h('label', {class: 'field'}, h('span', null, 'Name'), name), h('label', {class: 'field'}, h('span', null, 'Email'), email)),
-      h('label', {class: 'field'}, h('span', null, 'Password (8 to 128 characters)'), h('div', {class: 'copy-cell'}, password, copyButton(() => password.value)))),
+    h('div', {class: 'form-section'}, h('h2', null, 'First account'), h('p', {class: 'muted'}, 'After deployment, open the instance and complete Spartan’s signup. The first account receives superadmin access.'),
+      h('label', {class: 'check'}, automatic, 'Create administrator automatically'), adminFields),
     h('div', {class: 'form-foot'}, deployButton));
 }
 
@@ -1214,6 +1219,7 @@ async function instancePage(ctx, id, polling = false) {
   }
   if (item.status === 'deploying') { const watch = await nodeWatch(item).catch(() => null); if (watch) body.push(watch); }
   if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. If a master website also bills this tenant, suspend and resume it in one place only, so the two do not undo each other.'));
+  if (item.status === 'ready' && item.adminCreation === 'signup') body.push(h('div', {class: 'banner info'}, icon('info'), 'Open the site to complete Spartan’s first-account signup. The first account receives superadmin access.'));
   if (item.status === 'suspended') body.push(h('div', {class: 'banner info'}, icon('lock'), 'Suspended. Visitors see the suspended page; the database and files are kept. Resume to bring it back.'));
   if (item.status === 'terminated') body.push(h('div', {class: 'banner info'}, icon('info'), 'Terminated. The containers are gone; the database, storage folder and backups remain on the nodes. Discard removes this record from the list.'));
   if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
