@@ -12,7 +12,7 @@
     "db:verify": "node deploy.mjs --verify-only",
     "dev": "npm run build && wrangler dev --local-protocol https"
   },
-  "devDependencies": {"wrangler": "^4.0.0", "monaco-editor": "0.52.2"},
+  "devDependencies": {"wrangler": "^4.0.0", "monaco-editor": "0.57.0"},
   "license": "UNLICENSED",
   "author": "JimJam Software"
 }
