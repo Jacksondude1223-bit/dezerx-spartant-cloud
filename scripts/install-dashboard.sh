@@ -172,10 +172,26 @@ else
   unset secret hash
 fi
 
-install -d -m 755 "$install_dir" "$install_dir/public"
-install -m 644 "$repo/dashboard/server.mjs" "$install_dir/server.mjs"
-rm -f "$install_dir/public/favicon.svg"
-for file in index.html app.js styles.css favicon.png logo.png; do install -m 644 "$repo/dashboard/public/$file" "$install_dir/public/$file"; done
+# Instance creation signs node /control/* and routing Worker calls with the node's
+# ORIGIN_SECRET; without it the dashboard runs as before and hides "Create instance".
+if [ -f "$node_env" ] && ! grep -q '^ORIGIN_SECRET=' "$dash_env"; then
+  origin_secret="$(env_value "$node_env" ORIGIN_SECRET)"; base_domain="$(env_value "$node_env" BASE_DOMAIN)"; control_secret="$(env_value "$node_env" NODE_CONTROL_SECRET)"
+  if [ -n "$origin_secret" ] && [ -n "$base_domain" ]; then
+    set_value "$dash_env" ORIGIN_SECRET "$origin_secret" plain
+    set_value "$dash_env" BASE_DOMAIN "$base_domain" plain
+    [ -n "$control_secret" ] && set_value "$dash_env" NODE_CONTROL_SECRET "$control_secret" plain
+    printf 'Instance creation enabled (ORIGIN_SECRET and BASE_DOMAIN copied from %s).\n' "$node_env"
+  fi
+  unset origin_secret control_secret
+fi
+
+# Same layout as the repository, so dashboard/ can import the node's validation modules.
+install -d -m 755 "$install_dir" "$install_dir/dashboard" "$install_dir/dashboard/public" "$install_dir/node"
+for file in server.mjs provisioning.mjs; do install -m 644 "$repo/dashboard/$file" "$install_dir/dashboard/$file"; done
+for file in index.html app.js styles.css favicon.png logo.png; do install -m 644 "$repo/dashboard/public/$file" "$install_dir/dashboard/public/$file"; done
+for file in license.mjs domain-permit.mjs admin-validation.mjs; do install -m 644 "$repo/node/$file" "$install_dir/node/$file"; done
+# Earlier releases installed server.mjs and public/ at the top level.
+rm -rf "$install_dir/server.mjs" "$install_dir/public"
 node_path="$(command -v node)"
 cat > /etc/systemd/system/spartan-dashboard.service <<EOF
 [Unit]
@@ -185,10 +201,13 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=$dash_env
-ExecStart=$node_path $install_dir/server.mjs
+ExecStart=$node_path $install_dir/dashboard/server.mjs
 Restart=always
 RestartSec=3
 DynamicUser=yes
+# Instances created from the dashboard (app keys, licences) live here, mode 600.
+StateDirectory=spartan-dashboard
+StateDirectoryMode=0700
 UMask=0077
 NoNewPrivileges=yes
 CapabilityBoundingSet=

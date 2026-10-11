@@ -132,7 +132,8 @@
   const find = (region, tid) => tenants.find(t => t.region === region && t.id === tid);
   async function request(method, path, body) {
     await sleep(rand(120, 380));
-    if (path === '/api/session') return {authenticated: true, user: 'admin', csrf: 'demo', label: 'Spartan Cloud', nodes: [{region: 'us', label: 'United States', host: host.us}, {region: 'de', label: 'Germany', host: host.de}]};
+    if (path === '/api/session') return {authenticated: true, user: 'admin', csrf: 'demo', label: 'Spartan Cloud', nodes: [{region: 'us', label: 'United States', host: host.us}, {region: 'de', label: 'Germany', host: host.de}], provisioning: {baseDomain: 'load.dezerx.cloud'}};
+    if (path.startsWith('/api/instances')) return instanceRequest(method, path, body || {});
     if (path === '/api/overview') return {nodes: [node('us'), node('de')], sampledAt: new Date().toISOString()};
     if (path === '/api/activity') return {events: activity};
     if (path === '/api/logout') return {authenticated: false};
@@ -152,6 +153,52 @@
     if (op === 'container') { await sleep(900); t.container = body.action === 'stop' ? {state: 'exited', running: false} : {state: 'running', running: true}; note(t.region, t.id, `container_${body.action}`); return {id: t.id, action: body.action, done: true}; }
     if (op === 'reload') { await sleep(700); note(t.region, t.id, 'reload'); return {id: t.id, reloaded: true}; }
     if (op === 'upgrade') { await sleep(1200); note(t.region, t.id, 'upgrade'); return {id: t.id, status: 'current', image}; }
+    throw err('not_found', 404);
+  }
+  // Simulated create-instance flow: custom domains verify on the second check, deploys finish in ~12 s.
+  const instances = new Map();
+  const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
+  const advance = item => {
+    if (item.status !== 'deploying') return;
+    const elapsed = Date.now() - item.started;
+    item.steps = {primary: elapsed > 6000 ? 'done' : 'running', ...(elapsed > 6000 ? {secondary: elapsed > 10000 ? 'done' : 'running'} : {}), ...(elapsed > 10000 ? {routing: elapsed > 12000 ? 'done' : 'running'} : {})};
+    if (elapsed > 12000) { item.status = 'ready'; note(item.primary, item.id, 'instance_ready'); }
+  };
+  async function instanceRequest(method, path, body) {
+    if (path === '/api/instances' && method === 'GET') { instances.forEach(advance); return {instances: [...instances.values()].reverse()}; }
+    if (path === '/api/instances') {
+      const prefix = Object.keys(PRODUCTS).find(p => String(body.licenseKey).startsWith(p));
+      if (!prefix || body.licenseKey.length < 16) throw err('invalid_license_key', 400);
+      const domain = String(body.domain || '').toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
+      if (body.domain && !/^([a-z0-9-]+\.)+[a-z]{2,}$/.test(domain)) throw err('invalid_domain', 400);
+      const id = `t-${hex(24)}`;
+      const hostname = domain || `${id}.load.dezerx.cloud`;
+      const item = {id, primary: body.primary, secondary: body.primary === 'us' ? 'de' : 'us', hostname, custom: Boolean(domain), url: `https://${hostname}`, product: PRODUCTS[prefix], licenseHint: `${prefix}…${body.licenseKey.slice(-4)}`, customerId: body.customerId || 'dashboard', status: domain ? 'awaiting_dns' : 'ready_to_deploy', steps: {}, checks: 0, createdAt: new Date().toISOString(), createdBy: 'admin',
+        dns: domain ? {stage: 'spartan_ownership', readyToProvision: false, checkedAt: new Date().toISOString(), records: [{type: 'CNAME', name: domain, target: 'load.dezerx.cloud', purpose: 'routing'}, {type: 'TXT', name: `_spartan-verification.${domain}`, value: hex(40), purpose: 'spartan_ownership'}]} : null};
+      instances.set(id, item);
+      note(item.primary, id, 'instance_create');
+      return item;
+    }
+    const m = path.match(/^\/api\/instances\/(t-[a-f0-9]{24})(?:\/(\w+))?$/);
+    const item = m && instances.get(m[1]);
+    if (!item) throw err('instance_not_found', 404);
+    advance(item);
+    if (!m[2]) return item;
+    if (m[2] === 'verify') {
+      await sleep(900);
+      if (++item.checks < 2) throw err('ownership_not_verified', 409);
+      item.dns = {...item.dns, stage: 'ready_to_provision', readyToProvision: true, checkedAt: new Date().toISOString(), records: [...item.dns.records, {type: 'TXT', name: `_acme-challenge.${item.hostname}`, value: hex(43), purpose: 'certificate_validation'}]};
+      if (item.status === 'awaiting_dns') item.status = 'ready_to_deploy';
+      return item;
+    }
+    if (m[2] === 'deploy') {
+      const a = body.initialAdmin || {};
+      if (!a.displayName || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(a.email || '') || String(a.password || '').length < 8) throw err('invalid_initial_admin', 400);
+      Object.assign(item, {status: 'deploying', started: Date.now(), steps: {primary: 'running'}, error: null});
+      note(item.primary, item.id, 'instance_deploy');
+      return item;
+    }
+    if (m[2] === 'discard') { instances.delete(item.id); return {discarded: true}; }
     throw err('not_found', 404);
   }
   function download() {
