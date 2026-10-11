@@ -591,7 +591,7 @@ async function changeLifecycle(id, host, action, after) {
   const note = toast(`${texts.confirm.replace(/e$/, '')}ing ${host}…`, {timeout: 0});
   try {
     const result = await api.post(`/api/tenants/${id}/lifecycle`, {action});
-    note.update(`${host} is ${result.status} (lifecycle version ${result.lifecycleVersion}).`); note.close(4000);
+    note.update(result.status === 'queued' ? `${texts.confirm} queued for ${host}. The dashboard runner will complete it automatically.` : `${host} is ${result.status} (lifecycle version ${result.lifecycleVersion}).`); note.close(4000);
     state.overview = null; state.details.clear();
     after?.();
   } catch (error) { note.close(); fail(error); }
@@ -1042,7 +1042,7 @@ async function instancesPage(ctx) {
     pageHead({title: 'Instances', subtitle: 'Spartan instances created from this dashboard', actions: [button('Refresh', {icon: 'refresh', onClick: () => render()}), h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance')]}),
     rows.length ? h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'Instance'), h('th', null, 'Status'), h('th', null, 'Product'), h('th', null, 'Region'), h('th', null, 'Created'))), h('tbody', null, rows))))
       : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'No instances yet'), 'Create one to provision it on both nodes and publish it to the router.', h('div', {style: {marginTop: '14px'}}, h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance'))))]);
-  if (data.instances.some(item => ['deploying', 'queued'].includes(item.status))) every(5000, () => render());
+  if (data.instances.some(item => ['deploying', 'queued'].includes(item.status) || item.operation)) every(5000, () => render());
 }
 
 function choiceGroup(name, options, value, onChange) {
@@ -1056,6 +1056,7 @@ async function newInstancePage(ctx) {
   if (!state.session.provisioning) return disabledNotice(ctx);
   const zone = state.session.provisioning.instanceDomain || state.session.provisioning.baseDomain;
   const nodes = state.session.nodes.map(n => n.region);
+  const centralDatabase = state.session.provisioning.databaseMode === 'us-central';
   const form = {primary: nodes.includes('us') ? 'us' : nodes[0], domainMode: 'default'};
   const license = h('input', {class: 'input mono', placeholder: 'SPARTANPROFESSIONAL_…', spellcheck: 'false', autocomplete: 'off'});
   const product = h('span', {class: 'hint'});
@@ -1067,7 +1068,7 @@ async function newInstancePage(ctx) {
   const customer = h('input', {class: 'input mono', placeholder: 'dashboard', spellcheck: 'false', autocomplete: 'off'});
   const submit = button('Continue', {kind: 'primary', icon: 'rocket'});
   const message = h('div', {class: 'banner error', style: {display: 'none'}});
-  const regionChoices = choiceGroup('primary', [['us', 'Home: United States'], ['de', 'Home: Germany']].map(([value]) => ({value, lead: flag(value), title: regionName(value), text: value === 'us' ? 'Database and app run in the US; Germany holds the standby.' : 'Database and app run in Germany; the US holds the standby.', disabled: !nodes.includes(value)})), form.primary, value => { form.primary = value; });
+  const regionChoices = choiceGroup('primary', [['us', 'Home: United States'], ['de', 'Home: Germany']].map(([value]) => ({value, lead: flag(value), title: regionName(value), text: centralDatabase ? value === 'us' ? 'US hosts every database. Both regions run the application.' : 'Germany connects to the US database.' : value === 'us' ? 'Database and app run in the US; Germany holds the standby.' : 'Database and app run in Germany; the US holds the standby.', disabled: !nodes.includes(value) || (centralDatabase && value !== 'us')})), form.primary, value => { form.primary = value; });
   const licenseSection = h('div', {class: 'form-section', style: {display: 'none'}}, h('h2', null, 'Licence'), h('label', {class: 'field'}, h('span', null, 'Spartan licence key, issued for the customer domain'), license, product));
   const domainChoices = choiceGroup('domain', [{value: 'default', title: 'Assigned subdomain', text: `instance-1234.${zone} style, free SSL. You get the name first, then enter its licence.`}, {value: 'custom', title: 'Customer domain', text: 'Verified with DNS before deploying'}], form.domainMode, value => { form.domainMode = value; domainField.style.display = licenseSection.style.display = value === 'custom' ? '' : 'none'; if (value === 'custom') domain.focus(); });
   submit.addEventListener('click', async () => {
@@ -1203,7 +1204,7 @@ async function instancePage(ctx, id, polling = false) {
     detail('Product', item.product || '—'), detail('Licence', item.licenseHint ? h('span', {class: 'mono'}, item.licenseHint) : h('span', {class: 'faint'}, 'Entered at deploy')),
     detail('Customer reference', item.customerId), detail('Created', `${ago(item.createdAt)} by ${item.createdBy || '—'}`)));
   const body = [];
-  if (item.error && item.status !== 'ready') body.push(h('div', {class: 'banner error'}, icon('alert'), h('div', null, h('strong', null, item.status === 'failed' ? 'Deployment stopped: ' : ''), explain(new ApiError(item.error)), item.log?.length ? ' The full sequence is under What happened, below.' : '', item.status === 'failed' ? ' Fix the cause if there is one, then press Retry deployment; it continues where it stopped.' : '')));
+  if (item.error) body.push(h('div', {class: 'banner error'}, icon('alert'), h('div', null, h('strong', null, item.status === 'failed' ? 'Deployment stopped: ' : ''), explain(new ApiError(item.error)), item.log?.length ? ' The full sequence is under What happened, below.' : '', item.status === 'failed' ? ' Fix the cause if there is one, then press Retry deployment; it continues where it stopped.' : '')));
   if (item.status === 'awaiting_dns') body.push(
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Domain checks'), h('span', {class: 'note'}, 'Press Verify DNS to re-check')), dnsStages(item)),
     h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
@@ -1221,6 +1222,7 @@ async function instancePage(ctx, id, polling = false) {
   if (item.status === 'ready') body.push(h('div', {class: 'banner info'}, icon('check'), 'Live. If a master website also bills this tenant, suspend and resume it in one place only, so the two do not undo each other.'));
   if (item.status === 'ready' && item.adminCreation === 'signup') body.push(h('div', {class: 'banner info'}, icon('info'), 'Open the site to complete Spartan’s first-account signup. The first account receives superadmin access.'));
   if (item.status === 'suspended') body.push(h('div', {class: 'banner info'}, icon('lock'), 'Suspended. Visitors see the suspended page; the database and files are kept. Resume to bring it back.'));
+  if (item.operation) body.push(h('div', {class: 'banner info'}, icon('info'), `${item.operation} is queued or running. The dashboard runner will finish it automatically.`));
   if (item.status === 'terminated') body.push(h('div', {class: 'banner info'}, icon('info'), 'Terminated. The containers are gone; the database, storage folder and backups remain on the nodes. Discard removes this record from the list.'));
   if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
   if (item.custom && item.status === 'ready_to_deploy') body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records')), dnsCard(item)));
@@ -1237,7 +1239,7 @@ async function instancePage(ctx, id, polling = false) {
       item.status === 'ready' ? h('a', {class: 'btn primary', href: item.url, target: '_blank', rel: 'noopener noreferrer'}, icon('external'), 'Open site') : null]}),
     body,
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Details')), details)]);
-  if (['deploying', 'queued'].includes(item.status) && !polling) { every(4000, () => { if (ctx.alive()) instancePage(ctx, id, true).catch(() => {}); }); every(1000, tickLive); }
+  if ((['deploying', 'queued'].includes(item.status) || item.operation) && !polling) { every(4000, () => { if (ctx.alive()) instancePage(ctx, id, true).catch(() => {}); }); every(1000, tickLive); }
 }
 
 render();

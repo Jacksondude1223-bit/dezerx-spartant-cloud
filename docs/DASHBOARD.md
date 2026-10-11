@@ -1,5 +1,7 @@
 # Operator dashboard and admin API
 
+For Cloudflare Worker hosting with its own separate D1 database, use [DASHBOARD-WORKER.md](DASHBOARD-WORKER.md). The node-hosted setup below remains available.
+
 The dashboard (`dashboard/`) is a private control panel for the people who run the nodes. It shows both nodes and every tenant with live CPU, memory, disk and container state, and for each tenant offers a file manager, a command console, container logs and operational controls: reload caches, restart, stop and start the container, upgrade to the node image, and download the database.
 
 It talks to the node agents through a separate **admin API** (`/admin/*`), signed with its own `ADMIN_API_SECRET`.

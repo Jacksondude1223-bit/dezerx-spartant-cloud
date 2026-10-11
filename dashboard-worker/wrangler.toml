@@ -1,0 +1,32 @@
+name = "spartan-cloud-dashboard"
+main = "index.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+[observability]
+enabled = true
+
+[assets]
+directory = "dist"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+DASHBOARD_USER = "admin"
+DASHBOARD_LABEL = "Spartan Cloud"
+US_ORIGIN = "https://node-us.dezerx.cloud"
+DE_ORIGIN = "https://node-de.dezerx.cloud"
+ROUTING_API_URL = "https://load.dezerx.cloud"
+BASE_DOMAIN = "load.dezerx.cloud"
+INSTANCE_DOMAIN = "dezerx.cloud"
+DATABASE_MODE = "us-central"
+DASHBOARD_SESSION_HOURS = "12"
+
+[triggers]
+crons = ["* * * * *"]
+
+[[d1_databases]]
+binding = "DASHBOARD_DB"
+database_name = "spartan-cloud-dashboard"
+database_id = "CREATE_SEPARATE_DASHBOARD_DATABASE"
+migrations_dir = "migrations"

@@ -9,3 +9,7 @@ dashboard/demo/preview.html
 
 # Installed by scripts/install-dashboard.sh
 dashboard/public/vendor/
+
+dashboard-worker/dist/
+.dev.vars
+.dashboard-data-key

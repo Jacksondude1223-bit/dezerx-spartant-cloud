@@ -4,6 +4,7 @@ updates:
     directories:
       - /
       - /workers
+      - /dashboard-worker
     schedule:
       interval: weekly
       day: monday

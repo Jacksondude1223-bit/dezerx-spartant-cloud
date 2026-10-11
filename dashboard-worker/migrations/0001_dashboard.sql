@@ -1,0 +1,13 @@
+CREATE TABLE dashboard_metadata (name TEXT PRIMARY KEY, value TEXT NOT NULL);
+INSERT INTO dashboard_metadata VALUES ('application', 'spartan-dashboard');
+CREATE TABLE dashboard_sessions (token_hash TEXT PRIMARY KEY, username TEXT NOT NULL, csrf TEXT NOT NULL, auth_version TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE INDEX dashboard_sessions_expiry ON dashboard_sessions(expires);
+CREATE TABLE dashboard_rate_limits (key TEXT PRIMARY KEY, count INTEGER NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE dashboard_totp (key TEXT PRIMARY KEY, counter INTEGER NOT NULL);
+CREATE TABLE dashboard_instances (id TEXT PRIMARY KEY, hostname TEXT UNIQUE, record TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+CREATE TABLE dashboard_jobs (id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL, deadline INTEGER NOT NULL, created_at INTEGER NOT NULL);
+CREATE UNIQUE INDEX dashboard_jobs_active_tenant ON dashboard_jobs(tenant_id) WHERE status IN ('queued', 'running');
+CREATE INDEX dashboard_jobs_due ON dashboard_jobs(status, next_at, created_at);
+CREATE TABLE dashboard_locks (name TEXT PRIMARY KEY, token TEXT NOT NULL, expires INTEGER NOT NULL);
+CREATE TABLE dashboard_activity (id INTEGER PRIMARY KEY AUTOINCREMENT, time TEXT NOT NULL, event TEXT NOT NULL, details TEXT NOT NULL);
+CREATE INDEX dashboard_activity_time ON dashboard_activity(time);
