@@ -2,37 +2,12 @@
 
 The operator dashboard can run as the independent `spartan-cloud-dashboard` Worker. Its static UI is built from the same `dashboard/public` sources as the node dashboard. It uses a separate D1 database named `spartan-cloud-dashboard`, bound as `DASHBOARD_DB`. The routing Worker keeps its existing database `2551e490-663e-4fb7-b7b5-0fe468eca54a`; the dashboard deployment script rejects that UUID. No routing database migrations or customer containers are changed by deploying this dashboard.
 
-## First deployment
+## Setup entirely in the Cloudflare dashboard
 
-From an authenticated computer with Node.js 22 or newer, in the latest repository checkout:
+You do not need a terminal or a local Cloudflare CLI. Cloudflare's Git-connected build runs the deployment script automatically.
 
-```bash
-cd dashboard-worker
-npm ci
-npx wrangler login
-npm run deploy
-npm run secrets
-```
-
-`npm run deploy` finds or creates only the separately named dashboard D1 database, binds it in this checkout, applies its migrations, verifies every required table, column type, primary key, index and migration entry, builds the existing UI and Monaco assets, and uploads the dashboard Worker. A database or schema failure stops the upload. The new Worker refuses API access until its secrets have been configured.
-
-`npm run secrets` runs in Bash and prompts without echoing for the nodes' existing `ADMIN_API_SECRET`, shared `ORIGIN_SECRET`, and a new dashboard login password. The default username is `admin`, configured in `wrangler.toml`. It creates `DASHBOARD_DATA_KEY` only if that remote secret is absent. Its root-protected or user-protected local backup `.dashboard-data-key` is excluded from Git: keep it securely to restore encrypted D1 records. Reruns preserve the remote encryption key. Do not generate a replacement key for an existing database.
-
-The old node dashboard's scrypt password hash cannot be copied into this Worker. The secret installer produces its Worker-compatible PBKDF2 hash. The node API secrets and tenant application keys do not change.
-
-If desired, add an authenticator-app secret:
-
-```bash
-npx wrangler secret put DASHBOARD_TOTP_SECRET
-```
-
-Use a base32 secret, as with the previous dashboard. TOTP reuse is prevented atomically in D1 across Worker isolates. Existing per-plane `NODE_CONTROL_SECRET` and `ROUTING_CONTROL_SECRET` overrides are supported; set their matching values as Worker secrets if your nodes/router still use them.
-
-Open the new dashboard's `workers.dev` URL reported by Wrangler. You can attach a dedicated Worker Custom Domain such as `panel.dezerx.cloud`. Keep this hostname separate from `load.dezerx.cloud`, the node origins and customer application hostnames.
-
-## Git-connected Cloudflare Builds
-
-Create a separate Worker project for this repository:
+1. Open **Workers & Pages → Create application** and connect the existing private GitHub repository `Jacksondude1223-bit/dezerx-spartant-cloud`.
+2. Create a separate Worker project with these settings:
 
 | Setting | Value |
 | --- | --- |
@@ -40,12 +15,42 @@ Create a separate Worker project for this repository:
 | Root directory | `dashboard-worker` |
 | Build command | Leave empty |
 | Deploy command | `npm run deploy` |
-| D1 binding | `DASHBOARD_DB` |
-| D1 database | `spartan-cloud-dashboard` |
 
-Dependencies are locked in `dashboard-worker/package-lock.json`. The deployment command builds the assets and runs migration verification itself. Its Cloudflare build token needs permissions to list/create/update D1 and deploy this Worker, plus read access to the private repository through the Git integration. If the build token cannot create D1, create the dashboard database once and supply its UUID as the build variable `DASHBOARD_DATABASE_ID`, or commit the binding produced by `npm run setup`. Never supply the routing database UUID.
+3. Deploy. The build finds or creates only the separate `spartan-cloud-dashboard` D1 database, binds it as `DASHBOARD_DB`, applies and verifies its migrations, builds the dashboard assets and uploads the Worker. The routing database is rejected. The build token needs D1 edit permissions in addition to Worker deployment permissions. If it cannot create a database, create **spartan-cloud-dashboard** under **Storage & Databases → D1**, copy its UUID, and add `DASHBOARD_DATABASE_ID` under the Worker's **Build variables**, then retry the build. Use the new dashboard database UUID.
+4. In the new dashboard Worker's **Settings → Variables & Secrets**, add these as type **Secret**:
 
-Add `ADMIN_API_SECRET`, `ORIGIN_SECRET`, `DASHBOARD_PASSWORD_HASH`, `DASHBOARD_DATA_KEY`, and optional `DASHBOARD_TOTP_SECRET` as runtime Worker secrets, not frontend variables. The CLI secret installer can set these against the same Worker. Build variables and runtime secrets have different roles.
+| Secret | Value |
+| --- | --- |
+| `ADMIN_API_SECRET` | Existing admin API secret from both nodes |
+| `ORIGIN_SECRET` | Existing shared origin/control secret |
+
+5. Open the dashboard Worker's URL and go to `/setup`. It will also open setup automatically if no dashboard account exists.
+6. Click **Generate setup values**. Copy each value into the corresponding runtime secret in Cloudflare:
+
+| Secret | Value |
+| --- | --- |
+| `DASHBOARD_DATA_KEY` | Generated encryption key; keep a secure backup |
+| `DASHBOARD_SETUP_TOKEN` | Generated token authorizing the first account setup |
+
+7. Save and deploy the secret changes. Keep the setup page open and click **Re-check settings**, then enter a username, password and confirmation. Click **Create account**.
+8. Remove `DASHBOARD_SETUP_TOKEN` from Cloudflare after setup and open the dashboard to sign in.
+
+The password is hashed with PBKDF2 and stored in this dashboard's D1 metadata. Its plaintext is never stored. The credential record is also encrypted and authenticated with the dashboard data key. Setup requires the private token, validates the request origin and applies login rate limits; the first account is inserted atomically and further setup requests are refused. Existing accounts cannot be overwritten through this page. An existing `DASHBOARD_PASSWORD_HASH` secret is still supported for older installations, but it is unnecessary for the browser setup.
+
+Preserve `DASHBOARD_DATA_KEY` across updates. The setup page will not generate a replacement for a configured encryption key. Secrets are entered as runtime Worker secrets, not frontend or build variables. Optional `DASHBOARD_TOTP_SECRET`, `NODE_CONTROL_SECRET` and `ROUTING_CONTROL_SECRET` can also be added through the same Cloudflare screen when needed. The admin secret must differ from the origin secret, as required by the existing node agents.
+
+You can attach a dedicated Worker Custom Domain such as `panel.dezerx.cloud`. Keep it separate from `load.dezerx.cloud`, node origins and customer application hostnames.
+
+## Dashboard password recovery
+
+An operator with access to the Cloudflare account can open this dashboard's **D1 Console** and run:
+
+```sql
+DELETE FROM dashboard_metadata WHERE name = 'auth_account';
+DELETE FROM dashboard_sessions;
+```
+
+If using the legacy `DASHBOARD_PASSWORD_HASH` secret, remove that runtime secret too. Add a new `DASHBOARD_SETUP_TOKEN`, then use `/setup` to create the replacement account. Preserve the encryption key, application records and other metadata. This is an administrator-only recovery operation through the Cloudflare console; the public setup endpoint never resets an existing account.
 
 ## Persistent deployment runner
 
@@ -57,7 +62,7 @@ Suspend, resume and terminate also use persistent jobs. Suspension publishes the
 
 The browser talks only to the dashboard. The Worker signs HTTPS requests to the same node `/admin/*` and `/control/*` APIs and routing API. It rejects redirects so API secrets are never forwarded to another origin. Exempt machine node API paths from interactive Cloudflare challenges and Browser Integrity Check. File uploads, downloads, resource controls, console commands, logs and SQL exports remain node operations. Downloads are streamed, not stored in D1. Commands that exceed the node tunnel's response time may continue on the node; inspect node logs before repeating a state-changing action.
 
-Login sessions, rate limits, TOTP replay state and audit records live in this dashboard D1 database. Session tokens are stored as hashes. Session cookies are Secure, HttpOnly and SameSite=Strict; writes also require a CSRF token. Instance application keys, licences and job credentials are protected with AES-GCM using a separate Worker secret. Activity logs are limited to 5,000 entries; completed jobs are retained for 30 days with credentials erased. Cloudflare Worker and D1 plan limits still apply; test your intended polling and administration load before production cutover.
+Login sessions, rate limits, TOTP replay state and audit records live in this dashboard D1 database. Session tokens are stored as hashes, and every session record has a secret-key signature bound to its token hash, account, expiry and CSRF token. Session cookies are Secure, HttpOnly and SameSite=Strict; writes also require a CSRF token. Instance application keys, licences and job credentials are protected with AES-GCM using a separate Worker secret. Activity logs are limited to 5,000 entries; completed jobs are retained for 30 days with credentials erased. Cloudflare Worker and D1 plan limits still apply; test your intended polling and administration load before production cutover.
 
 ## Existing node-dashboard records
 

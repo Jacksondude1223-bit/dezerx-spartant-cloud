@@ -4,6 +4,7 @@ import {session, login, jsonBody, cookie} from './auth.mjs';
 import {equal, seal} from './crypto.mjs';
 import {createInstance, instanceAction, queueLifecycle} from './instances.mjs';
 import {runJobs} from './jobs.mjs';
+import {credentials, browserSetup} from './browser-setup.mjs';
 export const SECURITY = {'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'};
 export function response(value, status = 200, headers = {}) {return Response.json(value, {status, headers: {...SECURITY, 'cache-control': 'no-store', ...headers}});}
 async function locked(db, id, action) {
@@ -27,16 +28,29 @@ export function createWorker(fetchImpl = fetch) {
         if (url.protocol !== 'https:') throw new ApiError(400, 'https_required');
         if (!url.pathname.startsWith('/api/')) {
           if (!['GET', 'HEAD'].includes(request.method)) throw new ApiError(405, 'method_not_allowed');
-          if (url.pathname.startsWith('/vendor/') && !await session(request, env, store(env))) throw new ApiError(401, 'not_signed_in');
-          const asset = await env.ASSETS.fetch(request);
+          if (url.pathname.startsWith('/vendor/')) {
+            const db = store(env), authEnv = await credentials(env, db);
+            if (!authEnv || !await session(request, authEnv, db)) throw new ApiError(401, 'not_signed_in');
+          }
+          const assetUrl = new URL(request.url);
+          if (url.pathname === '/setup') assetUrl.pathname = '/setup.html';
+          const asset = await env.ASSETS.fetch(new Request(assetUrl, request));
           const headers = new Headers(asset.headers);
           for (const [key, value] of Object.entries(SECURITY)) headers.set(key, value);
-          if (['/', '/index.html', '/app.js', '/styles.css'].includes(url.pathname)) headers.set('cache-control', 'no-store');
+          if (['/', '/index.html', '/app.js', '/styles.css', '/setup', '/setup.html', '/setup.js'].includes(url.pathname)) headers.set('cache-control', 'no-store');
           return new Response(asset.body, {status: asset.status, headers});
         }
-        const db = store(env), client = clients(env, fetchImpl), config = client.config;
+        const db = store(env);
         const application = await db.query("SELECT value FROM dashboard_metadata WHERE name = 'application'").first();
         if (application?.value !== 'spartan-dashboard') throw new ApiError(503, 'wrong_dashboard_database');
+        if (url.pathname === '/api/setup') return response(await browserSetup(request, env, db));
+        const authEnv = await credentials(env, db);
+        if (!authEnv) {
+          if (url.pathname === '/api/session' && request.method === 'GET') return response({authenticated: false, setupRequired: true, label: env.DASHBOARD_LABEL || 'Spartan Cloud'});
+          throw new ApiError(503, 'dashboard_setup_required');
+        }
+        env = authEnv;
+        const client = clients(env, fetchImpl), config = client.config;
         const userSession = await session(request, env, db);
         const label = env.DASHBOARD_LABEL || 'Spartan Cloud';
         if (url.pathname === '/api/session' && request.method === 'GET') return response(userSession ? {authenticated: true, user: userSession.username, csrf: userSession.csrf, label, nodes: Object.keys(REGIONS).map(region => ({region, label: REGIONS[region], host: new URL(config.origins[region]).host})), provisioning: {baseDomain: config.baseDomain, instanceDomain: config.instanceDomain, databaseMode: env.DATABASE_MODE || 'local'}} : {authenticated: false, label, twoFactor: Boolean(env.DASHBOARD_TOTP_SECRET)});

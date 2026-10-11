@@ -256,3 +256,44 @@ test('dashboard D1 setup creates or reuses only the separately named database', 
     assert.throws(() => setupDatabase({configFile, databaseId: ROUTING_DATABASE}), /separate/);
   } finally {rmSync(root, {recursive: true, force: true});}
 });
+
+test('browser setup requires its private token, saves only a password hash, and closes after initialization', async () => {
+  const {db, sqlite} = database(), env = environment(db);
+  delete env.DASHBOARD_PASSWORD_HASH;
+  env.DASHBOARD_SETUP_TOKEN = 's'.repeat(64);
+  const worker = createWorker();
+  const request = (body, origin = 'https://dashboard.example.test') => new Request('https://dashboard.example.test/api/setup', {method: 'POST', headers: {'content-type': 'application/json', origin, 'cf-connecting-ip': '198.51.100.31'}, body: JSON.stringify(body)});
+  const input = {setupToken: env.DASHBOARD_SETUP_TOKEN, username: 'owner', password};
+  try {
+    const initial = await (await worker.fetch(new Request('https://dashboard.example.test/api/session'), env)).json();
+    assert.equal(initial.setupRequired, true);
+    assert.equal((await worker.fetch(request(input, 'https://other.example.test'), env)).status, 403);
+    assert.equal((await worker.fetch(request({...input, setupToken: 'wrong'}), env)).status, 401);
+    const result = await worker.fetch(request(input), env);
+    assert.equal(result.status, 200, await result.clone().text());
+    const stored = sqlite.prepare("SELECT value FROM dashboard_metadata WHERE name = 'auth_account'").get().value;
+    assert.equal(stored.includes(password), false);
+    assert.ok((await open(env.DASHBOARD_DATA_KEY, 'dashboard-auth', stored)).passwordHash.startsWith('pbkdf2$'));
+    assert.equal((await worker.fetch(request({...input, username: 'attacker'}), env)).status, 409);
+    const login = await worker.fetch(new Request('https://dashboard.example.test/api/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({username: 'owner', password})}), env);
+    assert.equal(login.status, 200, await login.clone().text());
+    const cookie = login.headers.get('set-cookie').split(';')[0];
+    const fresh = createWorker();
+    const session = await (await fresh.fetch(new Request('https://dashboard.example.test/api/session', {headers: {cookie}}), env)).json();
+    assert.equal(session.user, 'owner'); assert.equal(session.authenticated, true);
+    assert.equal((await fresh.fetch(new Request('https://dashboard.example.test/vendor/editor.js', {headers: {cookie}}), env)).status, 200);
+    const status = await (await fresh.fetch(new Request('https://dashboard.example.test/api/setup'), env)).json();
+    assert.equal(status.initialized, true); assert.equal(JSON.stringify(status).includes(env.DASHBOARD_SETUP_TOKEN), false);
+  } finally {sqlite.close();}
+});
+
+test('a database write cannot forge a dashboard session by copying a valid session proof', async () => {
+  const {db, sqlite} = database(), env = environment(db), worker = createWorker();
+  try {
+    await browser(worker, env);
+    const row = sqlite.prepare('SELECT * FROM dashboard_sessions').get(), forgedToken = 'e'.repeat(64);
+    sqlite.prepare('INSERT INTO dashboard_sessions VALUES (?, ?, ?, ?, ?)').run(await digest(forgedToken), row.username, row.csrf, row.auth_version, row.expires);
+    const result = await worker.fetch(new Request('https://dashboard.example.test/api/session', {headers: {cookie: COOKIE + '=' + forgedToken}}), env);
+    assert.equal((await result.json()).authenticated, false);
+  } finally {sqlite.close();}
+});

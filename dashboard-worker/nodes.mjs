@@ -3,7 +3,7 @@ import {ApiError} from './store.mjs';
 export const REGIONS = {us: 'United States', de: 'Germany'};
 export function configuration(env) {
   for (const key of ['ADMIN_API_SECRET', 'ORIGIN_SECRET']) if (typeof env[key] !== 'string' || env[key].length < 32 || /[\x00-\x20\x7f]/.test(env[key])) throw new ApiError(503, 'dashboard_configuration_required');
-  if (env.ADMIN_API_SECRET === env.ORIGIN_SECRET || !/^[a-f0-9]{64}$/.test(env.DASHBOARD_DATA_KEY || '') || !/^[a-zA-Z0-9_.@-]{1,64}$/.test(env.DASHBOARD_USER || '') || !/^pbkdf2\$100000\$[A-Za-z0-9+/]{22}==\$[A-Za-z0-9+/]{43}=$/.test(env.DASHBOARD_PASSWORD_HASH || '')) throw new ApiError(503, 'dashboard_configuration_required');
+  if (env.ADMIN_API_SECRET === env.ORIGIN_SECRET || !/^[a-f0-9]{64}$/.test(env.DASHBOARD_DATA_KEY || '')) throw new ApiError(503, 'dashboard_configuration_required');
   if (env.DASHBOARD_TOTP_SECRET && !/^[A-Z2-7]{16,128}$/.test(env.DASHBOARD_TOTP_SECRET)) throw new ApiError(503, 'dashboard_configuration_required');
   const origins = {};
   for (const region of Object.keys(REGIONS)) {

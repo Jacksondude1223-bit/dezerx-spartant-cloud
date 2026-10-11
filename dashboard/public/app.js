@@ -355,7 +355,7 @@ async function render() {
   const token = ++state.view;
   const root = document.getElementById('root');
   if (!state.session) {
-    try { const session = await api.get('/api/session'); if (session.authenticated) { state.session = session; csrf = session.csrf; } else { state.label = session.label; state.twoFactor = session.twoFactor === true; } }
+    try { const session = await api.get('/api/session'); if (session.setupRequired) { window.location.replace('setup'); return; } if (session.authenticated) { state.session = session; csrf = session.csrf; } else { state.label = session.label; state.twoFactor = session.twoFactor === true; } }
     catch { /* shown as login */ }
     if (token !== state.view) return;
     if (!state.session) { root.replaceChildren(loginPage()); return; }

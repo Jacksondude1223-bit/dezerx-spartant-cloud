@@ -1,0 +1,11 @@
+.setup-wrap {max-width: 640px; margin: 64px auto; padding: 0 20px;}
+.setup-wrap .brand {padding: 0 0 24px;}
+.setup-wrap h1 {font-size: 26px; margin: 0 0 12px;}
+.setup-wrap h2 {font-size: 17px; margin: 24px 0 12px;}
+.setup-wrap p {line-height: 1.6; margin: 12px 0;}
+.setup-wrap .field {margin: 16px 0;}
+.setup-wrap ul {padding-left: 22px; line-height: 1.9;}
+.setup-wrap .copy-cell {display: flex; gap: 8px;}
+.setup-wrap .copy-cell .input {min-width: 0; flex: 1;}
+.setup-wrap [hidden] {display: none !important;}
+#result {overflow-wrap: anywhere;}

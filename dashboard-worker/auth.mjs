@@ -1,21 +1,27 @@
-import {digest, random, equal, verifyPassword, totpCounter} from './crypto.mjs';
+import {digest, random, equal, verifyPassword, totpCounter, hmac} from './crypto.mjs';
 import {ApiError} from './store.mjs';
 export const COOKIE = '__Host-spartan_dashboard';
 export const cookie = (token, age) => `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`;
 export async function authVersion(env) {return digest([env.DASHBOARD_USER, env.DASHBOARD_PASSWORD_HASH, env.DASHBOARD_TOTP_SECRET || ''].join('\n'));}
+async function sessionTag(env, row) {return hmac(env.DASHBOARD_DATA_KEY, JSON.stringify(['dashboard-session-v1', await authVersion(env), row.token_hash, row.username, row.csrf, row.expires]));}
 export async function session(request, env, db) {
   const token = (request.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
   if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
   const row = await db.query('SELECT * FROM dashboard_sessions WHERE token_hash = ? AND expires > ?', await digest(token), Date.now()).first();
-  return row && equal(row.auth_version, await authVersion(env)) ? row : null;
+  return row && equal(row.auth_version, await sessionTag(env, row)) ? row : null;
 }
-export async function login(request, input, env, db, config) {
+export async function limitLogin(request, db) {
   const now = Date.now();
   const ip = request.headers.get('cf-connecting-ip') || 'unknown';
   for (const [key, window, maximum] of [['ip:' + await digest(ip), 15 * 60000, 10], ['global', 60000, 60]]) {
     const result = await db.query('INSERT INTO dashboard_rate_limits(key, count, expires) VALUES (?, 1, ?) ON CONFLICT(key) DO UPDATE SET count = CASE WHEN expires <= ? THEN 1 ELSE count + 1 END, expires = CASE WHEN expires <= ? THEN excluded.expires ELSE expires END RETURNING count', key, now + window, now, now).first();
     if (result.count > maximum) throw new ApiError(429, 'too_many_attempts');
   }
+}
+export async function login(request, input, env, db, config) {
+  const now = Date.now();
+  const ip = request.headers.get("cf-connecting-ip") || "unknown";
+  await limitLogin(request, db);
   const userOk = equal(input.username, env.DASHBOARD_USER);
   const passOk = await verifyPassword(input.password, env.DASHBOARD_PASSWORD_HASH);
   const counter = env.DASHBOARD_TOTP_SECRET ? await totpCounter(env.DASHBOARD_TOTP_SECRET, input.code) : 0;
@@ -29,7 +35,8 @@ export async function login(request, input, env, db, config) {
     if (!used) throw new ApiError(401, 'invalid_credentials_or_code');
   }
   const token = random(), csrf = random(24);
-  await db.query('INSERT INTO dashboard_sessions(token_hash, username, csrf, auth_version, expires) VALUES (?, ?, ?, ?, ?)', await digest(token), env.DASHBOARD_USER, csrf, await authVersion(env), now + config.hours * 3600000).run();
+  const row = {token_hash: await digest(token), username: env.DASHBOARD_USER, csrf, expires: now + config.hours * 3600000};
+  await db.query('INSERT INTO dashboard_sessions(token_hash, username, csrf, auth_version, expires) VALUES (?, ?, ?, ?, ?)', row.token_hash, row.username, row.csrf, await sessionTag(env, row), row.expires).run();
   await db.audit('login', {user: env.DASHBOARD_USER, ip});
   return {token, csrf};
 }
