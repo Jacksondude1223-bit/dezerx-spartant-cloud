@@ -22,6 +22,7 @@ const PRODUCTS = {SPARTANSTARTER_: 'Starter', SPARTANCLOUD_: 'Cloud', SPARTANCLO
 const LOCAL_TIMEOUT = 15 * 60000;
 // Cloudflare ends a proxied request after 100 seconds; the node carries on regardless.
 const REMOTE_TIMEOUT = 110000;
+const DEPLOY_WAIT = 20 * 60000;
 
 export class ProvisionError extends Error { constructor(status, code) { super(code); this.status = status; } }
 
@@ -185,6 +186,10 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const region = role === 'primary' ? item.primary : item.secondary;
     item.steps[role] = 'running';
     await persist();
+    // A first boot runs migrations and seeders, which can take several minutes; each node
+    // call only waits about 30 s for health, so keep asking until the deadline.
+    const deadline = now() + DEPLOY_WAIT;
+    const exhausted = attempt => attempt >= 60 || now() >= deadline;
     for (let attempt = 1; ; attempt++) {
       const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: await permit(item), ...(role === 'primary' ? {initialAdmin: admin} : {})};
       try {
@@ -194,10 +199,10 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         // Timeouts and gateway errors mean the node is still working; the retry joins its queue.
         const transient = error instanceof ProvisionError && (error.status >= 500 || error.status === 429 || error.message === 'domain_verification_required');
         if (error.message === 'domain_verification_required') permits.delete(item.id);
-        if (!transient || attempt >= 8) { item.steps[role] = 'failed'; throw error; }
+        if (!transient || exhausted(attempt)) { item.steps[role] = 'failed'; throw error; }
       }
-      if (attempt >= 8) { item.steps[role] = 'failed'; throw new ProvisionError(504, 'not_ready_in_time'); }
-      await sleep(Math.min(5000 * attempt, 30000));
+      if (exhausted(attempt)) { item.steps[role] = 'failed'; throw new ProvisionError(504, 'not_ready_in_time'); }
+      await sleep(Math.min(5000 * attempt, 20000));
     }
   }
 
