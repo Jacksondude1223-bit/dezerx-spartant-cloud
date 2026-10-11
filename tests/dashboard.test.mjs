@@ -45,6 +45,7 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     if (req.url === '/admin/overview') return json(200, {region: 'us', host: 'node-us.example.test', node: {status: 'ready'}, tenants: [{id, status: 'ready'}]});
     if (req.url === '/admin/exec') return json(200, {id, exitCode: 0, stdout: 'hello\n', stderr: '', cwd: '/var/www/html'});
     if (req.url === '/admin/fs') return json(403, {error: 'permission_denied'});
+    if (req.url === '/admin/resources') return json(200, {id, cpuLimit: String(input.cpuLimit ?? '2.5'), cpuLimitSource: input.cpuLimit === null ? 'node' : 'tenant', nodeCpuDefault: '2.5', applied: true});
     if (req.url === '/admin/fs/download') { res.writeHead(200, {'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="app.php"', 'content-length': '5'}); res.end('<?php'); return; }
     json(404, {error: 'not_found'});
   });
@@ -82,6 +83,12 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     assert.equal(exec.status, 200);
     assert.equal((await exec.json()).stdout, 'hello\n');
     assert.deepEqual(calls.find(call => call.path === '/admin/exec').input, {id, command: 'echo hello', user: 'www-data'});
+    const cpu = await post(`/api/nodes/us/tenants/${id}/resources`, {cpuLimit: '3.5'}, {cookie, 'x-csrf-token': csrf});
+    assert.equal(cpu.status, 200);
+    assert.equal((await cpu.json()).cpuLimit, '3.5');
+    assert.deepEqual(calls.find(call => call.path === '/admin/resources').input, {id, cpuLimit: '3.5'}, 'the CPU limit is forwarded, signed, to the node');
+    assert.equal((await post(`/api/nodes/us/tenants/${id}/resources`, {}, {cookie, 'x-csrf-token': csrf})).status, 422, 'a missing limit is refused');
+    assert.equal((await post(`/api/nodes/us/tenants/${id}/resources`, {cpuLimit: '2'}, {cookie})).status, 403, 'CSRF token required');
     const denied = await post(`/api/nodes/us/tenants/${id}/fs`, {action: 'delete', path: '/etc/passwd'}, {cookie, 'x-csrf-token': csrf});
     assert.equal(denied.status, 403);
     assert.equal((await denied.json()).error, 'permission_denied');
@@ -93,6 +100,7 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     assert.equal((await post('/api/nodes/us/tenants/not-a-tenant/exec', {command: 'id'}, {cookie, 'x-csrf-token': csrf})).status, 404);
     const activity = await (await fetch(`${origin}/api/activity`, {headers: {cookie}})).json();
     assert.ok(activity.events.some(e => e.action === 'exec' && e.command === 'echo hello'));
+    assert.ok(activity.events.some(e => e.action === 'cpu_limit' && e.cpuLimit === '3.5'), 'CPU limit changes are audited');
     assert.ok(logged.some(e => e.event === 'login_failed'));
     assert.equal(JSON.stringify(logged).includes('a long admin password'), false, 'passwords are never logged');
     assert.equal((await post('/api/logout', {}, {cookie, 'x-csrf-token': csrf})).status, 200);

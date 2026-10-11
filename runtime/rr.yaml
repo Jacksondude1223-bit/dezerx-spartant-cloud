@@ -7,9 +7,10 @@ rpc:
 http:
   address: 127.0.0.1:8000
   middleware: []
+  # octane:start overrides both from OCTANE_WORKERS / OCTANE_MAX_REQUESTS (entrypoint.sh).
   pool:
-    num_workers: 2
-    max_jobs: 500
+    num_workers: 4
+    max_jobs: 10000
 logs:
   mode: production
   level: warn

@@ -3782,6 +3782,188 @@
         }
       }
     },
+    "/control/resources": {
+      "post": {
+        "operationId": "manage_resources",
+        "summary": "Set an instance's CPU limit",
+        "tags": [
+          "Nodes"
+        ],
+        "servers": [
+          {
+            "url": "https://node-us.yourdomain.com",
+            "description": "US node; replace hostname"
+          },
+          {
+            "url": "https://node-de.yourdomain.com",
+            "description": "Germany node; replace hostname"
+          }
+        ],
+        "security": [
+          {
+            "Timestamp": [],
+            "Signature": []
+          }
+        ],
+        "x-hmac-secret": "ORIGIN_SECRET",
+        "x-hmac-secret-override": "NODE_CONTROL_SECRET",
+        "description": "Applies the limit to the running container with docker update (no restart) and stores it for later recreations. Send null to return to the node default (TENANT_CPUS, 2.5 on new nodes). See docs/MANAGEMENT-API.md.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "fingerprint",
+                  "cpuLimit"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "pattern": "^t-[a-f0-9]{24}$"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$"
+                  },
+                  "cpuLimit": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "pattern": "^\\d{1,2}(?:\\.\\d{1,2})?$",
+                        "description": "CPUs between 0.1 and 64, for example \"2.5\""
+                      },
+                      {
+                        "type": "number",
+                        "minimum": 0.1,
+                        "maximum": 64
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success; inspect returned status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ownership, state or file conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Service terminated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Size limit exceeded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate or concurrency limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Dependency failure or node update in progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "invalid_cpu_limit or cpu_limit_exceeds_host",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/routing/instances/{id}/hostname": {
       "post": {
         "operationId": "allocateInstanceHostname",
@@ -4052,6 +4234,23 @@
             "minLength": 16,
             "maxLength": 256,
             "description": "Spartan licence issued for this service's domain. Written only to the tenant environment and its state file; never logged or returned."
+          },
+          "cpuLimit": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{1,2}(?:\\.\\d{1,2})?$"
+              },
+              {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional CPU limit for this instance (0.1-64). Omitted keeps the current limit; new instances use the node default (TENANT_CPUS, 2.5 on new nodes). null returns to the node default."
           }
         },
         "required": [

@@ -145,7 +145,7 @@
     const op = m[3];
     if (op === 'detail') {
       const r = resources(t);
-      return {...strip(t), region: t.region, running: t.container.running, containerHealth: 'not_configured', applicationHealthy: t.container.running, versions: t.container.running ? {spartan: '4.12.0', laravel: '12.31.1', php: '8.4.13'} : null, storageBytes: 412 * MB + t.baseMem * 13000,
+      return {...strip(t), region: t.region, running: t.container.running, containerHealth: 'not_configured', cpuLimit: t.cpuLimit || '2.5', cpuLimitSource: t.cpuLimit ? 'tenant' : 'node', nodeCpuDefault: '2.5', applicationHealthy: t.container.running, versions: t.container.running ? {spartan: '4.12.0', laravel: '12.31.1', php: '8.4.13'} : null, storageBytes: 412 * MB + t.baseMem * 13000,
         resources: r && {cpuPercent: r.cpuPercent, memoryUsage: `${(r.memoryUsedBytes / MB).toFixed(1)}MiB / 2GiB`, memoryPercent: r.memoryUsedBytes / (2 * GB) * 100, networkIO: '1.2GB / 3.4GB', blockIO: '210MB / 960MB', processes: r.processes},
         sampledAt: new Date().toISOString(), container: {state: t.container.running ? 'running' : 'exited', running: t.container.running, startedAt: new Date(Date.now() - 2.6e8).toISOString(), restartCount: 1, createdAt: '2026-09-02T10:15:00Z', exitCode: 0, oomKilled: false}};
     }
@@ -155,6 +155,12 @@
     if (op === 'container') { await sleep(900); t.container = body.action === 'stop' ? {state: 'exited', running: false} : {state: 'running', running: true}; note(t.region, t.id, `container_${body.action}`); return {id: t.id, action: body.action, done: true}; }
     if (op === 'reload') { await sleep(700); note(t.region, t.id, 'reload'); return {id: t.id, reloaded: true}; }
     if (op === 'upgrade') { await sleep(1200); note(t.region, t.id, 'upgrade'); return {id: t.id, status: 'current', image}; }
+    if (op === 'resources') {
+      const value = body.cpuLimit === null ? null : String(body.cpuLimit);
+      if (value !== null && !(/^\d{1,2}(?:\.\d{1,2})?$/.test(value) && Number(value) >= 0.1 && Number(value) <= 64)) throw err('invalid_cpu_limit', 422);
+      await sleep(400); t.cpuLimit = value === null ? undefined : String(Number(value)); note(t.region, t.id, 'cpu_limit');
+      return {id: t.id, cpuLimit: t.cpuLimit || '2.5', cpuLimitSource: t.cpuLimit ? 'tenant' : 'node', nodeCpuDefault: '2.5', applied: true};
+    }
     throw err('not_found', 404);
   }
   // Simulated create-instance flow: custom domains verify on the second check, deploys finish in ~12 s.
