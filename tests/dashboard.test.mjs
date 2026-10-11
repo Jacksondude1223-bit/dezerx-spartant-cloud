@@ -41,7 +41,8 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     const input = JSON.parse(body);
     calls.push({path: req.url, input});
     const json = (status, value) => { res.writeHead(status, {'content-type': 'application/json'}); res.end(JSON.stringify(value)); };
-    if (req.url === '/admin/overview') return json(200, {region: 'us', node: {status: 'ready'}, tenants: [{id, status: 'ready'}]});
+    if (req.url === '/admin/ping') return json(200, {ok: true, region: 'us'});
+    if (req.url === '/admin/overview') return json(200, {region: 'us', host: 'node-us.example.test', node: {status: 'ready'}, tenants: [{id, status: 'ready'}]});
     if (req.url === '/admin/exec') return json(200, {id, exitCode: 0, stdout: 'hello\n', stderr: '', cwd: '/var/www/html'});
     if (req.url === '/admin/fs') return json(403, {error: 'permission_denied'});
     if (req.url === '/admin/fs/download') { res.writeHead(200, {'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="app.php"', 'content-length': '5'}); res.end('<?php'); return; }
@@ -74,6 +75,8 @@ test('dashboard signs node calls, enforces sessions and CSRF, and streams downlo
     const overview = await (await fetch(`${origin}/api/overview`, {headers: {cookie}})).json();
     assert.equal(overview.nodes[0].ok, true);
     assert.equal(overview.nodes[0].tenants[0].id, id);
+    assert.equal(overview.nodes[0].host, 'node-us.example.test', 'the node\'s public name replaces the loopback address');
+    assert.ok(Number.isInteger(overview.nodes[0].latencyMs), 'latency comes from the ping route');
     assert.equal((await post(`/api/nodes/us/tenants/${id}/exec`, {command: 'echo hello'}, {cookie})).status, 403, 'CSRF token required');
     const exec = await post(`/api/nodes/us/tenants/${id}/exec`, {command: 'echo hello', user: 'www-data'}, {cookie, 'x-csrf-token': csrf});
     assert.equal(exec.status, 200);

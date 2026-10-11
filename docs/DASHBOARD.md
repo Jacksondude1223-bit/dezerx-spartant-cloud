@@ -58,7 +58,8 @@ Every route is `POST` to a node origin. Requests are signed exactly like `/contr
 
 | Route | Body | Result |
 | --- | --- | --- |
-| `/admin/overview` | `{}` | Node health plus every tenant with container state and live usage (`cpuPercent`, `memoryUsedBytes`, `memoryLimitBytes`, network and block I/O bytes, `processes`) |
+| `/admin/ping` | `{}` | `{ok, region}` at once; the dashboard times it to show latency |
+| `/admin/overview` | `{}` | The node's public `host`, node health (including `dockerVersion` and host network throughput: `network.rxBytesPerSecond`, `txBytesPerSecond`, `linkMbps` where the NIC reports it) plus every tenant with container state and live usage (`cpuPercent`, `memoryUsedBytes`, `memoryLimitBytes`, network and block I/O bytes, `processes`) |
 | `/admin/tenants` | `{"stats": true}` optional | The tenant list, with usage when `stats` is true |
 | `/admin/stats` | `{}` | `docker stats` for every running tenant container, parsed into numbers |
 | `/admin/tenant` | `id` | Summary, health, resources, `versions.json`, storage bytes, start time, restart count, OOM flag |

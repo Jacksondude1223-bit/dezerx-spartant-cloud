@@ -61,10 +61,46 @@ export function validateEnvironment(before, after) {
   return Object.entries(next).map(([key, value]) => `${key}=${value}`).join('\n') + '\n';
 }
 
-export function createManagement({cfg, root, load, save, docker, mysql, applicationHealth, inputProcess = processInput, launch = spawn}) {
+// Sums received/sent bytes over the host's real interfaces from /proc/net/dev. Loopback,
+// container veths, bridges and tunnels are skipped so container traffic is not counted twice.
+export function readNetDev(text) {
+  let rx = 0, tx = 0;
+  const names = [];
+  for (const line of String(text).split('\n').slice(2)) {
+    const colon = line.indexOf(':');
+    if (colon === -1) continue;
+    const name = line.slice(0, colon).trim();
+    if (!name || /^(lo|veth|docker|br-|virbr|cni|flannel|kube|tun|tap|wg|tailscale|ifb|dummy)/.test(name)) continue;
+    const fields = line.slice(colon + 1).trim().split(/\s+/).map(Number);
+    if (!Number.isFinite(fields[0]) || !Number.isFinite(fields[8])) continue;
+    rx += fields[0]; tx += fields[8]; names.push(name);
+  }
+  return {rx, tx, names};
+}
+
+export function createManagement({cfg, root, load, save, docker, mysql, applicationHealth, inputProcess = processInput, launch = spawn, netDevPath = '/proc/net/dev', sysNetPath = '/sys/class/net'}) {
   let previous = os.cpus().map(cpu => cpu.times);
   let cpuPercent = null;
+  let network = {rxBytesPerSecond: null, txBytesPerSecond: null, linkMbps: null};
+  let previousNet = null;
+  const sampleNetwork = async () => {
+    try {
+      const current = {...readNetDev(await readFile(netDevPath, 'utf8')), at: Date.now()};
+      if (previousNet && current.at > previousNet.at) {
+        const seconds = (current.at - previousNet.at) / 1000;
+        network = {...network, rxBytesPerSecond: Math.max(0, Math.round((current.rx - previousNet.rx) / seconds)), txBytesPerSecond: Math.max(0, Math.round((current.tx - previousNet.tx) / seconds))};
+      }
+      if (network.linkMbps === null && current.names[0]) {
+        // Many VPS NICs report -1 here; the dashboard then scales against 1 Gbit/s.
+        const speed = Number((await readFile(path.join(sysNetPath, current.names[0], 'speed'), 'utf8').catch(() => '')).trim());
+        network.linkMbps = speed > 0 ? speed : 0;
+      }
+      previousNet = current;
+    } catch {}
+  };
+  sampleNetwork();
   const sampler = setInterval(() => {
+    sampleNetwork();
     const current = os.cpus().map(cpu => cpu.times);
     let total = 0, idle = 0;
     current.forEach((cpu, i) => {
@@ -95,12 +131,12 @@ export function createManagement({cfg, root, load, save, docker, mysql, applicat
     return {record, inspect};
   }
   async function nodeHealth() {
-    let dockerReady = false;
-    try { await docker(['info', '--format', '{{.ServerVersion}}']); dockerReady = true; } catch {}
+    let dockerReady = false, dockerVersion = null;
+    try { dockerVersion = String(await docker(['info', '--format', '{{.ServerVersion}}'])).trim().slice(0, 40) || null; dockerReady = true; } catch {}
     const databaseReady = await mysql.ready();
     const disk = await statfs(root, {bigint: true});
-    return {region: cfg.NODE_REGION, status: dockerReady && databaseReady ? 'ready' : 'degraded', dockerReady, databaseReady,
-      resources: {cpu: {cores: os.cpus().length, usagePercent: cpuPercent, loadAverage: os.loadavg()}, memory: {totalBytes: os.totalmem(), usedBytes: os.totalmem() - os.freemem(), freeBytes: os.freemem()}, disk: {totalBytes: Number(disk.blocks * disk.bsize), availableBytes: Number(disk.bavail * disk.bsize), usedBytes: Number((disk.blocks - disk.bfree) * disk.bsize)}, uptimeSeconds: os.uptime()}, sampledAt: new Date().toISOString()};
+    return {region: cfg.NODE_REGION, status: dockerReady && databaseReady ? 'ready' : 'degraded', dockerReady, dockerVersion, databaseReady,
+      resources: {cpu: {cores: os.cpus().length, usagePercent: cpuPercent, loadAverage: os.loadavg()}, memory: {totalBytes: os.totalmem(), usedBytes: os.totalmem() - os.freemem(), freeBytes: os.freemem()}, disk: {totalBytes: Number(disk.blocks * disk.bsize), availableBytes: Number(disk.bavail * disk.bsize), usedBytes: Number((disk.blocks - disk.bfree) * disk.bsize)}, network: {...network}, uptimeSeconds: os.uptime()}, sampledAt: new Date().toISOString()};
   }
   async function information(input, health = false) {
     const {record, inspect} = await tenant(input);

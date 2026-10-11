@@ -412,7 +412,10 @@ export function createAdmin({cfg, root, load, management, launch = spawn, env = 
   }
   async function overview() {
     const [node, list] = await Promise.all([management.nodeHealth(), tenants({withStats: true})]);
-    return {region: cfg.NODE_REGION, node, tenants: list, sampledAt: new Date().toISOString()};
+    // The node's own public hostname, so a dashboard reaching it over loopback can still name it.
+    let host = null;
+    try { host = new URL(cfg.NODE_REGION === 'us' ? cfg.US_ORIGIN : cfg.DE_ORIGIN).host; } catch {}
+    return {region: cfg.NODE_REGION, host, node, tenants: list, sampledAt: new Date().toISOString()};
   }
   async function detail(input) {
     const value = await record(input);

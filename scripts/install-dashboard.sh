@@ -174,7 +174,8 @@ fi
 
 install -d -m 755 "$install_dir" "$install_dir/public"
 install -m 644 "$repo/dashboard/server.mjs" "$install_dir/server.mjs"
-for file in index.html app.js styles.css favicon.svg; do install -m 644 "$repo/dashboard/public/$file" "$install_dir/public/$file"; done
+rm -f "$install_dir/public/favicon.svg"
+for file in index.html app.js styles.css favicon.png logo.png; do install -m 644 "$repo/dashboard/public/$file" "$install_dir/public/$file"; done
 node_path="$(command -v node)"
 cat > /etc/systemd/system/spartan-dashboard.service <<EOF
 [Unit]

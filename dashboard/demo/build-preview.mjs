@@ -6,7 +6,9 @@ import {fileURLToPath} from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const read = file => readFile(path.join(here, file), 'utf8');
-const [styles, app, demo, favicon] = await Promise.all([read('../public/styles.css'), read('../public/app.js'), read('demo.js'), read('../public/favicon.svg')]);
+const [styles, app, demo] = await Promise.all([read('../public/styles.css'), read('../public/app.js'), read('demo.js')]);
+const png = async file => `data:image/png;base64,${(await readFile(path.join(here, '../public', file))).toString('base64')}`;
+const [logo, favicon] = await Promise.all([png('logo.png'), png('favicon.png')]);
 const guard = text => text.replace(/<\/script/gi, '<\\/script');
 const html = `<!doctype html>
 <html lang="en">
@@ -14,12 +16,13 @@ const html = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spartan Cloud Admin</title>
-<link rel="icon" href="data:image/svg+xml,${encodeURIComponent(favicon.trim())}">
+<link rel="icon" href="${favicon}">
 <style>${styles}</style>
 </head>
 <body>
 <div id="root"></div>
 <div class="toasts" id="toasts" aria-live="polite"></div>
+<script>window.SPARTAN_LOGO = ${JSON.stringify(logo)};</script>
 <script>${guard(demo)}</script>
 <script>${guard(app)}</script>
 </body>

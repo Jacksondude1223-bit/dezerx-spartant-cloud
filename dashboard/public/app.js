@@ -62,45 +62,53 @@ function h(tag, props, ...children) {
   for (const child of children.flat(Infinity)) if (child !== null && child !== undefined && child !== false) el.append(child instanceof Node ? child : String(child));
   return el;
 }
+// Tabler Icons (MIT, https://tabler.io/icons), outline set.
 const ICONS = {
-  home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
-  server: '<rect x="3" y="3" width="18" height="8" rx="2"/><rect x="3" y="13" width="18" height="8" rx="2"/><path d="M7 7h.01M7 17h.01"/>',
-  cube: '<path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/>',
-  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
-  refresh: '<path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/>',
-  cpu: '<rect x="5" y="5" width="14" height="14" rx="2"/><rect x="9" y="9" width="6" height="6" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/>',
-  memory: '<rect x="2" y="7" width="20" height="10" rx="2"/><path d="M6 11v2M10 11v2M14 11v2M18 11v2M6 17v3M18 17v3"/>',
-  disk: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
-  layers: '<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5M2 12l10 5 10-5"/>',
-  folder: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
-  folderPlus: '<path d="M3 6a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 10v6M9 13h6"/>',
-  file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
-  filePlus: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 12v6M9 15h6"/>',
-  link: '<path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1 1"/><path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1-1"/>',
-  terminal: '<path d="m4 17 6-5-6-5M12 19h8"/>',
-  logs: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
-  play: '<path d="m7 4 13 8-13 8z"/>',
-  stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
-  upload: '<path d="M12 15V3M7 8l5-5 5 5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
-  download: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  trash: '<path d="M3 6h18M8 6V4h8v2M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/>',
-  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
-  lock: '<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
-  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
-  external: '<path d="M15 3h6v6M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>',
-  arrowUp: '<path d="M12 19V5M5 12l7-7 7 7"/>',
-  search: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
-  alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/>',
-  info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>',
-  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
-  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
-  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8M10 12h4"/>',
-  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
-  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
-  database: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
-  clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
-  globe: '<circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/>'
+  home: "<path d=\"M5 12l-2 0l9 -9l9 9l-2 0\"/><path d=\"M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-7\"/><path d=\"M9 21v-6a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v6\"/>",
+  server: "<path d=\"M3 7a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-2\"/><path d=\"M3 15a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v2a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3l0 -2\"/><path d=\"M7 8l0 .01\"/><path d=\"M7 16l0 .01\"/><path d=\"M11 8h6\"/><path d=\"M11 16h6\"/>",
+  layers: "<path d=\"M12 4l-8 4l8 4l8 -4l-8 -4\"/><path d=\"M4 12l8 4l8 -4\"/><path d=\"M4 16l8 4l8 -4\"/>",
+  docker: "<path d=\"M22 12.54c-1.804 -.345 -2.701 -1.08 -3.523 -2.94c-.487 .696 -1.102 1.568 -.92 2.4c.028 .238 -.32 1 -.557 1h-14c0 5.208 3.164 7 6.196 7c4.124 .022 7.828 -1.376 9.854 -5c1.146 -.101 2.296 -1.505 2.95 -2.46\"/><path d=\"M5 10h3v3h-3l0 -3\"/><path d=\"M8 10h3v3h-3l0 -3\"/><path d=\"M11 10h3v3h-3l0 -3\"/><path d=\"M8 7h3v3h-3l0 -3\"/><path d=\"M11 7h3v3h-3l0 -3\"/><path d=\"M11 4h3v3h-3l0 -3\"/><path d=\"M4.571 18c1.5 0 2.047 -.074 2.958 -.78\"/><path d=\"M10 16l0 .01\"/>",
+  activity: "<path d=\"M3 12h4l3 8l4 -16l3 8h4\"/>",
+  refresh: "<path d=\"M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4\"/><path d=\"M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4\"/>",
+  cpu: "<path d=\"M5 6a1 1 0 0 1 1 -1h12a1 1 0 0 1 1 1v12a1 1 0 0 1 -1 1h-12a1 1 0 0 1 -1 -1l0 -12\"/><path d=\"M9 9h6v6h-6l0 -6\"/><path d=\"M3 10h2\"/><path d=\"M3 14h2\"/><path d=\"M10 3v2\"/><path d=\"M14 3v2\"/><path d=\"M21 10h-2\"/><path d=\"M21 14h-2\"/><path d=\"M14 21v-2\"/><path d=\"M10 21v-2\"/>",
+  memory: "<path d=\"M12 11v2\"/><path d=\"M16 11v2\"/><path d=\"M3 7h18a1 1 0 0 1 1 1v1a1 1 0 0 1 -1 1a1 1 0 0 0 -1 1v1a1 1 0 0 0 1 1a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-18a1 1 0 0 1 -1 -1v-2a1 1 0 0 1 1 -1a1 1 0 0 0 1 -1v-1a1 1 0 0 0 -1 -1a1 1 0 0 1 -1 -1v-1a1 1 0 0 1 1 -1\"/><path d=\"M8 11v2\"/><path d=\"M4 17v2\"/><path d=\"M7 17v2\"/><path d=\"M10 17v2\"/><path d=\"M20 17v2\"/><path d=\"M17 17v2\"/><path d=\"M13 17v2\"/>",
+  disk: "<path d=\"M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0\"/><path d=\"M4 6v6a8 3 0 0 0 16 0v-6\"/><path d=\"M4 12v6a8 3 0 0 0 16 0v-6\"/>",
+  network: "<path d=\"M17 3l0 18\"/><path d=\"M10 18l-3 3l-3 -3\"/><path d=\"M7 21l0 -18\"/><path d=\"M20 6l-3 -3l-3 3\"/>",
+  world: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M3.6 9h16.8\"/><path d=\"M3.6 15h16.8\"/><path d=\"M11.5 3a17 17 0 0 0 0 18\"/><path d=\"M12.5 3a17 17 0 0 1 0 18\"/>",
+  folder: "<path d=\"M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2\"/>",
+  folderPlus: "<path d=\"M12 19h-7a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v3.5\"/><path d=\"M16 19h6\"/><path d=\"M19 16v6\"/>",
+  file: "<path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/>",
+  filePlus: "<path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/><path d=\"M12 11l0 6\"/><path d=\"M9 14l6 0\"/>",
+  fileZip: "<path d=\"M6 20.735a2 2 0 0 1 -1 -1.735v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2h-1\"/><path d=\"M11 17a2 2 0 0 1 2 2v2a1 1 0 0 1 -1 1h-2a1 1 0 0 1 -1 -1v-2a2 2 0 0 1 2 -2\"/><path d=\"M11 5l-1 0\"/><path d=\"M13 7l-1 0\"/><path d=\"M11 9l-1 0\"/><path d=\"M13 11l-1 0\"/><path d=\"M11 13l-1 0\"/><path d=\"M13 15l-1 0\"/>",
+  fileCode: "<path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/><path d=\"M10 13l-1 2l1 2\"/><path d=\"M14 13l1 2l-1 2\"/>",
+  fileText: "<path d=\"M14 3v4a1 1 0 0 0 1 1h4\"/><path d=\"M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2\"/><path d=\"M9 9l1 0\"/><path d=\"M9 13l6 0\"/><path d=\"M9 17l6 0\"/>",
+  photo: "<path d=\"M15 8h.01\"/><path d=\"M3 6a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v12a3 3 0 0 1 -3 3h-12a3 3 0 0 1 -3 -3v-12\"/><path d=\"M3 16l5 -5c.928 -.893 2.072 -.893 3 0l5 5\"/><path d=\"M14 14l1 -1c.928 -.893 2.072 -.893 3 0l3 3\"/>",
+  link: "<path d=\"M9 15l6 -6\"/><path d=\"M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464\"/><path d=\"M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463\"/>",
+  terminal: "<path d=\"M8 9l3 3l-3 3\"/><path d=\"M13 15l3 0\"/><path d=\"M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v12a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2l0 -12\"/>",
+  logs: "<path d=\"M4 12h.01\"/><path d=\"M4 6h.01\"/><path d=\"M4 18h.01\"/><path d=\"M8 18h2\"/><path d=\"M8 12h2\"/><path d=\"M8 6h2\"/><path d=\"M14 6h6\"/><path d=\"M14 12h6\"/><path d=\"M14 18h6\"/>",
+  play: "<path d=\"M7 4v16l13 -8l-13 -8\"/>",
+  stop: "<path d=\"M5 7a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -10\"/>",
+  upload: "<path d=\"M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2\"/><path d=\"M7 9l5 -5l5 5\"/><path d=\"M12 4l0 12\"/>",
+  download: "<path d=\"M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2\"/><path d=\"M7 11l5 5l5 -5\"/><path d=\"M12 4l0 12\"/>",
+  plus: "<path d=\"M12 5l0 14\"/><path d=\"M5 12l14 0\"/>",
+  trash: "<path d=\"M4 7l16 0\"/><path d=\"M10 11l0 6\"/><path d=\"M14 11l0 6\"/><path d=\"M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12\"/><path d=\"M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3\"/>",
+  edit: "<path d=\"M4 20h4l10.5 -10.5a2.828 2.828 0 1 0 -4 -4l-10.5 10.5v4\"/><path d=\"M13.5 6.5l4 4\"/>",
+  lock: "<path d=\"M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-6\"/><path d=\"M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0\"/><path d=\"M8 11v-4a4 4 0 1 1 8 0v4\"/>",
+  more: "<path d=\"M4 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/><path d=\"M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/><path d=\"M18 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0\"/>",
+  external: "<path d=\"M12 6h-6a2 2 0 0 0 -2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-6\"/><path d=\"M11 13l9 -9\"/><path d=\"M15 4h5v5\"/>",
+  upgrade: "<path d=\"M12 10l0 10\"/><path d=\"M12 10l4 4\"/><path d=\"M12 10l-4 4\"/><path d=\"M4 4l16 0\"/>",
+  search: "<path d=\"M3 10a7 7 0 1 0 14 0a7 7 0 1 0 -14 0\"/><path d=\"M21 21l-6 -6\"/>",
+  alert: "<path d=\"M12 9v4\"/><path d=\"M10.363 3.591l-8.106 13.534a1.914 1.914 0 0 0 1.636 2.871h16.214a1.914 1.914 0 0 0 1.636 -2.87l-8.106 -13.536a1.914 1.914 0 0 0 -3.274 0\"/><path d=\"M12 16h.01\"/>",
+  info: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M12 9h.01\"/><path d=\"M11 12h1v4h1\"/>",
+  logout: "<path d=\"M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2\"/><path d=\"M9 12h12l-3 -3\"/><path d=\"M18 15l3 -3\"/>",
+  copy: "<path d=\"M7 9.667a2.667 2.667 0 0 1 2.667 -2.667h8.666a2.667 2.667 0 0 1 2.667 2.667v8.666a2.667 2.667 0 0 1 -2.667 2.667h-8.666a2.667 2.667 0 0 1 -2.667 -2.667l0 -8.666\"/><path d=\"M4.012 16.737a2.005 2.005 0 0 1 -1.012 -1.737v-10c0 -1.1 .9 -2 2 -2h10c.75 0 1.158 .385 1.5 1\"/>",
+  archive: "<path d=\"M3 6a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2\"/><path d=\"M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2 -2v-10\"/><path d=\"M10 12l4 0\"/>",
+  user: "<path d=\"M8 7a4 4 0 1 0 8 0a4 4 0 0 0 -8 0\"/><path d=\"M6 21v-2a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2\"/>",
+  zap: "<path d=\"M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11\"/>",
+  database: "<path d=\"M4 6a8 3 0 1 0 16 0a8 3 0 1 0 -16 0\"/><path d=\"M4 6v6a8 3 0 0 0 16 0v-6\"/><path d=\"M4 12v6a8 3 0 0 0 16 0v-6\"/>",
+  clock: "<path d=\"M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0\"/><path d=\"M12 7v5l3 3\"/>",
+  arrowDown: "<path d=\"M12 5l0 14\"/><path d=\"M18 13l-6 6\"/><path d=\"M6 13l6 6\"/>",
+  arrowUp: "<path d=\"M12 5l0 14\"/><path d=\"M18 11l-6 -6\"/><path d=\"M6 11l6 -6\"/>"
 };
 function icon(name) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -110,6 +118,28 @@ function icon(name) {
   el.innerHTML = ICONS[name] || '';
   return el;
 }
+const LOGO = window.SPARTAN_LOGO || 'logo.png';
+const brandMark = () => h('span', {class: 'brand-mark'}, h('img', {src: LOGO, alt: '', width: '18', height: '18'}));
+// Small inline flags (national flags are public domain); emoji flags do not render on Windows.
+function flag(region) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = document.createElementNS(ns, 'svg');
+  el.setAttribute('aria-hidden', 'true');
+  if (region === 'de') {
+    el.setAttribute('viewBox', '0 0 5 3');
+    el.innerHTML = '<rect width="5" height="1" fill="#000"/><rect y="1" width="5" height="1" fill="#DD0000"/><rect y="2" width="5" height="1" fill="#FFCE00"/>';
+  } else if (region === 'us') {
+    el.setAttribute('viewBox', '0 0 19 10');
+    let stripes = '';
+    for (let i = 0; i < 13; i += 2) stripes += `<rect y="${(i * 10 / 13).toFixed(3)}" width="19" height="${(10 / 13).toFixed(3)}" fill="#B22234"/>`;
+    let stars = '';
+    for (let row = 0; row < 9; row++) for (let col = 0; col < (row % 2 ? 5 : 6); col++) stars += `<circle cx="${(0.63 + col * 1.27 + (row % 2 ? 0.635 : 0)).toFixed(2)}" cy="${(0.3 + row * 0.6).toFixed(2)}" r="0.2" fill="#fff"/>`;
+    el.innerHTML = `<rect width="19" height="10" fill="#fff"/>${stripes}<rect width="7.6" height="5.385" fill="#3C3B6E"/>${stars}`;
+  } else return null;
+  return h('span', {class: 'flag', title: regionName(region)}, el);
+}
+const badge = ({tone = '', label}) => h('span', {class: 'badge'}, h('span', {class: `dot ${tone}`}), label);
+const rate = value => value === null || value === undefined || !Number.isFinite(value) ? '—' : `${bytes(value)}/s`;
 const button = (label, {icon: name, kind = '', onClick, title, disabled, small} = {}) => h('button', {type: 'button', class: `btn ${kind} ${small ? 'small' : ''}`.trim(), onclick: onClick, title, disabled}, name ? icon(name) : null, label);
 
 /* ---------------------------------------------------------------- formatting */
@@ -148,11 +178,6 @@ const when = epoch => { const d = new Date(epoch * 1000); return Number.isFinite
 const shortImage = image => { const m = String(image || '').match(/^(.*?)@sha256:([a-f0-9]{12})/); return m ? `${m[1].split('/').pop()}@${m[2]}` : image || '—'; };
 const hostOf = tenant => { try { return new URL(tenant.activeUrl || tenant.url).host; } catch { return tenant.id; } };
 const regionName = region => ({us: 'United States', de: 'Germany'})[region] || region.toUpperCase();
-function hue(text) { let x = 0; for (const c of String(text)) x = (x * 31 + c.charCodeAt(0)) >>> 0; return x % 360; }
-function appIcon(text) {
-  const hueValue = hue(text);
-  return h('span', {class: 'app-icon', style: {color: `hsl(${hueValue} 55% 38%)`, background: `hsl(${hueValue} 70% 97%)`}}, String(text).replace(/^www\./, '').charAt(0) || '?');
-}
 function tenantStatus(t) {
   if (t.status === 'terminated') return {label: 'Terminated', tone: ''};
   if (t.status === 'suspended') return {label: 'Suspended', tone: ''};
@@ -261,17 +286,17 @@ async function overview(force = false) {
 }
 const allTenants = data => data.nodes.filter(n => n.ok).flatMap(n => n.tenants.map(t => ({...t, region: n.region})));
 const nodeOf = (data, region) => data.nodes.find(n => n.region === region);
-function nodeTone(n) { if (!n) return {tone: 'red', label: 'Unknown'}; if (!n.ok) return {tone: 'red', label: 'Unreachable'}; if (n.node.status !== 'ready') return {tone: 'amber', label: 'Degraded'}; return {tone: 'green', label: 'Agent online'}; }
+function nodeTone(n) { if (!n) return {tone: '', label: 'Unknown'}; if (!n.ok) return {tone: 'red', label: 'Unreachable'}; if (n.node.status !== 'ready') return {tone: 'amber', label: 'Degraded'}; return {tone: 'green', label: 'Online'}; }
 
 /* ---------------------------------------------------------------- shell */
 function sidebar(current) {
   const nodes = state.session?.nodes || [];
   const item = (hash, name, label, active, extra) => h('a', {class: `nav-item ${active ? 'active' : ''}`, href: hash}, icon(name), label, extra);
   return h('aside', {class: 'sidebar'},
-    h('div', {class: 'brand'}, h('span', {class: 'brand-mark'}, icon('cube')), state.session?.label || 'Spartan Cloud'),
+    h('div', {class: 'brand'}, brandMark(), state.session?.label || 'Spartan Cloud'),
     item('#/', 'home', 'Home', current === 'home'),
     h('div', {class: 'nav-label'}, 'Infrastructure'),
-    nodes.map(n => { const tone = nodeTone(state.overview && nodeOf(state.overview, n.region)); return item(`#/node/${n.region}`, 'server', `node-${n.region}`, current === `node:${n.region}`, h('span', {class: `dot ${state.overview ? tone.tone : ''}`, title: tone.label})); }),
+    nodes.map(n => { const tone = nodeTone(state.overview && nodeOf(state.overview, n.region)); return h('a', {class: `nav-item ${current === `node:${n.region}` ? 'active' : ''}`, href: `#/node/${n.region}`}, flag(n.region) || icon('server'), `node-${n.region}`, h('span', {class: `dot ${state.overview ? tone.tone : ''}`, title: tone.label})); }),
     item('#/tenants', 'layers', 'Tenants', current === 'tenants'),
     h('div', {class: 'nav-label'}, 'Monitoring'),
     item('#/activity', 'activity', 'Activity', current === 'activity'),
@@ -280,9 +305,9 @@ function sidebar(current) {
 }
 async function signOut() { try { await api.post('/api/logout'); } catch {} state.session = null; state.overview = null; render(); }
 function crumbs(items) { return h('nav', {class: 'crumbs', 'aria-label': 'Breadcrumb'}, items.map((it, i) => [i ? h('span', {class: 'sep'}, '›') : null, it.href ? h('a', {href: it.href}, it.label) : h('span', {class: 'here'}, it.label)])); }
-function pageHead({title, pill, meta = [], actions = []}) {
+function pageHead({title, pill, lead, subtitle, actions = []}) {
   return h('div', {class: 'page-head'},
-    h('div', {style: {minWidth: '0'}}, h('div', {class: 'title-row'}, h('h1', null, title), pill ? h('span', {class: `pill ${pill.tone || ''}`}, pill.label) : null), meta.length ? h('div', {class: 'meta mono'}, meta.filter(Boolean).map(m => h('span', null, m))) : null),
+    h('div', {style: {minWidth: '0'}}, h('div', {class: 'title-row'}, lead || null, h('h1', null, title), pill ? badge(pill) : null), subtitle ? h('div', {class: 'subtitle'}, subtitle) : null),
     h('div', {class: 'actions'}, actions));
 }
 function statCard(name, label, value, suffix, foot) {
@@ -342,7 +367,7 @@ function loginPage() {
     finally { submit.disabled = false; }
   }}, message, h('label', {class: 'field'}, h('span', null, 'Username'), user), h('label', {class: 'field'}, h('span', null, 'Password'), pass), code ? h('label', {class: 'field'}, h('span', null, 'Authenticator code'), code) : null, submit);
   setTimeout(() => user.focus(), 0);
-  return h('div', {class: 'login'}, h('div', {class: 'card'}, h('div', {class: 'brand'}, h('span', {class: 'brand-mark'}, icon('cube')), state.label || 'Spartan Cloud'), h('h1', null, 'Sign in'), h('p', null, 'Operator access to your nodes and tenants.'), form));
+  return h('div', {class: 'login'}, h('div', {class: 'card'}, h('div', {class: 'brand'}, brandMark(), state.label || 'Spartan Cloud'), h('h1', null, 'Sign in'), form));
 }
 
 /* ---------------------------------------------------------------- tenant table */
@@ -351,11 +376,11 @@ function tenantTable(list, {region = true, empty = 'No tenants yet'} = {}) {
   const rows = list.map(t => {
     const r = t.resources;
     return h('tr', {class: 'clickable', tabindex: '0', onclick: () => go(`#/tenant/${t.region}/${t.id}`), onkeydown: e => { if (e.key === 'Enter') go(`#/tenant/${t.region}/${t.id}`); }},
-      h('td', null, h('div', {class: 'name-cell'}, appIcon(hostOf(t)), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, hostOf(t)), h('div', {class: 'sub mono'}, t.id)))),
+      h('td', null, h('div', {class: 'name-cell'}, h('span', {class: 'app-icon'}, icon('docker')), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, hostOf(t)), h('div', {class: 'sub mono'}, t.id)))),
       h('td', null, statusCell(t)),
       h('td', null, r ? usage(r.cpuPercent) : h('span', {class: 'faint'}, '—')),
       h('td', null, r ? h('span', null, bytes(r.memoryUsedBytes), h('span', {class: 'faint'}, ` / ${bytes(r.memoryLimitBytes, 0)}`)) : h('span', {class: 'faint'}, '—')),
-      h('td', null, region ? `${t.region.toUpperCase()} · ${t.role || '—'}` : t.role || '—'),
+      h('td', null, region ? h('span', {class: 'label-icon'}, flag(t.region), t.role || '—') : t.role || '—'),
       h('td', {class: 'right mono'}, t.port ? String(t.port) : '—'));
   });
   return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null,
@@ -364,6 +389,36 @@ function tenantTable(list, {region = true, empty = 'No tenants yet'} = {}) {
 }
 
 /* ---------------------------------------------------------------- home */
+// One usage cell: a thin bar with the figure underneath.
+function usageCell(fraction, text) {
+  return h('div', {class: 'usage-cell'}, meter(fraction), h('span', null, text));
+}
+const linkBytes = r => (r.network?.linkMbps > 0 ? r.network.linkMbps : 1000) * 125000;
+function networkText(r) {
+  const n = r.network || {};
+  return h('span', {class: 'net', title: 'Received / sent per second'}, icon('arrowDown'), h('span', null, rate(n.rxBytesPerSecond)), icon('arrowUp'), h('span', null, rate(n.txBytesPerSecond)));
+}
+function nodeTable(nodes) {
+  const rows = nodes.map(n => {
+    const tone = nodeTone(n);
+    const go2 = () => go(`#/node/${n.region}`);
+    const name = h('td', null, h('div', {class: 'name-cell'}, flag(n.region), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, `node-${n.region}`), h('div', {class: 'sub'}, n.host))));
+    const status = h('td', null, h('div', {class: 'stack'}, h('span', {class: 'status'}, h('span', {class: `dot ${tone.tone}`}), tone.label), h('span', {class: 'sub'}, n.ok ? [n.latencyMs !== null && n.latencyMs !== undefined ? `${n.latencyMs} ms` : 'latency —', ` · up ${duration(n.node.resources.uptimeSeconds)}`] : explain(new ApiError(n.error)))));
+    if (!n.ok) return h('tr', {class: 'clickable', onclick: go2}, name, status, h('td', {colspan: '5', class: 'faint'}, 'No data'));
+    const r = n.node.resources;
+    const running = n.tenants.filter(t => t.container?.running).length;
+    const busiest = Math.max(r.network?.rxBytesPerSecond || 0, r.network?.txBytesPerSecond || 0);
+    return h('tr', {class: 'clickable', tabindex: '0', onclick: go2, onkeydown: e => { if (e.key === 'Enter') go2(); }}, name, status,
+      h('td', null, usageCell((r.cpu.usagePercent || 0) / 100, `${pct(r.cpu.usagePercent)} of ${r.cpu.cores} cores`)),
+      h('td', null, usageCell(r.memory.usedBytes / r.memory.totalBytes, `${bytes(r.memory.usedBytes)} / ${bytes(r.memory.totalBytes, 0)}`)),
+      h('td', null, usageCell(r.disk.usedBytes / r.disk.totalBytes, `${bytes(r.disk.usedBytes)} / ${bytes(r.disk.totalBytes, 0)}`)),
+      h('td', null, h('div', {class: 'usage-cell'}, meter(busiest / linkBytes(r)), networkText(r))),
+      h('td', {class: 'right'}, h('div', {class: 'stack right'}, h('span', null, String(n.tenants.length)), h('span', {class: 'sub'}, `${running} running`))));
+  });
+  return h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', {class: 'nodes'},
+    h('thead', null, h('tr', null, h('th', null, 'Node'), h('th', null, 'Status'), h('th', null, 'CPU'), h('th', null, 'Memory'), h('th', null, 'Disk'), h('th', null, 'Network'), h('th', {class: 'right'}, 'Tenants'))),
+    h('tbody', null, rows))));
+}
 async function homePage(ctx) {
   const draw = data => {
     const online = data.nodes.filter(n => n.ok);
@@ -375,33 +430,18 @@ async function homePage(ctx) {
     const tone = online.length === data.nodes.length ? 'green' : online.length ? 'amber' : 'red';
     ctx.fill([
       crumbs([{label: state.session.label}, {label: 'Overview'}]),
-      pageHead({title: 'Overview', pill: {tone, label: `${online.length} of ${data.nodes.length} nodes online`}, meta: [...data.nodes.map(n => n.host), `${tenants.length} tenants`], actions: [button('Refresh', {icon: 'refresh', onClick: () => refresh(true)}), h('a', {class: 'btn primary', href: '#/tenants'}, icon('layers'), 'All tenants')]}),
+      pageHead({title: 'Overview', pill: {tone, label: `${online.length} of ${data.nodes.length} nodes online`}, actions: [button('Refresh', {icon: 'refresh', onClick: () => refresh(true)}), h('a', {class: 'btn primary', href: '#/tenants'}, icon('layers'), 'All tenants')]}),
       h('div', {class: 'cards'},
-        statCard('cpu', 'CPU', pct(cpu), 'fleet average'),
+        statCard('cpu', 'CPU', pct(cpu), 'average across nodes'),
         statCard('memory', 'Memory used', bytes(memUsed), `of ${bytes(memTotal, 0)}`),
-        statCard('layers', 'Tenants', String(tenants.length), `${runningCount} running`)),
-      h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Nodes'), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)), h('div', {class: 'node-grid'}, data.nodes.map(nodeCard))),
-      h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Busiest tenants'), h('a', {class: 'note', href: '#/tenants'}, 'View all →')), tenantTable([...tenants].sort((a, b) => (b.resources?.cpuPercent || 0) - (a.resources?.cpuPercent || 0)).slice(0, 8)))]);
+        statCard('docker', 'Tenants', String(tenants.length), `${runningCount} running`)),
+      h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Nodes'), h('span', {class: 'note'}, `Updated ${ago(state.overviewAt)}`)), nodeTable(data.nodes)),
+      h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Busiest tenants'), h('a', {class: 'note', href: '#/tenants'}, 'View all')), tenantTable([...tenants].sort((a, b) => (b.resources?.cpuPercent || 0) - (a.resources?.cpuPercent || 0)).slice(0, 8)))]);
     ctx.refreshSidebar();
   };
   const refresh = async force => { try { draw(await overview(force)); } catch (error) { if (ctx.alive()) fail(error); } };
   draw(await overview());
   every(15000, () => refresh(true));
-}
-function nodeCard(n) {
-  const tone = nodeTone(n);
-  if (!n.ok) return h('a', {class: 'card node-card', href: `#/node/${n.region}`}, h('div', {class: 'top'}, h('h3', null, `node-${n.region}`), h('span', {class: `pill ${tone.tone}`}, tone.label)), h('div', {class: 'host mono'}, n.host), h('div', {class: 'banner error', style: {marginTop: '16px', marginBottom: '0'}}, icon('alert'), explain(new ApiError(n.error))));
-  const r = n.node.resources;
-  const running = n.tenants.filter(t => t.container?.running).length;
-  const row = (label, fraction, value) => h('div', {class: 'metric-row'}, h('span', null, label), meter(fraction), h('span', {class: 'value'}, value));
-  return h('a', {class: 'card node-card', href: `#/node/${n.region}`},
-    h('div', {class: 'top'}, h('h3', null, `node-${n.region}`), h('span', {class: `pill ${tone.tone}`}, tone.label)),
-    h('div', {class: 'host mono'}, `${n.host} · ${regionName(n.region)}`),
-    h('div', {class: 'metric-rows'},
-      row('CPU', (r.cpu.usagePercent || 0) / 100, `${pct(r.cpu.usagePercent)} · ${r.cpu.cores} cores`),
-      row('Memory', r.memory.usedBytes / r.memory.totalBytes, `${bytes(r.memory.usedBytes)} / ${bytes(r.memory.totalBytes, 0)}`),
-      row('Disk', r.disk.usedBytes / r.disk.totalBytes, `${bytes(r.disk.usedBytes)} / ${bytes(r.disk.totalBytes, 0)}`)),
-    h('div', {class: 'foot'}, h('span', null, `${n.tenants.length} tenants · ${running} running`), h('span', null, `up ${duration(r.uptimeSeconds)}`)));
 }
 
 /* ---------------------------------------------------------------- tenants list */
@@ -420,7 +460,7 @@ async function tenantsPage(ctx) {
   const unreachable = data.nodes.filter(n => !n.ok);
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Tenants'}]),
-    pageHead({title: 'Tenants', pill: {tone: 'green', label: `${allTenants(data).length} provisioned`}, meta: ['Every tenant on every node'], actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]}),
+    pageHead({title: 'Tenants', subtitle: `${allTenants(data).length} provisioned across ${data.nodes.length} nodes`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]}),
     unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(new ApiError(n.error))}`)),
     h('div', {class: 'section-head'}, h('div', {class: 'group', style: {display: 'flex', gap: '8px', flexWrap: 'wrap'}}, h('div', {class: 'search'}, icon('search'), search), regionSelect), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
     tableSlot]);
@@ -436,18 +476,20 @@ async function nodePage(ctx, region) {
     if (!n) return ctx.fill(errorBox(new ApiError('unknown_node')));
     const tone = nodeTone(n);
     const head = [crumbs([{label: state.session.label, href: '#/'}, {label: 'Nodes'}, {label: `node-${region}`}]),
-      pageHead({title: `node-${region}`, pill: tone, meta: n.ok ? [n.host, regionName(region), `docker ${n.node.dockerReady ? 'ready' : 'down'}`, `mariadb ${n.node.databaseReady ? 'ready' : 'down'}`, `up ${duration(n.node.resources.uptimeSeconds)}`] : [n.host, regionName(region)], actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]})];
+      pageHead({title: `node-${region}`, lead: flag(region), pill: tone, subtitle: n.host, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]})];
     if (!n.ok) return ctx.fill([...head, h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(n.error))), h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This node did not answer'), 'Check that spartan-agent and spartan-tunnel are running, that ADMIN_API_SECRET is set on the node, and that the node hostname is not behind a Cloudflare challenge.'))]);
     const r = n.node.resources;
     const running = n.tenants.filter(t => t.container?.running).length;
     const tenants = n.tenants.map(t => ({...t, region}));
     const select = key => { tab = key; history.replaceState(null, '', `#/node/${region}${key === 'tenants' ? '' : `?tab=${key}`}`); draw(state.overview); };
+    const busiest = Math.max(r.network?.rxBytesPerSecond || 0, r.network?.txBytesPerSecond || 0);
     const body = tab === 'resources' ? resourcesTab(n, tenants) : [
-      h('div', {class: 'cards'},
-        statCard('cpu', 'CPU', pct(r.cpu.usagePercent), 'right now'),
-        statCard('memory', 'Memory used', bytes(r.memory.usedBytes), `of ${bytes(r.memory.totalBytes, 0)}`),
-        statCard('layers', 'Tenants', String(n.tenants.length), `${running} running`)),
-      h('div', {class: 'section-head'}, h('h2', null, 'Running and provisioned tenants'), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
+      h('div', {class: 'cards four'},
+        statCard('cpu', 'CPU', pct(r.cpu.usagePercent), `of ${r.cpu.cores} cores`, meter((r.cpu.usagePercent || 0) / 100)),
+        statCard('memory', 'Memory used', bytes(r.memory.usedBytes), `of ${bytes(r.memory.totalBytes, 0)}`, meter(r.memory.usedBytes / r.memory.totalBytes)),
+        statCard('network', 'Network in', rate(r.network?.rxBytesPerSecond), `${rate(r.network?.txBytesPerSecond)} out`, meter(busiest / linkBytes(r))),
+        statCard('docker', 'Tenants', String(n.tenants.length), `${running} running`)),
+      h('div', {class: 'section-head'}, h('h2', null, 'Tenants on this node'), h('span', {class: 'note'}, `Updated ${ago(state.overviewAt)}`)),
       tenantTable(tenants, {region: false})];
     ctx.fill([...head, tabs([['tenants', 'Tenants'], ['resources', 'Resources']], tab, select), body]);
     ctx.refreshSidebar();
@@ -458,16 +500,21 @@ async function nodePage(ctx, region) {
 function resourcesTab(n, tenants) {
   const r = n.node.resources;
   const top = [...tenants].filter(t => t.resources).sort((a, b) => (b.resources.memoryUsedBytes || 0) - (a.resources.memoryUsedBytes || 0)).slice(0, 10);
+  const ready = (ok, extra) => h('span', {class: 'status'}, h('span', {class: `dot ${ok ? 'green' : 'red'}`}), ok ? `Ready${extra ? ` · ${extra}` : ''}` : 'Unavailable');
   return [
     h('div', {class: 'cards'},
       statCard('disk', 'Disk used', bytes(r.disk.usedBytes), `of ${bytes(r.disk.totalBytes, 0)}`, meter(r.disk.usedBytes / r.disk.totalBytes)),
-      statCard('activity', 'Load average', (r.cpu.loadAverage[0] || 0).toFixed(2), `${(r.cpu.loadAverage[1] || 0).toFixed(2)} · ${(r.cpu.loadAverage[2] || 0).toFixed(2)} · ${r.cpu.cores} cores`),
-      statCard('clock', 'Uptime', duration(r.uptimeSeconds), `sampled ${ago(n.node.sampledAt)}`)),
+      statCard('activity', 'Load average', (r.cpu.loadAverage[0] || 0).toFixed(2), `${(r.cpu.loadAverage[1] || 0).toFixed(2)} · ${(r.cpu.loadAverage[2] || 0).toFixed(2)} over 5 and 15 min`),
+      statCard('clock', 'Uptime', duration(r.uptimeSeconds), `since ${new Date(Date.now() - r.uptimeSeconds * 1000).toLocaleDateString()}`)),
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Host')), h('div', {class: 'card'}, h('dl', {class: 'details'},
-      detail('Docker', n.node.dockerReady ? 'Ready' : 'Unavailable'), detail('MariaDB', n.node.databaseReady ? 'Ready' : 'Unavailable'),
+      detail(h('span', {class: 'label-icon'}, icon('docker'), 'Docker'), ready(n.node.dockerReady, n.node.dockerVersion)),
+      detail(h('span', {class: 'label-icon'}, icon('database'), 'MariaDB'), ready(n.node.databaseReady)),
       detail('Memory free', bytes(r.memory.freeBytes)), detail('Disk available', bytes(r.disk.availableBytes)),
-      detail('Agent latency', n.latencyMs !== undefined ? `${n.latencyMs} ms` : '—'), detail('Region', regionName(n.region))))),
-    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Top memory consumers')), tenantTable(top, {region: false, empty: 'No running containers'}))];
+      detail('Latency', n.latencyMs !== null && n.latencyMs !== undefined ? `${n.latencyMs} ms` : '—'),
+      detail('Region', h('span', {class: 'label-icon'}, flag(n.region), regionName(n.region))),
+      detail('Network in / out', `${rate(r.network?.rxBytesPerSecond)} / ${rate(r.network?.txBytesPerSecond)}`),
+      detail('Link speed', r.network?.linkMbps > 0 ? `${r.network.linkMbps >= 1000 ? `${r.network.linkMbps / 1000} Gbit/s` : `${r.network.linkMbps} Mbit/s`}` : 'Not reported')))),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Top memory use')), tenantTable(top, {region: false, empty: 'No running containers'}))];
 }
 const detail = (label, value) => h('div', null, h('dt', null, label), h('dd', {title: typeof value === 'string' ? value : null}, value));
 
@@ -499,7 +546,7 @@ async function tenantPage(ctx, region, id, tab) {
     running ? button('Restart', {icon: 'refresh', onClick: () => act('Restart', 'container', {action: 'restart'}, {confirmText: `Restart the container for ${host}? Visitors see errors for a few seconds.`})})
       : button('Start', {icon: 'play', disabled: ['suspended', 'terminated'].includes(data.status), onClick: () => act('Start', 'container', {action: 'start'})}),
     h('button', {type: 'button', class: 'btn', 'aria-label': 'More actions', title: 'More actions', onclick: event => openMenu(event.currentTarget, [
-      {label: 'Upgrade to node image', icon: 'arrowUp', onClick: () => act('Upgrade', 'upgrade', {}, {confirmText: ['Recreate the container on the image configured on this node.', 'The new image is pulled first; if it fails to start, the previous image is restored. Storage and the database are untouched.']})},
+      {label: 'Upgrade to node image', icon: 'upgrade', onClick: () => act('Upgrade', 'upgrade', {}, {confirmText: ['Recreate the container on the image configured on this node.', 'The new image is pulled first; if it fails to start, the previous image is restored. Storage and the database are untouched.']})},
       ...(data.role === 'primary' ? [{label: 'Download database (SQL)', icon: 'database', onClick: () => { api.download(`${base}/database`); toast('Preparing the SQL export… the download starts when it is ready.'); }}] : []),
       '-',
       {label: 'Stop container', icon: 'stop', danger: true, onClick: () => act('Stop', 'container', {action: 'stop'}, {confirmText: [`Stop the container for ${host}?`, 'The site goes offline until you start it again. This does not change billing state on the master website.'], danger: true})}
@@ -508,7 +555,7 @@ async function tenantPage(ctx, region, id, tab) {
   const select = key => go(`#/tenant/${region}/${id}${key === 'overview' ? '' : `/${key}`}`);
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: `node-${region}`, href: `#/node/${region}`}, {label: host}]),
-    pageHead({title: host, pill: status, meta: [id, `home ${String(data.primary || '—').toUpperCase()}`, data.role === 'primary' ? 'primary copy' : 'standby copy', data.plan ? `${data.plan} plan` : null, shortImage(data.image)], actions}),
+    pageHead({title: host, lead: h('span', {class: 'app-icon large'}, icon('docker')), pill: status, subtitle: h('span', {class: 'mono'}, id), actions}),
     tabs([['overview', 'Overview', 'layers'], ['files', 'Files', 'folder'], ['console', 'Console', 'terminal'], ['logs', 'Logs', 'logs']], tab, select),
     content]);
   const tctx = {...ctx, region, id, base, data, host, fill: nodes => { if (ctx.alive()) content.replaceChildren(...flatNodes(nodes)); }};
@@ -534,7 +581,9 @@ function overviewTab(ctx, data) {
       detail('Network in / out', r ? r.networkIO : '—'), detail('Block I/O', r ? r.blockIO : '—'),
       detail('Storage used', bytes(data.storageBytes)), detail('Loopback port', data.port ? String(data.port) : '—'),
       detail('Lifecycle version', String(data.lifecycleVersion ?? 0)), detail('Out-of-memory kills', c.oomKilled ? 'Yes, last exit' : 'None'),
-      detail('URL', data.activeUrl || data.url), detail('Image', shortImage(data.image))))),
+      detail('Home region', h('span', {class: 'label-icon'}, flag(data.primary), regionName(data.primary || '—'))), detail('This copy', data.role === 'primary' ? 'Primary (serves traffic)' : 'Standby'),
+      detail('Plan', data.plan || '—'), detail('Image', shortImage(data.image)),
+      detail('URL', data.activeUrl || data.url), detail('Container', h('span', {class: 'label-icon'}, icon('docker'), `spartan-${data.id}`))))),
     data.versions ? h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Versions')), h('div', {class: 'card'}, h('pre', {class: 'code'}, JSON.stringify(data.versions, null, 2)))) : null]);
 }
 
@@ -597,9 +646,12 @@ function fileRow(ctx, fstate, entry, call, reload, open) {
       if (!await confirmDialog({title: `Delete ${entry.name}?`, message: isDir && entry.type !== 'link' ? [`${full} and everything inside it will be permanently deleted.`] : [`${full} will be permanently deleted.`], confirm: 'Delete', danger: true})) return;
       try { await call({action: 'delete', path: full, recursive: isDir && entry.type !== 'link'}); toast(`Deleted ${entry.name}`); reload(); } catch (e) { fail(e); }
     }}];
-  const glyph = entry.type === 'link' ? 'link' : isDir ? 'folder' : 'file';
+  const glyph = entry.type === 'link' ? 'link' : isDir ? 'folder' : archive ? 'fileZip'
+    : /\.(php|js|mjs|ts|json|css|scss|html|vue|py|sh|ya?ml|xml|sql|ini|conf|env)$|^\.env/i.test(entry.name) ? 'fileCode'
+    : /\.(png|jpe?g|gif|svg|webp|ico|avif)$/i.test(entry.name) ? 'photo'
+    : /\.(txt|md|log|csv)$/i.test(entry.name) ? 'fileText' : 'file';
   return h('tr', {ondblclick: openEntry},
-    h('td', null, h('div', {class: 'file-name'}, h('span', {class: `glyph ${entry.type === 'link' ? 'link' : isDir ? 'dir' : ''}`}, icon(glyph)), h('button', {type: 'button', class: 'link', onclick: openEntry}, entry.name), entry.type === 'link' && entry.target ? h('span', {class: 'faint mono'}, `→ ${entry.target}`) : null)),
+    h('td', null, h('div', {class: 'file-name'}, h('span', {class: `glyph ${isDir ? 'dir' : ''}`}, icon(glyph)), h('button', {type: 'button', class: 'link', onclick: openEntry}, entry.name), entry.type === 'link' && entry.target ? h('span', {class: 'faint mono'}, `→ ${entry.target}`) : null)),
     h('td', {class: 'right muted'}, isDir ? '—' : bytes(entry.size)),
     h('td', null, h('span', {class: 'perm mono'}, entry.permissions, h('em', null, entry.mode))),
     h('td', {class: 'muted'}, `${entry.owner}:${entry.group}`),
@@ -790,7 +842,7 @@ async function activityPage(ctx) {
     h('td', {class: 'mono muted', style: {maxWidth: '420px', overflow: 'hidden', textOverflow: 'ellipsis'}, title: e.command || e.path || ''}, e.command || e.path || (e.runAs ? `as ${e.runAs}` : ''))));
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Activity'}]),
-    pageHead({title: 'Activity', meta: ['Sign-ins and actions taken through this dashboard since it last started', 'also written to the journal'], actions: [button('Refresh', {icon: 'refresh', onClick: () => render()})]}),
+    pageHead({title: 'Activity', subtitle: 'Sign-ins and actions since the dashboard last started. Also written to the journal.', actions: [button('Refresh', {icon: 'refresh', onClick: () => render()})]}),
     rows.length ? h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, h('th', null, 'When'), h('th', null, 'User'), h('th', null, 'Event'), h('th', null, 'Target'), h('th', null, 'Detail'))), h('tbody', null, rows))))
       : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'Nothing yet'), 'Actions you take appear here.'))]);
 }

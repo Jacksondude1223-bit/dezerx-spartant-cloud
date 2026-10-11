@@ -25,8 +25,8 @@
   const node = region => {
     const list = tenants.filter(t => t.region === region);
     const used = list.reduce((s, t) => s + (t.container.running ? t.baseMem * MB : 0), 0) + 3.1 * GB;
-    return {region, label: region === 'us' ? 'United States' : 'Germany', host: host[region], ok: true, latencyMs: region === 'us' ? 41 : 18,
-      node: {region, status: 'ready', dockerReady: true, databaseReady: true, sampledAt: new Date().toISOString(), resources: {cpu: {cores: 8, usagePercent: list.reduce((s, t) => s + (t.container.running ? t.baseCpu : 0), 0) / 8 + rand(4, 9), loadAverage: [rand(1, 3), rand(1, 2.5), rand(.8, 2)]}, memory: {totalBytes: 32 * GB, usedBytes: used, freeBytes: 32 * GB - used}, disk: {totalBytes: 320 * GB, usedBytes: (region === 'us' ? 141 : 97) * GB, availableBytes: (region === 'us' ? 179 : 223) * GB}, uptimeSeconds: region === 'us' ? 1003200 : 412800}},
+    return {region, label: region === 'us' ? 'United States' : 'Germany', host: host[region], ok: true, latencyMs: region === 'us' ? Math.round(rand(118, 140)) : Math.round(rand(3, 6)),
+      node: {region, status: 'ready', dockerReady: true, dockerVersion: '29.9.0', databaseReady: true, sampledAt: new Date().toISOString(), resources: {network: {rxBytesPerSecond: Math.round(rand(region === 'us' ? 1.1e6 : 4e5, region === 'us' ? 2.4e6 : 9e5)), txBytesPerSecond: Math.round(rand(region === 'us' ? 3e6 : 8e5, region === 'us' ? 6e6 : 1.6e6)), linkMbps: region === 'us' ? 1000 : 0}, cpu: {cores: 8, usagePercent: list.reduce((s, t) => s + (t.container.running ? t.baseCpu : 0), 0) / 8 + rand(4, 9), loadAverage: [rand(1, 3), rand(1, 2.5), rand(.8, 2)]}, memory: {totalBytes: 32 * GB, usedBytes: used, freeBytes: 32 * GB - used}, disk: {totalBytes: 320 * GB, usedBytes: (region === 'us' ? 141 : 97) * GB, availableBytes: (region === 'us' ? 179 : 223) * GB}, uptimeSeconds: region === 'us' ? 1003200 : 412800}},
       tenants: list.map(t => ({...strip(t), resources: resources(t)}))};
   };
   const activity = [
