@@ -48,7 +48,7 @@ export function validateNodeEnvironment(env, region) {
   if (!['us', 'de'].includes(region) || env.NODE_REGION !== region) throw new Error('Node region mismatch');
   for (const [key, field] of Object.entries(fields)) if (!field.valid(env[key] || '')) throw new Error(`Invalid ${key}`);
   if (env.NODE_CONTROL_SECRET !== undefined && !secret(env.NODE_CONTROL_SECRET)) throw new Error('Invalid NODE_CONTROL_SECRET');
-  if (env.ADMIN_API_SECRET !== undefined && (!secret(env.ADMIN_API_SECRET) || [env.ORIGIN_SECRET, env.NODE_CONTROL_SECRET].includes(env.ADMIN_API_SECRET))) throw new Error('Invalid ADMIN_API_SECRET; it must be at least 32 characters and differ from ORIGIN_SECRET');
+  if (env.ADMIN_API_SECRET !== undefined && !secret(env.ADMIN_API_SECRET)) throw new Error('Invalid ADMIN_API_SECRET; it must be at least 32 characters without whitespace or placeholder values');
   if (env.DASHBOARD_PROXY_PORT !== undefined && (!/^\d{4,5}$/.test(env.DASHBOARD_PROXY_PORT) || Number(env.DASHBOARD_PROXY_PORT) > 65535 || ['8788', '8789'].includes(env.DASHBOARD_PROXY_PORT))) throw new Error('Invalid DASHBOARD_PROXY_PORT');
   const origins = [new URL(env.US_ORIGIN).hostname, new URL(env.DE_ORIGIN).hostname];
   if (origins[0] === origins[1] || origins.some(host => host === env.BASE_DOMAIN || host.endsWith(`.${env.BASE_DOMAIN}`))) throw new Error('Origin hostnames must differ and be outside the tenant base domain');

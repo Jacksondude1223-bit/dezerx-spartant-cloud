@@ -46,7 +46,7 @@ async function defaultRouter(pathname, body) {
 
 test('instance creation is optional and validates its configuration', () => {
   assert.equal(loadProvisioningConfig({}, adminSecret), null);
-  assert.throws(() => loadProvisioningConfig({ORIGIN_SECRET: adminSecret, BASE_DOMAIN: 'load.example.test'}, adminSecret), /differ/);
+  assert.equal(loadProvisioningConfig({ORIGIN_SECRET: adminSecret, BASE_DOMAIN: 'load.example.test'}, adminSecret).originSecret, adminSecret);
   assert.throws(() => loadProvisioningConfig({ORIGIN_SECRET: 'short', BASE_DOMAIN: 'load.example.test'}, adminSecret), /32/);
   assert.throws(() => loadProvisioningConfig({ORIGIN_SECRET: originSecret}, adminSecret), /BASE_DOMAIN/);
   assert.equal(loadProvisioningConfig({ORIGIN_SECRET: originSecret, BASE_DOMAIN: 'Load.Example.Test'}, adminSecret).routingUrl, 'https://load.example.test');

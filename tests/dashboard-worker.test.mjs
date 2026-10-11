@@ -112,6 +112,28 @@ test('D1 login rate limits and TOTP replay checks work across isolates', async (
   } finally {sqlite.close();}
 });
 
+test('browser setup and signed node requests support the configured shared admin and origin key', async () => {
+  const {db, sqlite} = database(), env = environment(db);
+  env.ADMIN_API_SECRET = env.ORIGIN_SECRET;
+  env.DASHBOARD_SETUP_TOKEN = 's'.repeat(64);
+  delete env.DASHBOARD_PASSWORD_HASH;
+  const upstream = remote(env), worker = createWorker(upstream.fetch);
+  try {
+    const settings = await (await worker.fetch(new Request('https://dashboard.example.test/api/setup'), env)).json();
+    assert.deepEqual(settings.invalidSettings, []);
+    const result = await worker.fetch(new Request('https://dashboard.example.test/api/setup', {method: 'POST', headers: {origin: 'https://dashboard.example.test', 'content-type': 'application/json'}, body: JSON.stringify({setupToken: env.DASHBOARD_SETUP_TOKEN, username: 'admin', password})}), env);
+    assert.equal(result.status, 200);
+    const client = await browser(worker, env);
+    const overview = await (await client.call('/api/overview')).json();
+    assert.ok(overview.nodes.every(node => node.ok));
+    const item = await (await client.call('/api/instances', 'POST', {primary: 'us', licenseKey: license})).json();
+    assert.equal((await client.call(`/api/instances/${item.id}/deploy`, 'POST', {})).status, 202);
+    for (let i = 0; i < 3; i++) {sqlite.exec('UPDATE dashboard_jobs SET next_at = 0'); await runJobs(env, upstream.fetch);}
+    assert.equal((await store(env).find(item.id)).status, 'ready');
+    for (const prefix of ['/admin/', '/control/', '/v1/routing/']) assert.ok(upstream.calls.some(call => call.path.startsWith(prefix)));
+  } finally {sqlite.close();}
+});
+
 test('Worker deploy persists encrypted records, runs both nodes without initialAdmin, and survives restart', async () => {
   const {db, sqlite} = database(), env = environment(db), upstream = remote(env), worker = createWorker(upstream.fetch);
   try {
@@ -315,7 +337,6 @@ test('browser setup requires its private token, saves only a password hash, and 
 test('setup identifies invalid secret settings without exposing their values or using login attempts', async () => {
   const cases = [
     [{ADMIN_API_SECRET: 'short-admin-secret'}, 'ADMIN_API_SECRET'],
-    [{ADMIN_API_SECRET: 'o'.repeat(64)}, 'ADMIN_API_SECRET'],
     [{ORIGIN_SECRET: 'o'.repeat(64) + '\n'}, 'ORIGIN_SECRET'],
     [{DASHBOARD_DATA_KEY: 'D'.repeat(64)}, 'DASHBOARD_DATA_KEY'],
     [{DASHBOARD_TOTP_SECRET: 'invalid-totp-secret'}, 'DASHBOARD_TOTP_SECRET']

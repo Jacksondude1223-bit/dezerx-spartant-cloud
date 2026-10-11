@@ -7,7 +7,6 @@ export function configurationIssues(env) {
     const value = env[name];
     if (typeof value !== 'string' || value.length < 32 || /[\x00-\x20\x7f]/.test(value)) issues.push({name, reason: 'Use the existing node secret, at least 32 characters, without spaces or line breaks.'});
   }
-  if (env.ADMIN_API_SECRET && env.ADMIN_API_SECRET === env.ORIGIN_SECRET) issues.push({name: 'ADMIN_API_SECRET', reason: 'Must differ from ORIGIN_SECRET. Use the separate admin API secret configured on both nodes.'});
   if (!/^[a-f0-9]{64}$/.test(env.DASHBOARD_DATA_KEY || '')) issues.push({name: 'DASHBOARD_DATA_KEY', reason: 'Must be exactly 64 lowercase hexadecimal characters (0-9 and a-f), without quotes or spaces. Preserve the key after setup.'});
   if (env.DASHBOARD_TOTP_SECRET && !/^[A-Z2-7]{16,128}$/.test(env.DASHBOARD_TOTP_SECRET)) issues.push({name: 'DASHBOARD_TOTP_SECRET', reason: 'Must be 16 to 128 uppercase Base32 characters (A-Z and 2-7). Leave it unset if two-factor authentication is not configured.'});
   return issues;

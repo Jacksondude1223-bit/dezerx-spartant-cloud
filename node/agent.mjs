@@ -39,14 +39,11 @@ for (const key of ['US_ORIGIN', 'DE_ORIGIN']) {
   // onto that produced "//tenant/...", which the other node then answered with 404.
   cfg[key] = new URL(cfg[key]).origin;
 }
-// Operator routes (/admin/*) use their own secret so the Worker and master website
-// credentials can never run commands or edit files. Misconfiguration disables the
-// routes rather than stopping the agent and its tenant traffic.
 const adminSecret = (() => {
   const value = cfg.ADMIN_API_SECRET;
   if (!value) return null;
-  if (value.length < 32 || value.includes('CHANGE_ME') || /[\x00-\x20\x7f]/.test(value) || value === cfg.ORIGIN_SECRET || value === cfg.NODE_CONTROL_SECRET) {
-    console.error(JSON.stringify({event: 'admin_api_disabled', reason: 'ADMIN_API_SECRET must be at least 32 characters and differ from the origin and control secrets'}));
+  if (value.length < 32 || value.includes('CHANGE_ME') || /[\x00-\x20\x7f]/.test(value)) {
+    console.error(JSON.stringify({event: 'admin_api_disabled', reason: 'ADMIN_API_SECRET must be at least 32 characters without whitespace or placeholder values'}));
     return null;
   }
   return value;

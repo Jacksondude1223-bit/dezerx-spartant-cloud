@@ -4,10 +4,6 @@ import {spawn} from 'node:child_process';
 import {apiError} from './management.mjs';
 import {cpuSummary} from './resources.mjs';
 
-// Operator API used by the dashboard. Every route here is signed with ADMIN_API_SECRET,
-// which is never given to the routing Worker or the master website: these routes can
-// read and change any file in a tenant container and run commands inside it.
-
 export const validTenantId = id => /^t-[a-f0-9]{24}$/.test(id || '');
 export const ADMIN_USERS = {'www-data': '33:33', root: '0:0'};
 export const PERSISTENT_ROOT = '/var/www/html/storage';

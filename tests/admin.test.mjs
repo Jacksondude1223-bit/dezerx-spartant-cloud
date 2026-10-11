@@ -300,13 +300,25 @@ test('admin file manager edits, uploads, downloads, changes permissions and extr
   } finally { await agent.stop(); }
 });
 
-test('admin routes stay disabled when the admin secret is missing or reuses the origin secret', async () => {
+test('admin routes accept the configured shared origin and control secret', async () => {
   const agent = await startAgent({env: {ADMIN_API_SECRET: originSecret}});
   try {
-    assert.equal((await agent.call('/admin/overview', {}, originSecret)).status, 404);
-    assert.match(agent.stderr(), /admin_api_disabled/);
-    assert.equal((await agent.json('/control/list', {}, originSecret)).status, 200, 'tenant traffic and control routes keep working');
+    assert.equal((await agent.call('/admin/overview', {}, originSecret)).status, 200, agent.stderr());
+    assert.equal((await agent.call('/admin/overview', {}, adminSecret)).status, 401, 'the previous distinct admin key is not accepted');
+    assert.doesNotMatch(agent.stderr(), /admin_api_disabled/);
+    assert.equal((await agent.json('/control/list', {}, originSecret)).status, 200);
   } finally { await agent.stop(); }
+});
+
+test('admin routes stay disabled when the admin secret is missing or invalid', async () => {
+  for (const value of ['', 'short', 'CHANGE_ME'.repeat(8), originSecret + '\n']) {
+    const agent = await startAgent({env: {ADMIN_API_SECRET: value}});
+    try {
+      assert.equal((await agent.call('/admin/overview', {}, originSecret)).status, 404);
+      if (value) assert.match(agent.stderr(), /admin_api_disabled/);
+      assert.equal((await agent.json('/control/list', {}, originSecret)).status, 200);
+    } finally { await agent.stop(); }
+  }
 });
 
 test('secondary node forwards to an origin configured with a trailing slash', async t => {

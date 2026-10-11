@@ -57,7 +57,6 @@ restart_agent() {
 set_node_secret() {
   local secret="$1"
   [ -f "$node_env" ] || { printf '%s not found; this is not a node.\n' "$node_env" >&2; return 1; }
-  [ "$secret" != "$(env_value "$node_env" ORIGIN_SECRET)" ] || { printf 'ADMIN_API_SECRET must differ from ORIGIN_SECRET.\n' >&2; return 1; }
   set_value "$node_env" ADMIN_API_SECRET "$secret" quoted
   restart_agent && printf 'Admin API enabled on this node.\n'
 }

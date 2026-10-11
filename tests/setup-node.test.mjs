@@ -37,6 +37,13 @@ test('enabled AI recovery requires valid existing recovery endpoint and shared s
   for (const patch of [{AI_RECOVERY_SECRET: ''}, {AI_RECOVERY_URL: 'http://recovery.customer.test/v1/recovery'}, {AI_RECOVERY_URL: 'https://recovery.customer.test/other'}, {AI_MAX_CALLS_PER_DAY: '21'}]) assert.throws(() => validateNodeEnvironment({...env, ...patch}, 'de'));
 });
 
+test('node configuration accepts explicit shared admin, origin and control secrets', () => {
+  const env = fixture('us');
+  env.ADMIN_API_SECRET = env.NODE_CONTROL_SECRET = env.ORIGIN_SECRET;
+  assert.equal(validateNodeEnvironment(env, 'us'), env);
+  for (const value of ['', 'short', 'CHANGE_ME'.repeat(8), env.ORIGIN_SECRET + '\n']) assert.throws(() => validateNodeEnvironment({...env, ADMIN_API_SECRET: value}, 'us'), /ADMIN_API_SECRET/);
+});
+
 for (const region of ['us', 'de']) test(`noninteractive ${region} setup preserves shared credentials and protects files`, async () => {
   const dir = await mkdtemp(path.join(tmpdir(), 'spartan-setup-'));
   try {

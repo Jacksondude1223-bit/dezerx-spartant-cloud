@@ -33,7 +33,6 @@ export function loadProvisioningConfig(env, adminSecret) {
   const originSecret = env.ORIGIN_SECRET || '';
   if (!originSecret) return null;
   if (originSecret.length < 32 || /[\x00-\x20\x7f]/.test(originSecret)) throw new Error('ORIGIN_SECRET must be at least 32 characters (the same value as on the nodes)');
-  if (originSecret === adminSecret) throw new Error('ORIGIN_SECRET must differ from ADMIN_API_SECRET');
   const baseDomain = String(env.BASE_DOMAIN || '').toLowerCase();
   if (!HOSTNAME.test(baseDomain)) throw new Error('BASE_DOMAIN is required with ORIGIN_SECRET (the tenant base domain, e.g. load.dezerx.cloud)');
   const routingUrl = new URL(env.ROUTING_API_URL || `https://${baseDomain}`);
