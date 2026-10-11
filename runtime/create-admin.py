@@ -28,6 +28,10 @@ def create(admin):
     os.close(slave)
     prompts = ['enter display name', 'enter email', 'enter password', 'confirm password', 'select role']
     answers = [admin['displayName'], admin['email'], admin['password'], admin['password'], '2']
+    # Asked only by newer Spartan releases. Unanswered, the command waits until the
+    # deadline and the whole bootstrap fails.
+    optional = {'mark email as verified': 'yes'}
+    asked = set()
     step = 0
     output = ''
     deadline = time.monotonic() + 40
@@ -46,6 +50,13 @@ def create(admin):
                     os.write(master, (answers[step] + '\n').encode())
                     step += 1
                     output = ''
+                else:
+                    for needle, answer in optional.items():
+                        if needle not in asked and needle in output.lower():
+                            os.write(master, (answer + '\n').encode())
+                            asked.add(needle)
+                            output = ''
+                            break
             if child.poll() is not None:
                 break
         if child.poll() is None:

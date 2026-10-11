@@ -31,6 +31,21 @@ sys.exit(0 if answers == ['Customer Owner', 'owner@example.test', 'My-chosen-pas
             with patch.dict(os.environ, {'PATH': directory + ':' + os.environ['PATH']}):
                 self.assertTrue(module.create(admin))
 
+    def test_answers_the_email_verification_prompt_of_newer_releases(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / 'php'
+            script.write_text('''#!/usr/bin/env python3
+import sys
+answers=[]
+for prompt in ['Enter display name:', 'Enter email:', 'Enter password (hidden):', 'Confirm password (hidden):', 'Select role [user]:\\n [0] user\\n [1] admin\\n [2] superadmin', 'Mark email as verified now? (yes/no) [no]:']:
+    print(prompt, flush=True)
+    answers.append(input('> '))
+sys.exit(0 if answers == ['Customer Owner', 'owner@example.test', 'My-chosen-password!', 'My-chosen-password!', '2', 'yes'] else 1)
+''')
+            script.chmod(0o755)
+            with patch.dict(os.environ, {'PATH': directory + ':' + os.environ['PATH']}):
+                self.assertTrue(module.create(admin))
+
     def test_retry_detects_existing_matching_superadmin_without_running_command(self):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(module, 'state', return_value=10), patch.object(module, 'create') as create:
