@@ -177,3 +177,43 @@ test('the dashboard exposes instance creation only when configured, behind sessi
     assert.equal((await response.json()).error, 'provisioning_disabled');
   } finally { plain.close(); }
 });
+
+test('a custom-domain deploy renews an expiring permit between attempts instead of failing as busy', async () => {
+  let nodeCalls = 0;
+  const {provisioner, calls} = await setup({
+    routerReply: async (pathname, body) => {
+      if (pathname !== '/v1/routing/onboarding/verify') return defaultRouter(pathname, body);
+      const permit = await issueDomainPermit(originSecret, body.id, body.hostname);
+      // Close to expiry, so every attempt has to fetch a fresh one.
+      return [200, {hostname: body.hostname, status: 'active', stage: 'ready_to_provision', readyToProvision: true, dnsRecords: [], domainVerificationToken: permit.token, tokenExpiresAt: new Date(Date.now() + 60000).toISOString()}];
+    },
+    nodeReply: (origin, body) => { nodeCalls++; return [200, {id: body.id, status: nodeCalls < 3 ? 'provisioning' : 'ready'}]; }
+  });
+  const created = await provisioner.create({primary: 'us', licenseKey: license, domain: 'panel.customer.test'}, 'admin');
+  await provisioner.verify(created.id);
+  await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  await provisioner.idle();
+  const done = await provisioner.get(created.id);
+  assert.equal(done.status, 'ready', done.error);
+  assert.ok(calls.filter(c => c.pathname === '/v1/routing/onboarding/verify').length >= 3, 'the permit was renewed during the deploy');
+});
+
+test('a failed deploy never leaves a step marked running and says why', async () => {
+  let checks = 0;
+  const {provisioner} = await setup({
+    routerReply: async (pathname, body) => {
+      if (pathname !== '/v1/routing/onboarding/verify') return defaultRouter(pathname, body);
+      if (++checks > 1) return [409, {error: 'service_not_active'}];
+      const permit = await issueDomainPermit(originSecret, body.id, body.hostname);
+      return [200, {hostname: body.hostname, status: 'active', stage: 'ready_to_provision', readyToProvision: true, dnsRecords: [], domainVerificationToken: permit.token, tokenExpiresAt: new Date(Date.now() + 60000).toISOString()}];
+    }
+  });
+  const created = await provisioner.create({primary: 'us', licenseKey: license, domain: 'panel.customer.test'}, 'admin');
+  await provisioner.verify(created.id);
+  await provisioner.deploy(created.id, {initialAdmin: admin}, 'admin');
+  await provisioner.idle();
+  const failed = await provisioner.get(created.id);
+  assert.equal(failed.status, 'failed');
+  assert.equal(failed.steps.primary, 'failed');
+  assert.match(failed.log.map(entry => entry.text).join('\n'), /Renewing the domain permit with the routing Worker failed: service_not_active/);
+});

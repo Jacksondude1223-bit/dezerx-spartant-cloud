@@ -67,7 +67,11 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       } catch (error) { if (error.code !== 'ENOENT') throw error; }
       // A deployment cannot survive a restart: it needs the administrator password,
       // which is never written to disk.
-      for (const item of instances.values()) if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null});
+      for (const item of instances.values()) {
+        if (item.status === 'deploying') Object.assign(item, {status: 'failed', error: 'dashboard_restarted', progress: null});
+        // Records from earlier releases could fail with a step still marked running.
+        if (item.status === 'failed') for (const key of Object.keys(item.steps || {})) if (item.steps[key] === 'running') item.steps[key] = 'failed';
+      }
     })();
     return loaded;
   }
@@ -182,6 +186,13 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const item = await find(id);
     if (!item.custom) return view(item);
     if (!['awaiting_dns', 'ready_to_deploy', 'failed'].includes(item.status)) throw new ProvisionError(409, 'instance_busy');
+    await checkDomain(item);
+    return view(item);
+  }
+  // Also used mid-deployment to renew the ten-minute permit, so it never changes a
+  // deploying instance's status.
+  async function checkDomain(item) {
+    const id = item.id;
     const result = await routing('onboarding/verify', onboarding(item));
     if (result.status === 401) throw new ProvisionError(502, 'routing_unauthorized');
     if (!result.data.hostname) throw new ProvisionError(result.status >= 400 ? result.status : 502, String(result.data.error || 'routing_error').slice(0, 80));
@@ -189,8 +200,8 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const STAGES = {spartan_ownership: 'waiting for the _spartan-verification TXT record', cloudflare_validation: 'ownership proven; Cloudflare is validating the hostname and issuing the SSL certificate', routing_setup: 'certificate active; attaching the Worker route', ready_to_provision: 'everything checks out, ready to deploy'};
     note(item, `DNS check: ${STAGES[dns.stage] || dns.stage || result.data.error || 'checked'}.`, dns.readyToProvision ? 'good' : '');
     if (dns.readyToProvision && result.data.domainVerificationToken) permits.set(id, {token: result.data.domainVerificationToken, expiresAt: Date.parse(result.data.tokenExpiresAt) || now() + 540000});
-    await update(item, {dns, ...(item.status === 'failed' ? {} : {status: dns.readyToProvision ? 'ready_to_deploy' : 'awaiting_dns'}), ...(dns.readyToProvision ? {} : {error: result.data.error || null})});
-    return view(item);
+    const settled = ['failed', 'deploying'].includes(item.status);
+    await update(item, {dns, ...(settled ? {} : {status: dns.readyToProvision ? 'ready_to_deploy' : 'awaiting_dns'}), ...(dns.readyToProvision || settled ? {} : {error: result.data.error || null})});
   }
 
   async function permit(item) {
@@ -198,7 +209,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
     const cached = permits.get(item.id);
     if (cached && cached.expiresAt - now() > 120000) return cached.token;
     permits.delete(item.id);
-    await verify(item.id);
+    await checkDomain(item);
     const fresh = permits.get(item.id);
     if (!fresh) throw new ProvisionError(409, 'domain_not_verified');
     return fresh.token;
@@ -219,10 +230,14 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       item.progress = {role, region, attempt, startedAt: new Date(started).toISOString(), callStartedAt: new Date(now()).toISOString(), retryAt: null, deadline: new Date(deadline).toISOString()};
       if (attempt > 1) note(item, `Asking ${label} again (attempt ${attempt}).`);
       await persist();
-      const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: await permit(item), ...(role === 'primary' ? {initialAdmin: admin} : {})};
-      const callStarted = now();
+      let callStarted = now();
       const took = () => `${Math.round((now() - callStarted) / 1000)} s`;
       try {
+        let token;
+        try { token = await permit(item); }
+        catch (error) { throw Object.assign(new ProvisionError(error.status === 409 ? 409 : 503, error.message), {permitStage: true}); }
+        const body = {id: item.id, primary: item.primary, appKey: item.appKey, url: `https://${item.hostname}`, fingerprint: item.fingerprint, licenseKey: item.licenseKey, lifecycleVersion: item.lifecycleVersion, domainVerificationToken: token, ...(role === 'primary' ? {initialAdmin: admin} : {})};
+        callStarted = now();
         const result = await provisionOn(region, body);
         if (result.status === 'ready') {
           note(item, role === 'primary' ? `${label} is ready after ${took()}; the app answers its health check and the first administrator exists.` : `${label} is ready after ${took()}.`, 'good');
@@ -233,7 +248,7 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
         // Timeouts and gateway errors mean the node is still working; the retry joins its queue.
         const transient = error instanceof ProvisionError && (error.status >= 500 || error.status === 429 || error.message === 'domain_verification_required');
         if (error.message === 'domain_verification_required') permits.delete(item.id);
-        const why = {still_running_on_node: `Cloudflare closed the request after 100 s, but ${label} keeps working.`, node_timeout: `${label} did not answer within the request time; it keeps working.`, node_unreachable: `${label} could not be reached.`, domain_verification_required: `${label} refused the domain permit; getting a fresh one.`, rate_limited: `${label} is rate limiting; waiting.`}[error.message] || `${label} answered ${error.message}.`;
+        const why = error.permitStage ? `Renewing the domain permit with the routing Worker failed: ${error.message}.` : ({still_running_on_node: `Cloudflare closed the request after 100 s, but ${label} keeps working.`, node_timeout: `${label} did not answer within the request time; it keeps working.`, node_unreachable: `${label} could not be reached.`, domain_verification_required: `${label} refused the domain permit; getting a fresh one.`, rate_limited: `${label} is rate limiting; waiting.`}[error.message] || `${label} answered ${error.message}.`);
         if (!transient || exhausted(attempt)) { note(item, `${why} Stopping.`, 'bad'); item.steps[role] = 'failed'; item.progress = null; throw error; }
         note(item, why, 'warn');
       }
@@ -261,6 +276,8 @@ export function createProvisioner(config, {nodes, now = Date.now, fetchImpl = fe
       record('instance_ready', {region: item.primary, id: item.id});
     } catch (error) {
       if (item.steps.routing === 'running') { item.steps.routing = 'failed'; note(item, `The routing Worker answered ${error?.message}.`, 'bad'); }
+      // Never leave a spinner on a step that is no longer running.
+      for (const key of ['primary', 'secondary']) if (item.steps[key] === 'running') { item.steps[key] = 'failed'; note(item, `Stopped: ${error?.message || 'unexpected error'}.`, 'bad'); }
       await update(item, {status: 'failed', error: String(error?.message || 'deploy_failed').slice(0, 80), progress: null});
       record('instance_failed', {region: item.primary, id: item.id, path: item.error});
     } finally { running.delete(item.id); }
