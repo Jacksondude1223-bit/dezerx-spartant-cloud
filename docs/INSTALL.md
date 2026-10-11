@@ -14,7 +14,7 @@ Choose the command for that node's region. Enter a GitHub fine-grained personal 
 For unattended installation, provide a root-owned token file with mode 600:
 
 ```bash
-sudo bash install.sh us --github-token-file /root/github-token --env /root/node.env --token /root/tunnel-token --non-interactive
+sudo bash install.sh us --github-token-file /root/github-token --env /root/node.env --token /root/tunnel-token --non-interactive --peer-ip DE_PUBLIC_IP
 ```
 
 `--github-token-file` authenticates the repository download. `--token` remains the Cloudflare Tunnel token file. The installer removes its temporary GitHub credential copy after cloning and on failure. It leaves your original token file untouched. Tokens do not appear in the clone URL, Git configuration, command arguments, or normal installer output.
@@ -86,4 +86,4 @@ For the market module's domain-first workflow, read [MARKET_MODULE_API.md](MARKE
 
 ## US-only database mode
 
-See [US-DATABASE.md](US-DATABASE.md) for WireGuard setup and activation. In `DATABASE_MODE=us-central`, all instances must have a US primary. Germany runs the web application against US MariaDB and has no running local database. The default legacy mode remains unchanged until explicit activation.
+Fresh installs automatically prepare WireGuard and queue US-only database activation. Enter the other node public IP when prompted and allow peer-only UDP 51820 in Contabo Firewall on both nodes. No manual key exchange is required. See [US-DATABASE.md](US-DATABASE.md) for setup progress, verification, and existing-node migration. In `DATABASE_MODE=us-central`, all instances must have a US primary. Germany runs the web application against US MariaDB and has no running local database. Existing nodes with tenant records remain unchanged until manual activation during a maintenance window. Use `--skip-db-network` to keep a legacy installation.

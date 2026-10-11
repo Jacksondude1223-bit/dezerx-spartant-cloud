@@ -11,9 +11,13 @@ case "$location" in us|de) ;; *) printf 'Usage: sudo bash scripts/install-node.s
 shift
 setup_args=()
 skip_dependencies=false
+skip_db_network=false
+peer_ip=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --skip-dependencies) skip_dependencies=true; shift ;;
+    --skip-db-network) skip_db_network=true; shift ;;
+    --peer-ip) [ "$#" -ge 2 ] || exit 1; peer_ip="$2"; shift 2 ;;
     --non-interactive) setup_args+=("$1"); shift ;;
     --env|--token)
       [ "$#" -ge 2 ] || exit 1
@@ -24,6 +28,10 @@ while [ "$#" -gt 0 ]; do
     *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
   esac
 done
+if [ "$skip_db_network" = false ] && [ -z "$peer_ip" ] && [[ " ${setup_args[*]} " == *" --non-interactive "* ]] && [ ! -f /etc/spartan-cloud/database-network.json ] && ! grep -qs '^DATABASE_MODE="us-central"$' /etc/spartan-cloud/node.env; then
+  printf 'Automatic database setup requires --peer-ip ADDRESS in non-interactive mode, or --skip-db-network.\n' >&2
+  exit 1
+fi
 [ -d /run/systemd/system ] || { printf 'A systemd host is required.\n' >&2; exit 1; }
 command -v flock >/dev/null || { apt-get update; DEBIAN_FRONTEND=noninteractive apt-get install -y util-linux; }
 exec 9>/run/spartan-install.lock
@@ -166,3 +174,14 @@ systemctl is-active --quiet spartan-tunnel
 printf 'Installed %s node. Agent and tunnel start automatically; backups run hourly.\n' "$location"
 printf 'Tunnel ingress must point to http://127.0.0.1:8788.\n'
 printf 'View logs: journalctl -u spartan-agent -u spartan-tunnel -f\n'
+flock -u 9
+exec 9>&-
+if [ "$skip_db_network" = false ]; then
+  network_args=("$location" install)
+  if [ -n "$peer_ip" ]; then network_args+=("$peer_ip"); fi
+  if [ "$interactive_setup" = true ] && [ -r /dev/tty ]; then
+    spartan-db-network "${network_args[@]}" </dev/tty
+  else
+    spartan-db-network "${network_args[@]}"
+  fi
+fi

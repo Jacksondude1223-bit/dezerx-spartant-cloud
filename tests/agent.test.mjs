@@ -114,7 +114,7 @@ if (/^SELECT 1$/.test(sql)) console.log('1');
       const stamp = String(Date.now());
       return fetch(`${origin}${pathname}`, {method: 'POST', body: text, headers: {'x-spartan-timestamp': stamp, 'x-spartan-signature': await signature(secret, stamp, 'POST', pathname, text)}});
     };
-    for (const endpoint of ['node-health', 'instance', 'health', 'version', 'files', 'database/download', 'domain', 'reload']) {
+    for (const endpoint of ['node-health', 'instance', 'health', 'version', 'files', 'database/download', 'domain', 'reload', 'network/key']) {
       assert.equal((await fetch(`${origin}/control/${endpoint}`, {method: 'POST', body: '{}'})).status, 401);
     }
     const nodeMetrics = await managedCall('/control/node-health', {});

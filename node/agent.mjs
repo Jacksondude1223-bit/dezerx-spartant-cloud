@@ -19,6 +19,7 @@ import {appUrl} from './app-url.mjs';
 import {createManagement, validImage, apiError} from './management.mjs';
 import {createAdmin} from './admin.mjs';
 import {centralDatabase, validateDatabaseMode, databaseEnvironment, localTenant, remoteDatabaseReady, primaryConnection, DE_DATABASE_IP, US_DATABASE_IP} from './central-database.mjs';
+import {networkPublicKey} from './network-key.mjs';
 
 const run = promisify(execFile);
 const cfg = {...process.env, NODE_CONTROL_SECRET: process.env.NODE_CONTROL_SECRET || process.env.ORIGIN_SECRET};
@@ -460,9 +461,13 @@ async function control(req, res, url) {
   const payload = await body(req, url.pathname === '/control/files' ? 6 * 1024 * 1024 + 16384 : 16384);
   if (!signedWith(cfg.NODE_CONTROL_SECRET, req, url, payload)) return deny(res, security);
   if (!security.allowed()) return reply(res, 429, {error: 'rate_limited'});
-  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list', '/control/database/connection'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
+  if (!['/control/provision', '/control/lifecycle', '/control/upgrade', '/control/node-health', '/control/instance', '/control/health', '/control/version', '/control/database/download', '/control/files', '/control/domain', '/control/reload', '/control/list', '/control/database/connection', '/control/network/key'].includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   const input = JSON.parse(payload);
   if (!input || typeof input !== 'object' || Array.isArray(input)) return reply(res, 400, {error: 'invalid_input'});
+  if (url.pathname === '/control/network/key') {
+    const result = await networkPublicKey(cfg.NODE_REGION);
+    return result ? reply(res, 200, result) : reply(res, 503, {error: 'network_key_not_ready'});
+  }
   if (url.pathname === '/control/node-health') return reply(res, 200, await management.nodeHealth());
   if (url.pathname === '/control/list') return reply(res, 200, {region: cfg.NODE_REGION, tenants: await admin.tenants()});
   if (!validId(input.id)) return reply(res, 400, {error: 'invalid_id'});

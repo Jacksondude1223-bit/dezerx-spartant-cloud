@@ -20,10 +20,10 @@ while [ "$#" -gt 0 ]; do
     --github-token-file)
       [ "$#" -ge 2 ] || { printf 'Missing GitHub token file.\n' >&2; exit 1; }
       token_file="$2"; private=true; shift 2 ;;
-    --env|--token)
+    --env|--token|--peer-ip)
       [ "$#" -ge 2 ] || { printf 'Missing option value.\n' >&2; exit 1; }
       install_args+=("$1" "$2"); shift 2 ;;
-    --non-interactive|--skip-dependencies) install_args+=("$1"); shift ;;
+    --non-interactive|--skip-dependencies|--skip-db-network) install_args+=("$1"); shift ;;
     *) printf 'Unknown installer option.\n' >&2; exit 1 ;;
   esac
 done

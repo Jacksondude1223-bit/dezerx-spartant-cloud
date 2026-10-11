@@ -2,7 +2,7 @@
 
 Both regions run the Spartan web application. Every tenant database is hosted in the US MariaDB server. US containers use its Unix socket; Germany containers connect to `10.77.0.1:3306` through WireGuard. Germany has no running MariaDB server, no database socket mount, and no database fallback. Each tenant uses its own database and credentials. Germany does not receive MariaDB root credentials.
 
-This is an explicit topology change, not something a weekly update check activates. Existing installations stay in their previous mode until an operator runs the activation command. Use a maintenance window: US MariaDB restarts when its listener changes, and existing containers need environment updates and recreation. Preserve original tenant application keys and database passwords. The scripts never delete existing database files or tenant storage.
+This is an explicit topology change, not something a weekly update check activates. Fresh installations configure and activate this topology automatically once both nodes and their firewalls are ready. Existing installations with tenant records stay in their previous mode until an operator runs the activation command. Use a maintenance window: US MariaDB restarts when its listener changes, and existing containers need environment updates and recreation. Preserve original tenant application keys and database passwords. The scripts never delete existing database files or tenant storage.
 
 ## Prerequisites
 
@@ -13,6 +13,45 @@ This is an explicit topology change, not something a weekly update check activat
 - Both nodes use the same control API key (`NODE_CONTROL_SECRET` if configured, otherwise `ORIGIN_SECRET`). Germany fetches credentials through signed HTTPS calls to the existing US tunnel hostname. Exempt that hostname from browser challenges/Browser Integrity Check and caching.
 - All services in this mode must use `primary: "us"`. An existing tenant with a DE primary blocks activation; migrate its authoritative data separately first.
 - The dedicated `10.77.0.0/30` network must not overlap existing host/Docker routes. The helper refuses overlaps rather than choosing another network silently.
+
+## Automatic installer setup
+
+Upload the latest `install.sh` into `/root` on both nodes. Run on US:
+
+```bash
+sudo bash /root/install.sh us --private
+```
+
+Run on Germany:
+
+```bash
+sudo bash /root/install.sh de --private
+```
+
+The installer asks for the other server's public IP in addition to the existing image, API secret and Cloudflare Tunnel prompts. You can install the two servers in either order. Use the same control secret on both, and set the two Cloudflare published application routes to `node-us.dezerx.cloud` and `node-de.dezerx.cloud`, each with service `http://127.0.0.1:8788`. Keep the signed node APIs outside interactive Cloudflare challenges.
+
+The installer generates a root-only WireGuard private key, preserves it on reruns, and exchanges only public keys through signed HTTPS node API requests. It pins the discovered peer public key, configures the encrypted interface and scoped host firewall rules, then retries every 30 seconds while the other node or external firewall is not ready. It activates US MariaDB first; Germany waits for US central database readiness before disabling its local MariaDB service. The setup timer disables itself after success.
+
+You must still add the Contabo firewall rules below: the installer has no access to your Contabo account. Provision new instances only after both network status commands show central database readiness. Use the rebuilt runtime image described in the prerequisites.
+
+For non-interactive installs, add `--peer-ip` with the other node's public IP, for example:
+
+```bash
+sudo bash /root/install.sh us --github-token-file /root/github-token --env /root/node.env --token /root/tunnel-token --non-interactive --peer-ip DE_PUBLIC_IP
+```
+
+`--skip-db-network` preserves a legacy installation without scheduling network setup. Existing central configurations are preserved. Existing nodes with non-terminated tenant records never undergo automatic topology activation; use the manual procedure below in a maintenance window. The automatic installer does not recreate tenant containers, change database passwords, rotate application or backup encryption keys, or delete tenant data. Node updates and weekly checks do not activate this setup.
+
+Inspect progress:
+
+```bash
+sudo journalctl -u spartan-db-network -n 30 --no-pager
+sudo systemctl list-timers spartan-db-network.timer
+```
+
+If setup reports a changed peer key or a partially activated configuration, inspect the saved checkpoint and fix it manually. The timer refuses to replace a pinned peer key or repeatedly restart an already activated database.
+
+## Manual setup for existing nodes
 
 ## Prepare keys on both nodes
 

@@ -504,3 +504,8 @@ The market module can reserve and verify domain ownership, Cloudflare SSL and an
 ## US-only database mode
 
 See [US-DATABASE.md](US-DATABASE.md) for WireGuard setup and activation. In `DATABASE_MODE=us-central`, all instances must have a US primary. Germany runs the web application against US MariaDB and has no running local database. The default legacy mode remains unchanged until explicit activation.
+
+
+## Internal network bootstrap
+
+Signed `POST /control/network/key` on each node accepts `{}` and returns only `{region, publicKey}` with `Cache-Control: no-store`. It requires the same timestamped node HMAC authentication as other control calls and returns HTTP 503 `network_key_not_ready` until the installer has prepared the public key. It never returns a private key or database credentials. The automatic installer uses this endpoint over HTTPS, rejects redirects and incorrect regions, and pins the first authenticated peer key. This endpoint is for the node installer, not browser clients.

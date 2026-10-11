@@ -35,10 +35,10 @@ INSTALL
     for (const name of ['id', 'git']) chmodSync(join(bin, name), 0o755);
     const token = join(dir, 'token');
     writeFileSync(token, 'fake_test_secret\n', {mode: 0o600});
-    const result = spawnSync('bash', [join(dir, 'install.sh'), 'de', '--github-token-file', token, '--env', 'node.env', '--token', 'tunnel-token', '--non-interactive'], {encoding:'utf8', env:{...process.env, TEST_RESULT:dir}});
+    const result = spawnSync('bash', [join(dir, 'install.sh'), 'de', '--github-token-file', token, '--env', 'node.env', '--token', 'tunnel-token', '--non-interactive', '--peer-ip', '8.8.8.8', '--skip-db-network'], {encoding:'utf8', env:{...process.env, TEST_RESULT:dir}});
     assert.equal(result.status, 0, result.stderr);
     assert.ok(!`${result.stdout}${result.stderr}`.includes('fake_test_secret'));
-    assert.equal(readFileSync(join(dir, 'args'), 'utf8'), 'de\n--env\nnode.env\n--token\ntunnel-token\n--non-interactive\n');
+    assert.equal(readFileSync(join(dir, 'args'), 'utf8'), 'de\n--env\nnode.env\n--token\ntunnel-token\n--non-interactive\n--peer-ip\n8.8.8.8\n--skip-db-network\n');
     const authPath = readFileSync(join(dir, 'auth-path'), 'utf8');
     assert.throws(() => readFileSync(authPath));
     const piped = spawnSync('bash', ['-s', '--', 'us', '--github-token-file', token], {input:source, encoding:'utf8', env:{...process.env, TEST_RESULT:dir}});
