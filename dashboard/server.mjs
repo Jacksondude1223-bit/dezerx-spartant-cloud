@@ -14,7 +14,7 @@ import {promisify} from 'node:util';
 const scrypt = promisify(scryptCallback);
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REGIONS = {us: 'United States', de: 'Germany'};
-const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/favicon.svg': ['favicon.svg', 'image/svg+xml']};
+const STATIC = {'/': ['index.html', 'text/html; charset=utf-8'], '/index.html': ['index.html', 'text/html; charset=utf-8'], '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'], '/favicon.png': ['favicon.png', 'image/png'], '/logo.png': ['logo.png', 'image/png']};
 const SECURITY_HEADERS = {
   'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
   'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'
@@ -201,12 +201,14 @@ export function createDashboard(config, {now = Date.now, log = value => console.
   async function overview() {
     const regions = Object.keys(config.nodes);
     const results = await Promise.all(regions.map(async region => {
-      const started = now();
+      const endpoint = new URL(config.nodes[region]).host;
+      // Round trip of a no-op call. Agents older than /admin/ping answer 404 and show no latency.
+      const ping = (async () => { const started = now(); try { await node(region, 'ping', {}, {timeout: 10000}); return now() - started; } catch { return null; } })();
       try {
-        const data = await node(region, 'overview', {}, {timeout: 25000});
-        return {region, label: REGIONS[region], host: new URL(config.nodes[region]).host, ok: true, latencyMs: now() - started, ...data};
+        const [data, latencyMs] = await Promise.all([node(region, 'overview', {}, {timeout: 25000}), ping]);
+        return {region, label: REGIONS[region], endpoint, ok: true, latencyMs, ...data, host: data.host || endpoint};
       }
-      catch (error) { return {region, label: REGIONS[region], host: new URL(config.nodes[region]).host, ok: false, error: error.message}; }
+      catch (error) { await ping; return {region, label: REGIONS[region], endpoint, host: endpoint, ok: false, error: error.message}; }
     }));
     return {nodes: results, sampledAt: new Date(now()).toISOString()};
   }

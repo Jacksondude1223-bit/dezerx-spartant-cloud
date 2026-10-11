@@ -401,7 +401,7 @@ function proxyDashboard(req, res, url) {
   res.on('close', () => { if (!res.writableEnded) upstream.destroy(); });
   req.pipe(upstream);
 }
-const ADMIN_ROUTES = ['/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download'];
+const ADMIN_ROUTES = ['/admin/ping', '/admin/overview', '/admin/tenants', '/admin/stats', '/admin/tenant', '/admin/logs', '/admin/exec', '/admin/fs', '/admin/fs/download', '/admin/container', '/admin/reload', '/admin/upgrade', '/admin/database/download'];
 async function adminRoute(req, res, url) {
   if (!adminSecret || !ADMIN_ROUTES.includes(url.pathname)) return reply(res, 404, {error: 'not_found'});
   if (!plausible(req)) return deny(res, adminSecurity, true);
@@ -410,6 +410,9 @@ async function adminRoute(req, res, url) {
   if (!adminSecurity.allowed()) return reply(res, 429, {error: 'rate_limited'});
   const input = parseInput(payload);
   const operation = url.pathname.slice('/admin/'.length);
+  // Answers immediately so the dashboard can show real round-trip latency; overview
+  // includes Docker's one-second CPU sample and is not a latency measure.
+  if (operation === 'ping') return reply(res, 200, {ok: true, region: cfg.NODE_REGION});
   if (operation === 'overview') return reply(res, 200, await admin.overview());
   if (operation === 'tenants') return reply(res, 200, {region: cfg.NODE_REGION, tenants: await admin.tenants({withStats: input.stats === true})});
   if (operation === 'stats') return reply(res, 200, {region: cfg.NODE_REGION, containers: await admin.stats(), sampledAt: new Date().toISOString()});

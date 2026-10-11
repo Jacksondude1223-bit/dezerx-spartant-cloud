@@ -10,6 +10,7 @@ import {spawn, execFileSync} from 'node:child_process';
 import {gunzipSync} from 'node:zlib';
 import {signature} from '../workers/shared.js';
 import {parseSize, parsePair, parseStats, tenantSummary, validContainerPath, validFsRequest, validExecRequest, planOf} from '../node/admin.mjs';
+import {readNetDev} from '../node/management.mjs';
 
 const id = 't-' + 'a'.repeat(24);
 const fingerprint = 'f'.repeat(64);
@@ -27,6 +28,8 @@ test('admin parsers convert docker figures to bytes and percentages', () => {
   assert.equal(stats.memoryLimitBytes, 2 * 1024 ** 3);
   assert.equal(stats.processes, 17);
   assert.equal(planOf('SPARTANCLOUDPLUS_abc'), 'cloudplus');
+  const net = readNetDev('Inter-|  Receive\n face |bytes\n    lo: 100 1 0 0 0 0 0 0 100 1 0 0 0 0 0 0\n  eth0: 5000 10 0 0 0 0 0 0 7000 9 0 0 0 0 0 0\n  ifb0: 5000 10 0 0 0 0 0 0 7000 9 0 0 0 0 0 0\nveth12: 900 1 0 0 0 0 0 0 900 1 0 0 0 0 0 0\ndocker0: 9 1 0 0 0 0 0 0 9 1 0 0 0 0 0 0\n');
+  assert.deepEqual(net, {rx: 5000, tx: 7000, names: ['eth0']}, 'loopback, shaping, bridge and container interfaces are not counted');
 });
 
 test('tenant summaries never expose keys or database passwords', () => {
@@ -127,6 +130,11 @@ test('admin API authenticates separately and lists tenants with live resource us
     assert.equal(overview.status, 200, agent.stderr());
     assert.equal(overview.body.region, 'us');
     assert.equal(overview.body.node.status, 'ready');
+    assert.equal(overview.body.host, 'us.origin.test', 'the node names its public hostname');
+    assert.equal(overview.body.node.dockerVersion, '29.0');
+    assert.ok('rxBytesPerSecond' in overview.body.node.resources.network);
+    assert.deepEqual((await agent.json('/admin/ping')).body, {ok: true, region: 'us'});
+    assert.equal((await agent.call('/admin/ping', {}, originSecret)).status, 401);
     assert.equal(overview.body.tenants.length, 1);
     const [tenant] = overview.body.tenants;
     assert.equal(tenant.id, id);
