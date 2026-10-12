@@ -16,7 +16,7 @@ const api = {
     let data = null;
     try { data = await response.json(); } catch {}
     if (response.status === 401 && path !== '/api/login') { state.session = null; render(); throw new ApiError('not_signed_in', 401); }
-    if (!response.ok) throw new ApiError((data && data.error) || `http_${response.status}`, response.status);
+    if (!response.ok) { const error = new ApiError((data && data.error) || `http_${response.status}`, response.status); if (data?.upstream) error.detail = ` (${data.upstream} answered HTTP ${data.upstreamStatus}${data.cloudflareError ? `, Cloudflare error ${data.cloudflareError}` : ''})`; throw error; }
     return data;
   },
   get(path) { return this.request('GET', path); },
@@ -75,7 +75,7 @@ const MESSAGES = {
   invalid_cpu_limit: 'Enter a CPU limit between 0.1 and 64, with at most two decimals (for example 2.5).', cpu_limit_exceeds_host: 'The node does not have that many CPUs. Pick a lower limit.',
   symlink_mode: 'Symbolic links have no permissions of their own.', no_space_left: 'The disk is full.', python_unavailable: 'python3 is missing from this container image.'
 };
-const explain = error => MESSAGES[error?.code || error?.message] || String(error?.code || error?.message || 'Something went wrong').replace(/_/g, ' ');
+const explain = error => (MESSAGES[error?.code || error?.message] || String(error?.code || error?.message || 'Something went wrong').replace(/_/g, ' ')) + (error?.detail || '');
 
 /* ---------------------------------------------------------------- DOM helpers */
 function h(tag, props, ...children) {

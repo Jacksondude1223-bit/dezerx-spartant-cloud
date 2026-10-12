@@ -1,6 +1,9 @@
 name = "spartan-cloud-dashboard"
 main = "index.mjs"
 compatibility_date = "2026-10-01"
+# The routing Worker (load.dezerx.cloud) lives on the same zone; without this flag
+# Cloudflare answers those subrequests with an HTML 1042 page instead of running it.
+compatibility_flags = ["global_fetch_strictly_public"]
 workers_dev = true
 
 [observability]

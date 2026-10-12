@@ -40,8 +40,14 @@ export function clients(env, fetchImpl = fetch) {
     } catch {throw new ApiError(504, 'node_timeout');}
     if (response.status >= 300 && response.status < 400) throw new ApiError(502, 'unexpected_origin_redirect');
     if (raw && response.ok) return response;
+    const text = await response.text().catch(() => '');
     let data;
-    try {data = await response.json();} catch {throw new ApiError(502, response.status === 403 ? 'blocked_by_cloudflare' : 'invalid_node_response');}
+    try {data = JSON.parse(text);} catch {
+      const error = new ApiError(502, response.status === 403 ? 'blocked_by_cloudflare' : 'invalid_node_response');
+      error.data = {upstream: new URL(origin).host, upstreamStatus: response.status, cloudflareError: text.match(/Error (?:code:? )?(\d{3,4})/i)?.[1] || null};
+      console.error(JSON.stringify({event: 'invalid_upstream_response', path, ...error.data}));
+      throw error;
+    }
     if (!response.ok) {
       const error = new ApiError(response.status === 524 ? 504 : response.status, String(data.error || 'operation_failed').slice(0, 80));
       error.data = data; throw error;
