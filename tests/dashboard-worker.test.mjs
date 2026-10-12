@@ -1,20 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {readFileSync} from 'node:fs';
+import {readFileSync, readdirSync} from 'node:fs';
 import {createHmac} from 'node:crypto';
 import {createWorker} from '../dashboard-worker/index.mjs';
 import {store, view} from '../dashboard-worker/store.mjs';
 import {runJobs} from '../dashboard-worker/jobs.mjs';
 import {hashPassword, seal, open, digest} from '../dashboard-worker/crypto.mjs';
 import {bindDashboard, ROUTING_DATABASE, setupDatabase} from '../dashboard-worker/setup.mjs';
-import {deployDashboard, verificationSql, verifySchema} from '../dashboard-worker/deploy.mjs';
+import {deployDashboard, verificationSql, verifySchema, REQUIRED} from '../dashboard-worker/deploy.mjs';
 import {COOKIE} from '../dashboard-worker/auth.mjs';
 import {totpCode} from '../dashboard/server.mjs';
 
 function database() {
   const sqlite = new DatabaseSync(':memory:');
-  sqlite.exec(readFileSync(new URL('../dashboard-worker/migrations/0001_dashboard.sql', import.meta.url), 'utf8'));
+  for (const name of readdirSync(new URL('../dashboard-worker/migrations/', import.meta.url)).filter(x => x.endsWith('.sql')).sort()) sqlite.exec(readFileSync(new URL('../dashboard-worker/migrations/' + name, import.meta.url), 'utf8'));
   const statement = (sql, values = []) => ({sql, values, bind(...v) {return statement(sql, v);}, async first() {return sqlite.prepare(sql).get(...values) || null;}, async all() {return {success: true, results: sqlite.prepare(sql).all(...values)};}, async run() {const result = sqlite.prepare(sql).run(...values); return {success: true, meta: {changes: result.changes}};}});
   const db = {prepare: sql => statement(sql), withSession: mode => {assert.equal(mode, 'first-primary'); return db;}, batch: async statements => {sqlite.exec('BEGIN'); try {const result = []; for (const x of statements) result.push(await x.run()); sqlite.exec('COMMIT'); return result;} catch (error) {sqlite.exec('ROLLBACK'); throw error;}}};
   return {sqlite, db};
@@ -50,6 +50,82 @@ async function browser(worker, env, extra = {}) {
   cookie = login.headers.get('set-cookie').split(';')[0]; csrf = (await login.json()).csrf;
   return {call, cookie, csrf};
 }
+
+test('primary administrator creates encrypted dashboard users with independent logins and protected user management', async () => {
+  const {db, sqlite} = database(), env = environment(db), upstream = remote(env), worker = createWorker(upstream.fetch);
+  try {
+    assert.equal((await worker.fetch(new Request('https://dashboard.example.test/api/users'), env)).status, 401);
+    const owner = await browser(worker, env);
+    assert.equal((await (await owner.call('/api/session')).json()).manageUsers, true);
+    const forbidden = await worker.fetch(new Request('https://dashboard.example.test/api/users', {method: 'POST', headers: {cookie: owner.cookie, 'content-type': 'application/json'}, body: JSON.stringify({username: 'Anthony', password})}), env);
+    assert.equal(forbidden.status, 403);
+    const added = await owner.call('/api/users', 'POST', {username: 'Anthony', password});
+    assert.equal(added.status, 201); const account = await added.json();
+    assert.equal(account.username, 'Anthony'); assert.equal(account.passwordHash, undefined);
+    const row = sqlite.prepare('SELECT * FROM dashboard_users').get();
+    assert.equal(row.record.includes(password), false); assert.equal(row.record.includes('pbkdf2'), false);
+    const encrypted = await open(env.DASHBOARD_DATA_KEY, 'dashboard-user:anthony', row.record);
+    assert.match(encrypted.passwordHash, /^pbkdf2\$100000\$/);
+    assert.equal((await owner.call('/api/users', 'POST', {username: 'anthony', password})).status, 409);
+    assert.equal((await owner.call('/api/users', 'POST', {username: 'ADMIN', password})).status, 409);
+    assert.equal((await owner.call('/api/users', 'POST', {username: 'short', password: 'short'})).status, 400);
+    const other = await browser(worker, env, {username: 'anthony'});
+    const details = await (await other.call('/api/session')).json();
+    assert.equal(details.user, 'Anthony'); assert.equal(details.manageUsers, false);
+    assert.equal((await other.call('/api/overview')).status, 200);
+    assert.equal((await other.call('/api/users')).status, 403);
+    assert.equal((await other.call('/api/users', 'POST', {username: 'another', password})).status, 403);
+    assert.equal((await owner.call('/api/users/admin/delete', 'POST', {version: account.version})).status, 409);
+    const list = await (await owner.call('/api/users')).json();
+    assert.equal(list.users[0].owner, true); assert.equal(list.users.length, 2);
+    assert.equal(JSON.stringify(list).includes(password), false);
+    assert.equal(sqlite.prepare('SELECT details FROM dashboard_activity').all().some(x => x.details.includes(password)), false);
+  } finally {sqlite.close();}
+});
+
+test('password changes, disabling and deletion invalidate admin sessions without affecting the primary login', async () => {
+  const {db, sqlite} = database(), env = environment(db), worker = createWorker();
+  try {
+    const owner = await browser(worker, env);
+    let account = await (await owner.call('/api/users', 'POST', {username: 'staff', password})).json();
+    const staff = await browser(worker, env, {username: 'staff'});
+    const oldSession = sqlite.prepare("SELECT * FROM dashboard_sessions WHERE username = 'staff'").get();
+    const changed = 'Replacement-admin-password!';
+    const reset = await owner.call('/api/users/staff/password', 'POST', {password: changed, version: account.version});
+    assert.equal(reset.status, 200); account = await reset.json();
+    assert.equal((await (await staff.call('/api/session')).json()).authenticated, false);
+    const oldLogin = await worker.fetch(new Request('https://dashboard.example.test/api/login', {method: 'POST', headers: {'content-type': 'application/json', 'cf-connecting-ip': '198.51.100.21'}, body: JSON.stringify({username: 'staff', password})}), env);
+    assert.equal(oldLogin.status, 401);
+    const current = await browser(worker, env, {username: 'staff', password: changed});
+    assert.equal((await owner.call('/api/users/staff/status', 'POST', {enabled: false, version: 'wrong'})).status, 409);
+    account = await (await owner.call('/api/users/staff/status', 'POST', {enabled: false, version: account.version})).json();
+    assert.equal((await (await current.call('/api/session')).json()).authenticated, false);
+    account = await (await owner.call('/api/users/staff/status', 'POST', {enabled: true, version: account.version})).json();
+    sqlite.prepare('INSERT INTO dashboard_sessions(token_hash, username, csrf, auth_version, expires) VALUES (?, ?, ?, ?, ?)').run(...['token_hash', 'username', 'csrf', 'auth_version', 'expires'].map(key => oldSession[key]));
+    assert.equal((await (await staff.call('/api/session')).json()).authenticated, false, 'restoring an old row cannot restore access');
+    const enabled = await browser(worker, env, {username: 'staff', password: changed});
+    assert.equal((await owner.call('/api/users/staff/delete', 'POST', {version: account.version})).status, 200);
+    assert.equal((await (await enabled.call('/api/session')).json()).authenticated, false);
+    assert.equal((await (await owner.call('/api/session')).json()).authenticated, true);
+  } finally {sqlite.close();}
+});
+
+test('additional accounts do not share the primary authenticator and encrypted accounts cannot be copied to another username', async () => {
+  const {db, sqlite} = database(), env = environment(db), worker = createWorker();
+  try {
+    const owner = await browser(worker, env);
+    await owner.call('/api/users', 'POST', {username: 'staff', password});
+    env.DASHBOARD_TOTP_SECRET = 'JBSWY3DPEHPK3PXP';
+    const staff = await browser(worker, env, {username: 'staff'});
+    assert.equal((await (await staff.call('/api/session')).json()).authenticated, true);
+    const row = sqlite.prepare('SELECT * FROM dashboard_users').get();
+    sqlite.prepare('INSERT INTO dashboard_users(username, record, created_at, updated_at) VALUES (?, ?, ?, ?)').run('imposter', row.record, row.created_at, row.updated_at);
+    const result = await worker.fetch(new Request('https://dashboard.example.test/api/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({username: 'imposter', password})}), env);
+    assert.equal(result.status, 503);
+    const primary = await worker.fetch(new Request('https://dashboard.example.test/api/login', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({username: 'admin', password})}), env);
+    assert.equal(primary.status, 401);
+  } finally {sqlite.close();}
+});
 
 test('setup assets preserve canonical paths without redirecting back to the requested URL', async () => {
   const urls = [], worker = createWorker();
@@ -202,7 +278,7 @@ test('dashboard deployment refuses routing DB and verifies migrations before upl
   const own = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
   const bound = bindDashboard(config, own);
   const {sqlite} = database();
-  sqlite.exec("CREATE TABLE d1_migrations(name TEXT); INSERT INTO d1_migrations VALUES ('0001_dashboard.sql')");
+  sqlite.exec("CREATE TABLE d1_migrations(name TEXT); INSERT INTO d1_migrations VALUES ('0001_dashboard.sql'), ('0002_dashboard_users.sql')");
   try {
     const results = verificationSql.split('; ').map(sql => ({success: true, results: sqlite.prepare(sql).all()}));
     verifySchema(results, ['0001_dashboard.sql']);
@@ -210,7 +286,7 @@ test('dashboard deployment refuses routing DB and verifies migrations before upl
     await deployDashboard({config: bound, run: args => {calls.push(args); if (args[1] === 'execute') return JSON.stringify(results);}, build: async () => {}, log() {}});
     assert.deepEqual(calls.map(x => x[0] === 'deploy' ? 'deploy' : x[1]), ['migrations', 'execute', 'deploy']);
     assert.ok(calls.slice(0, 2).every(x => x.includes('DASHBOARD_DB') && !x.includes('DB')));
-    const bad = structuredClone(results); bad[8].results[0].value = 'routing';
+    const bad = structuredClone(results); bad[Object.keys(REQUIRED).length].results[0].value = 'routing';
     assert.throws(() => verifySchema(bad, ['0001_dashboard.sql']), /identity/);
     await assert.rejects(deployDashboard({config: bindDashboard(config, own), run: args => args[1] === 'execute' ? JSON.stringify(bad) : '', build: async () => {throw Error('must not build');}, log() {}}), /identity/);
   } finally {sqlite.close();}

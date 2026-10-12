@@ -88,3 +88,12 @@ sudo systemctl disable --now spartan-dashboard
 ```
 
 The agents, Cloudflare tunnels, databases, backups and customer containers continue running.
+
+
+## Additional dashboard administrators
+
+The primary administrator has a **Users** page below Activity in the Monitoring section. Add accounts with a unique username and a password of 12 to 1024 characters. Each added administrator has full node, instance and Cloud Firewall access, but only the primary administrator can create accounts, reset passwords, enable/disable accounts or delete them. These accounts belong to the dashboard; they do not create Spartan tenant users. The primary account is protected from edits and deletion on this page.
+
+Additional accounts live only in the separate dashboard D1 database. Passwords are salted PBKDF2 hashes inside authenticated encrypted records using the existing `DASHBOARD_DATA_KEY`. Passwords and hashes are never returned by the API or written to audit details. Password resets, disabling, re-enabling and deletion revoke existing sessions. A fresh account version prevents an old session from becoming valid again after re-enabling an account. Existing primary-account credentials and sessions are preserved. The primary account’s optional authenticator setting continues to apply to that account; additional accounts currently sign in with their own username and password.
+
+Deploy with the dashboard Worker’s existing `npm run deploy` command in Cloudflare Builds. It applies and verifies `0002_dashboard_users.sql` before uploading code. No new secret or node update is needed. Authenticated, CSRF-protected management endpoints are `GET /api/users`, `POST /api/users` with `{username, password}`, and `POST /api/users/{username}/password`, `/status` or `/delete`. Existing-account writes require the current `version` from the users list; password uses `{password, version}`, status uses `{enabled, version}`, delete uses `{version}`. Only the primary administrator can call these endpoints.

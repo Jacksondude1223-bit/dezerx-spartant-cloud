@@ -1,0 +1,1 @@
+CREATE TABLE dashboard_users (username TEXT PRIMARY KEY COLLATE NOCASE, record TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);

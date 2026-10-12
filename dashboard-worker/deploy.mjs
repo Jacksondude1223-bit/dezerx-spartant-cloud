@@ -5,14 +5,14 @@ import path from 'node:path';
 import {bindDashboard, setupDatabase} from './setup.mjs';
 import {buildAssets} from './build.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
-export const REQUIRED = {dashboard_metadata: ['name', 'value'], dashboard_sessions: ['token_hash', 'username', 'csrf', 'auth_version', 'expires'], dashboard_rate_limits: ['key', 'count', 'expires'], dashboard_totp: ['key', 'counter'], dashboard_instances: ['id', 'hostname', 'record', 'revision', 'created_at'], dashboard_jobs: ['id', 'tenant_id', 'kind', 'payload', 'status', 'stage', 'attempts', 'next_at', 'deadline', 'created_at'], dashboard_locks: ['name', 'token', 'expires'], dashboard_activity: ['id', 'time', 'event', 'details']};
+export const REQUIRED = {dashboard_metadata: ['name', 'value'], dashboard_sessions: ['token_hash', 'username', 'csrf', 'auth_version', 'expires'], dashboard_rate_limits: ['key', 'count', 'expires'], dashboard_totp: ['key', 'counter'], dashboard_instances: ['id', 'hostname', 'record', 'revision', 'created_at'], dashboard_jobs: ['id', 'tenant_id', 'kind', 'payload', 'status', 'stage', 'attempts', 'next_at', 'deadline', 'created_at'], dashboard_locks: ['name', 'token', 'expires'], dashboard_users: ['username', 'record', 'created_at', 'updated_at'], dashboard_activity: ['id', 'time', 'event', 'details']};
 const indexes = ['dashboard_sessions_expiry', 'dashboard_jobs_active_tenant', 'dashboard_jobs_due', 'dashboard_activity_time'];
 export function verifySchema(results, migrations) {
   if (!Array.isArray(results) || results.some(x => !x.success || !Array.isArray(x.results))) throw new Error('Dashboard D1 verification failed');
   let i = 0;
   for (const [table, columns] of Object.entries(REQUIRED)) {
     if (columns.some(name => !results[i]?.results.some(x => x.name === name))) throw new Error('Dashboard schema missing columns in ' + table);
-    const integers = ['count', 'counter', 'expires', 'revision', 'created_at', 'next_at', 'deadline', 'attempts'];
+    const integers = ['count', 'counter', 'expires', 'revision', 'created_at', 'updated_at', 'next_at', 'deadline', 'attempts'];
     for (const name of columns) {
       const column = results[i].results.find(x => x.name === name);
       const type = integers.includes(name) || (table === 'dashboard_activity' && name === 'id') ? 'INTEGER' : 'TEXT';

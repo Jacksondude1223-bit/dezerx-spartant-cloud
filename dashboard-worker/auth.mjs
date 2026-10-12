@@ -1,14 +1,17 @@
 import {digest, random, equal, verifyPassword, totpCounter, hmac} from './crypto.mjs';
 import {ApiError} from './store.mjs';
+import {userCredentials} from './users.mjs';
 export const COOKIE = '__Host-spartan_dashboard';
 export const cookie = (token, age) => `${COOKIE}=${token}; Path=/; Secure; HttpOnly; SameSite=Strict; Max-Age=${age}`;
-export async function authVersion(env) {return digest([env.DASHBOARD_USER, env.DASHBOARD_PASSWORD_HASH, env.DASHBOARD_TOTP_SECRET || ''].join('\n'));}
+export async function authVersion(env) {return digest([env.DASHBOARD_USER, env.DASHBOARD_PASSWORD_HASH, env.DASHBOARD_TOTP_SECRET || '', ...(env.DASHBOARD_ACCOUNT_VERSION ? [env.DASHBOARD_ACCOUNT_VERSION] : [])].join('\n'));}
 async function sessionTag(env, row) {return hmac(env.DASHBOARD_DATA_KEY, JSON.stringify(['dashboard-session-v1', await authVersion(env), row.token_hash, row.username, row.csrf, row.expires]));}
 export async function session(request, env, db) {
   const token = (request.headers.get('cookie') || '').split(';').map(x => x.trim()).find(x => x.startsWith(COOKIE + '='))?.slice(COOKIE.length + 1);
   if (!/^[a-f0-9]{64}$/.test(token || '')) return null;
   const row = await db.query('SELECT * FROM dashboard_sessions WHERE token_hash = ? AND expires > ?', await digest(token), Date.now()).first();
-  return row && equal(row.auth_version, await sessionTag(env, row)) ? row : null;
+  if (!row) return null;
+  const accountEnv = await userCredentials(env, db, row.username);
+  return accountEnv && equal(row.auth_version, await sessionTag(accountEnv, row)) ? row : null;
 }
 export async function limitLogin(request, db) {
   const now = Date.now();
@@ -22,7 +25,9 @@ export async function login(request, input, env, db, config) {
   const now = Date.now();
   const ip = request.headers.get("cf-connecting-ip") || "unknown";
   await limitLogin(request, db);
-  const userOk = equal(input.username, env.DASHBOARD_USER);
+  const accountEnv = await userCredentials(env, db, input.username);
+  const userOk = Boolean(accountEnv);
+  env = accountEnv || env;
   const passOk = await verifyPassword(input.password, env.DASHBOARD_PASSWORD_HASH);
   const counter = env.DASHBOARD_TOTP_SECRET ? await totpCounter(env.DASHBOARD_TOTP_SECRET, input.code) : 0;
   if (!userOk || !passOk || counter === null) {
@@ -38,7 +43,7 @@ export async function login(request, input, env, db, config) {
   const row = {token_hash: await digest(token), username: env.DASHBOARD_USER, csrf, expires: now + config.hours * 3600000};
   await db.query('INSERT INTO dashboard_sessions(token_hash, username, csrf, auth_version, expires) VALUES (?, ?, ?, ?, ?)', row.token_hash, row.username, row.csrf, await sessionTag(env, row), row.expires).run();
   await db.audit('login', {user: env.DASHBOARD_USER, ip});
-  return {token, csrf};
+  return {token, csrf, username: env.DASHBOARD_USER};
 }
 export async function jsonBody(request, maximum = 65536) {
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) throw new ApiError(415, 'json_required');

@@ -44,6 +44,7 @@ const MESSAGES = {
   file_changed: 'The file changed on disk after you opened it.', file_too_large: 'The file is larger than 4 MB. Download it instead.',
   container_not_running: 'The container is not running.', service_suspended: 'This tenant is suspended. Resume it from the master website.',
   console_busy: 'Too many commands are running. Try again shortly.', rate_limited: 'Too many requests. Slow down for a minute.',
+  username_in_use: 'That username already exists.', invalid_username: 'Use 1 to 64 letters, numbers, dots, underscores, @ or hyphens.', invalid_password: 'Use a password with 12 to 1024 characters.', user_changed: 'This account changed. Refresh the Users page and try again.', user_management_forbidden: 'Only the primary administrator can manage users.', primary_admin_protected: 'The primary administrator account is protected.', users_busy: 'Another account change is in progress. Try again.', user_limit: 'The dashboard supports up to 100 additional administrators.',
   csrf_failed: 'Your session expired. Reload the page.', invalid_credentials: 'Incorrect username or password.',
   invalid_credentials_or_code: 'Incorrect username, password or authenticator code. Each code works once.',
   too_many_attempts: 'Too many sign-in attempts. Wait 15 minutes.', not_provisioned: 'This tenant is not provisioned on this node.',
@@ -336,6 +337,7 @@ function sidebar(current) {
     state.session?.firewall ? item('#/firewall', 'lock', 'Cloud Firewall', current === 'firewall') : null,
     h('div', {class: 'nav-label'}, 'Monitoring'),
     item('#/activity', 'activity', 'Activity', current === 'activity'),
+    state.session?.manageUsers ? item('#/users', 'user', 'Users', current === 'users') : null,
     h('div', {class: 'nav-spacer'}),
     h('div', {class: 'user-chip'}, h('span', {class: 'avatar'}, (state.session?.user || '?').charAt(0)), h('span', {class: 'who'}, state.session?.user), h('button', {type: 'button', title: 'Sign out', 'aria-label': 'Sign out', onclick: signOut}, icon('logout'))));
 }
@@ -379,6 +381,7 @@ async function render() {
     if (!parts.length) await homePage(ctx);
     else if (parts[0] === 'tenants') await tenantsPage(ctx);
     else if (parts[0] === 'activity') await activityPage(ctx);
+    else if (parts[0] === 'users' && state.session.manageUsers) await usersPage(ctx);
     else if (parts[0] === 'firewall' && state.session.firewall) await window.spartanFirewallPage({ctx, id: parts[1], h, api, button, icon, crumbs, pageHead, badge, modal, confirmDialog, toast, fail, go, reload: render});
     else if (parts[0] === 'instances' && !parts[1]) await instancesPage(ctx);
     else if (parts[0] === 'instances' && parts[1] === 'new') await newInstancePage(ctx);
@@ -394,7 +397,7 @@ window.addEventListener('hashchange', render);
 function loginPage() {
   const user = h('input', {class: 'input', name: 'username', autocomplete: 'username', required: true});
   const pass = h('input', {class: 'input', name: 'password', type: 'password', autocomplete: 'current-password', required: true});
-  const code = state.twoFactor ? h('input', {class: 'input mono', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]{6}', maxlength: '6', placeholder: '123456', required: true}) : null;
+  const code = state.twoFactor ? h('input', {class: 'input mono', name: 'code', inputmode: 'numeric', autocomplete: 'one-time-code', pattern: '[0-9]{6}', maxlength: '6', placeholder: '123456'}) : null;
   const message = h('div', {class: 'banner error', style: {display: 'none'}});
   const submit = h('button', {type: 'submit', class: 'btn primary'}, 'Sign in');
   const form = h('form', {onsubmit: async event => {
@@ -405,7 +408,7 @@ function loginPage() {
       csrf = session.csrf; state.session = null; render();
     } catch (error) { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; pass.value = ''; if (code) code.value = ''; pass.focus(); }
     finally { submit.disabled = false; }
-  }}, message, h('label', {class: 'field'}, h('span', null, 'Username'), user), h('label', {class: 'field'}, h('span', null, 'Password'), pass), code ? h('label', {class: 'field'}, h('span', null, 'Authenticator code'), code) : null, submit);
+  }}, message, h('label', {class: 'field'}, h('span', null, 'Username'), user), h('label', {class: 'field'}, h('span', null, 'Password'), pass), code ? h('label', {class: 'field'}, h('span', null, 'Authenticator code (if enabled for your account)'), code) : null, submit);
   setTimeout(() => user.focus(), 0);
   return h('div', {class: 'login'}, h('div', {class: 'card'}, h('div', {class: 'brand'}, brandMark(), state.label || 'Spartan Cloud'), h('h1', null, 'Sign in'), form));
 }
@@ -1053,6 +1056,42 @@ async function logsTab(ctx) {
 }
 
 /* ---------------------------------------------------------------- activity */
+async function usersPage(ctx) {
+  const data = await api.get('/api/users');
+  if (!ctx.alive()) return;
+  let busy = false;
+  function passwordForm(user) {
+    const username = h('input', {class: 'input', name: 'username', autocomplete: 'off', value: user?.username || '', required: true, maxlength: '64', pattern: '[a-zA-Z0-9_.@-]{1,64}', readonly: Boolean(user)});
+    const password = h('input', {class: 'input', name: 'password', type: 'password', autocomplete: 'new-password', required: true, minlength: '12', maxlength: '1024'});
+    const confirm = h('input', {class: 'input', name: 'confirmPassword', type: 'password', autocomplete: 'new-password', required: true, minlength: '12', maxlength: '1024'});
+    const message = h('p', {class: 'muted', role: 'status'});
+    const submit = h('button', {class: 'btn primary', type: 'submit'}, user ? 'Set password' : 'Create administrator');
+    const form = h('form', {onsubmit: async event => {
+      event.preventDefault();
+      if (submit.disabled) return;
+      if (password.value !== confirm.value) {message.textContent = 'Passwords do not match.'; return;}
+      submit.disabled = true; message.textContent = '';
+      try {
+        await api.post(user ? `/api/users/${encodeURIComponent(user.username)}/password` : '/api/users', user ? {password: password.value, version: user.version} : {username: username.value.trim(), password: password.value});
+        password.value = confirm.value = ''; ref.close(); toast(user ? 'Password reset. Existing sessions revoked.' : 'Administrator created.'); if (ctx.alive()) render();
+      } catch (error) {message.textContent = explain(error);} finally {submit.disabled = false;}
+    }}, h('p', {class: 'muted'}, user ? 'Resetting the password signs this administrator out of every existing session.' : 'This account can manage nodes, instances and firewalls. Only the primary administrator manages dashboard users.'), h('label', {class: 'field'}, h('span', null, 'Username'), username), h('label', {class: 'field'}, h('span', null, 'Password'), password), h('p', {class: 'hint'}, 'Use 12 or more characters.'), h('label', {class: 'field'}, h('span', null, 'Confirm password'), confirm), message, h('div', {class: 'actions'}, button('Cancel', {onClick: () => {password.value = confirm.value = ''; ref.close();}}), submit));
+    const ref = modal({title: user ? `Reset password · ${user.username}` : 'Add administrator', body: h('div', {class: 'body'}, form)});
+    (user ? password : username).focus();
+  }
+  async function change(user, action) {
+    if (busy) return;
+    busy = true;
+    try {
+      const deleting = action === 'delete', enabled = !user.enabled;
+      if (!await confirmDialog({title: `${deleting ? 'Delete' : enabled ? 'Enable' : 'Disable'} ${user.username}?`, message: deleting ? 'Remove this dashboard account and revoke all of its sessions.' : enabled ? 'Allow this administrator to sign in again.' : 'Block new sign-ins and revoke all existing sessions.', confirm: deleting ? 'Delete' : enabled ? 'Enable' : 'Disable', danger: deleting || !enabled})) return;
+      await api.post(`/api/users/${encodeURIComponent(user.username)}/${action}`, {version: user.version, ...(deleting ? {} : {enabled})});
+      toast('Administrator updated.'); if (ctx.alive()) render();
+    } catch (error) {fail(error);} finally {busy = false;}
+  }
+  const rows = data.users.map(user => h('tr', null, h('td', {class: 'primary-text'}, user.username), h('td', null, user.role), h('td', null, badge({label: user.enabled ? 'Enabled' : 'Disabled', tone: user.enabled ? 'green' : 'amber'})), h('td', {class: 'muted'}, user.createdAt ? new Date(user.createdAt).toLocaleString() : 'Existing account'), h('td', null, user.owner ? h('span', {class: 'muted'}, 'Protected account') : h('div', {class: 'actions'}, button('Reset password', {small: true, icon: 'lock', onClick: () => passwordForm(user)}), button(user.enabled ? 'Disable' : 'Enable', {small: true, onClick: () => change(user, 'status')}), button('Delete', {small: true, kind: 'danger', icon: 'trash', onClick: () => change(user, 'delete')})))));
+  ctx.fill([crumbs([{label: state.session.label, href: '#/'}, {label: 'Users'}]), pageHead({title: 'Users', subtitle: 'Manage administrator access to the Spartan Cloud dashboard.', actions: [button('Refresh', {icon: 'refresh', onClick: render}), button('Add administrator', {kind: 'primary', icon: 'plus', onClick: () => passwordForm()})]}), h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, ['Username', 'Role', 'Status', 'Created', ''].map(label => h('th', null, label)))), h('tbody', null, rows))))]);
+}
 async function activityPage(ctx) {
   const data = await api.get('/api/activity');
   const label = e => e.event === 'action' ? String(e.action).replace(/_/g, ' ') : e.event.replace(/_/g, ' ');
