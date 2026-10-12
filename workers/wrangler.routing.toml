@@ -30,7 +30,7 @@ tag = "routing-v2-d1-only"
 deleted_classes = ["RoutingTenant", "Domains"]
 
 [triggers]
-crons = ["*/5 * * * *"]
+crons = ["0 * * * *"]
 
 
 
