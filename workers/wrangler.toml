@@ -15,6 +15,7 @@ CLOUDFLARE_ZONE_ID = "9709025acf2bfa1c3d8a513c923a5f94"
 SAAS_ZONE_DOMAIN = "dezerx.cloud"
 SAAS_CNAME_TARGET = "load.dezerx.cloud"
 INSTANCE_DOMAIN = "dezerx.cloud"
+INSTANCE_HOSTNAME_MODE = "wildcard"
 CLOUDFLARE_ACCOUNT_ID = "fd777f8c55d9f6151ce6dae30d9f96ec"
 ROUTING_WORKER_NAME = "dezerx-spartant-cloud"
 ROUTE_CACHE_SECONDS = "10"
@@ -49,7 +50,7 @@ zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
 
 [[routes]]
 pattern = "test.costallogic.co/*"
-zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
+zone_id = "90070a3fc3bad1110716c6e4adec38ad"
 
 [[d1_databases]]
 binding = "DB"

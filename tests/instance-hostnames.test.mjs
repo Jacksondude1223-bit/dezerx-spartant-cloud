@@ -65,3 +65,20 @@ test('hostname allocation requires signed control requests and never overrides a
   assert.equal(response.status, 409);
   assert.equal((await response.json()).error, 'instance_hostname_conflict');
 });
+
+test('wildcard mode activates names without calling the Cloudflare API or needing a token', async t => {
+  const env = environment();
+  env.INSTANCE_HOSTNAME_MODE = 'wildcard';
+  delete env.CF_INSTANCE_API_TOKEN;
+  const original = globalThis.fetch;
+  t.after(() => {globalThis.fetch = original;});
+  let called = false;
+  globalThis.fetch = async () => {called = true; return Response.json({success: false}, {status: 403});};
+  const response = await allocateHostname(env, id);
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.match(body.hostname, /^instance-[1-9]\d{3}\.dezerx\.cloud$/);
+  assert.equal(body.status, 'active');
+  assert.equal(called, false);
+  assert.equal(await resolveInstanceHostname(env, body.hostname), id);
+});

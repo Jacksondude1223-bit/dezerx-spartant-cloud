@@ -6,7 +6,8 @@ export async function allocateHostname(env, id) {
   if (!tenant || tenant.status === 'terminated') return json({error: 'tenant_unavailable'}, 409);
   const domain = env.INSTANCE_DOMAIN || env.SAAS_ZONE_DOMAIN;
   if (!domain || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,63}$/.test(domain) || domain !== env.SAAS_ZONE_DOMAIN) return json({error: 'instance_domain_configuration_required'}, 503);
-  if (!env.CF_INSTANCE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_ZONE_ID || !env.ROUTING_WORKER_NAME) return json({error: 'instance_domain_configuration_required'}, 503);
+  const wildcard = env.INSTANCE_HOSTNAME_MODE === 'wildcard';
+  if (!wildcard && (!env.CF_INSTANCE_API_TOKEN || !env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_ZONE_ID || !env.ROUTING_WORKER_NAME)) return json({error: 'instance_domain_configuration_required'}, 503);
   let record = await env.DB.prepare('SELECT hostname, tenantId, status FROM instance_hostnames WHERE tenantId = ?').bind(id).first();
   for (let attempt = 0; !record && attempt < 64; attempt++) {
     const numbers = crypto.getRandomValues(new Uint32Array(1));
@@ -16,6 +17,12 @@ export async function allocateHostname(env, id) {
     record = await env.DB.prepare('SELECT hostname, tenantId, status FROM instance_hostnames WHERE tenantId = ?').bind(id).first();
   }
   if (!record) return json({error: 'instance_hostname_capacity'}, 409);
+  // Wildcard mode: *.INSTANCE_DOMAIN already routes to this Worker (one proxied wildcard DNS
+  // record plus one Worker route), so a hostname is live as soon as it is recorded in D1.
+  if (wildcard && record.status !== 'active') {
+    await env.DB.prepare("UPDATE instance_hostnames SET status = 'active' WHERE tenantId = ?").bind(id).run();
+    record.status = 'active';
+  }
   if (record.status !== 'active') {
     let stage = 'lookup', cloudflare = null;
     const reason = (response, body) => ({status: response.status, errors: (Array.isArray(body?.errors) ? body.errors : []).slice(0, 3).map(e => ({code: e?.code ?? null, message: String(e?.message || '').slice(0, 200)}))});
