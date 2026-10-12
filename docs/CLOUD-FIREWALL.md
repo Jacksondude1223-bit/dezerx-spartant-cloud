@@ -4,14 +4,14 @@ Open **Cloud Firewall** in the Cloudflare-hosted dashboard to manage Contabo net
 
 ## Connect Contabo
 
-Add these runtime secrets under **Cloudflare → Workers & Pages → dashboard Worker → Settings → Variables and Secrets**. Select type **Secret**, save and deploy the changes, then refresh Cloud Firewall.
+Configure these runtime settings under **Cloudflare → Workers & Pages → dashboard Worker → Settings → Variables and Secrets**. Use the types below, save and deploy the changes, then refresh Cloud Firewall. The username and client ID are already included in `dashboard-worker/wrangler.toml` so repository deployments retain them.
 
-| Secret | Value |
-| --- | --- |
-| `CONTABO_CLIENT_ID` | Client ID from Contabo Security & Access |
-| `CONTABO_CLIENT_SECRET` | Complete client secret, not its masked display |
-| `CONTABO_API_USERNAME` | Contabo API user's email address |
-| `CONTABO_API_PASSWORD` | Separate password created for that API user |
+| Setting | Type | Value |
+| --- | --- | --- |
+| `CONTABO_CLIENT_ID` | Text | Client ID from Contabo Security & Access |
+| `CONTABO_CLIENT_SECRET` | Secret | Complete client secret, not its masked display |
+| `CONTABO_API_USERNAME` | Text | Contabo API user's email address |
+| `CONTABO_API_PASSWORD` | Secret | Separate password created for that API user |
 
 Set the API-user password through Contabo's Security & Access password email. It is distinct from the client secret. The integration does not create users or regenerate credentials. These secrets are independent of the node API keys and `DASHBOARD_DATA_KEY`.
 

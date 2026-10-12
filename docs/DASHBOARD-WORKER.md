@@ -1,6 +1,6 @@
 # Cloudflare dashboard
 
-The **Cloud Firewall** section manages Contabo firewalls, inbound rules and server assignments. Configure its four additional Worker secrets as documented in [CLOUD-FIREWALL.md](CLOUD-FIREWALL.md). These are optional for all other dashboard features.
+The **Cloud Firewall** section manages Contabo firewalls, inbound rules and server assignments. Its username and client ID are included in the Wrangler variables; configure the client secret and API-user password as documented in [CLOUD-FIREWALL.md](CLOUD-FIREWALL.md). These settings are optional for all other dashboard features.
 
 The operator dashboard can run as the independent `spartan-cloud-dashboard` Worker. Its static UI is built from the same `dashboard/public` sources as the node dashboard. It uses a separate D1 database named `spartan-cloud-dashboard`, bound as `DASHBOARD_DB`. The routing Worker keeps its existing database `2551e490-663e-4fb7-b7b5-0fe468eca54a`; the dashboard deployment script rejects that UUID. No routing database migrations or customer containers are changed by deploying this dashboard.
 

@@ -12,6 +12,8 @@ binding = "ASSETS"
 run_worker_first = true
 
 [vars]
+CONTABO_API_USERNAME = "john_harrison2024@outlook.com"
+CONTABO_CLIENT_ID = "INT-15415885"
 DASHBOARD_USER = "admin"
 DASHBOARD_LABEL = "Spartan Cloud"
 US_ORIGIN = "https://node-us.dezerx.cloud"
