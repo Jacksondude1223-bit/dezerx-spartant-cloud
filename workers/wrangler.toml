@@ -48,6 +48,11 @@ zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
 pattern = "*.load.dezerx.cloud/*"
 zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
 
+# Instance hostnames (instance-XXXX.dezerx.cloud) in INSTANCE_HOSTNAME_MODE=wildcard.
+[[routes]]
+pattern = "*.dezerx.cloud/*"
+zone_id = "9709025acf2bfa1c3d8a513c923a5f94"
+
 [[routes]]
 pattern = "test.costallogic.co/*"
 zone_id = "90070a3fc3bad1110716c6e4adec38ad"
