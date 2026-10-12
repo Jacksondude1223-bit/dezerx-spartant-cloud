@@ -109,6 +109,9 @@ h1 { font-size: 28px; line-height: 1.15; letter-spacing: -.025em; font-weight: 6
 .section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin: 0 0 12px; flex-wrap: wrap; }
 .section-head h2 { font-size: 16px; font-weight: 500; margin: 0; letter-spacing: -.01em; }
 .section-head .note { font-size: 12px; color: var(--muted); }
+.tunnel-heading { align-items: center; }
+.tunnel-brand { display: flex; align-items: center; gap: 12px; }
+.tunnel-logo { display: block; width: 64px; height: auto; flex: none; }
 .section { margin-bottom: 30px; }
 
 /* Tables */
