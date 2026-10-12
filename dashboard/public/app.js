@@ -28,6 +28,7 @@ const api = {
   }
 };
 const MESSAGES = {
+  node_tunnel_unauthorized: 'The node rejected the tunnel diagnostics signature. Check that ADMIN_API_SECRET matches this node.',
   contabo_configuration_required: 'Configure the Contabo secrets in the dashboard Worker.', contabo_auth_failed: 'Contabo rejected the API credentials. Check the client ID, client secret, API username and separate API-user password.',
   contabo_permission_denied: 'The Contabo API user does not have permission for this operation.', contabo_addon_required: 'Contabo requires a firewall add-on for this instance. Check its eligibility in Contabo.',
   contabo_timeout: 'Contabo did not answer in time. Refresh the firewall before retrying; the change may already have applied.', contabo_rate_limited: 'Contabo is limiting requests. Wait before refreshing.',
@@ -300,7 +301,7 @@ function promptDialog({title, label, value = '', confirm = 'Save', mono = true, 
 }
 
 /* ---------------------------------------------------------------- state & routing */
-const state = {session: null, overview: null, overviewAt: 0, overviewError: null, details: new Map(), consoles: new Map(), files: new Map(), logs: new Map(), view: 0, timers: []};
+const state = {session: null, overview: null, overviewAt: 0, overviewError: null, details: new Map(), consoles: new Map(), files: new Map(), logs: new Map(), tunnels: new Map(), view: 0, timers: []};
 function route() {
   const raw = location.hash.replace(/^#/, '') || '/';
   const [pathPart, query = ''] = raw.split('?');
@@ -536,19 +537,37 @@ async function tenantsPage(ctx) {
 /* ---------------------------------------------------------------- node */
 async function nodePage(ctx, region) {
   let tab = ctx.query.get('tab') || 'tenants';
+  const tunnelSlot = h('div');
+  let tunnelBusy = false;
+  const paintTunnel = () => { if (ctx.alive() && tab === 'tunnel') tunnelSlot.replaceChildren(...flatNodes(tunnelTab(state.tunnels.get(region), region))); };
+  const refreshTunnel = async (force = false) => {
+    const previous = state.tunnels.get(region);
+    if (tunnelBusy || (!force && previous && Date.now() - previous.attemptedAt < 5000)) return;
+    tunnelBusy = true;
+    try {
+      const data = await api.get(`/api/nodes/${region}/tunnel`);
+      state.tunnels.set(region, {data, at: Date.now(), attemptedAt: Date.now(), error: null});
+    } catch (error) { state.tunnels.set(region, {...state.tunnels.get(region), attemptedAt: Date.now(), error}); }
+    finally { tunnelBusy = false; paintTunnel(); }
+  };
   const draw = data => {
     const n = nodeOf(data, region);
     if (!n) return ctx.fill(errorBox(new ApiError('unknown_node')));
     const tone = nodeTone(n);
     const head = [crumbs([{label: state.session.label, href: '#/'}, {label: 'Nodes'}, {label: `node-${region}`}]),
-      pageHead({title: `node-${region}`, lead: flag(region), pill: tone, subtitle: n.host, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }})]})];
-    if (!n.ok) return ctx.fill([...head, h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(n.error))), h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This node did not answer'), 'Check that spartan-agent and spartan-tunnel are running, that ADMIN_API_SECRET is set on the node, and that the node hostname is not behind a Cloudflare challenge.'))]);
+      pageHead({title: `node-${region}`, lead: flag(region), pill: tone, subtitle: n.host, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { if (tab === 'tunnel') return refreshTunnel(true); try { draw(await overview(true)); } catch (e) { fail(e); } }})]})];
+    const select = key => { tab = key; history.replaceState(null, '', `#/node/${region}${key === 'tenants' ? '' : `?tab=${key}`}`); draw(state.overview); };
+    const nodeTabs = tabs([['tenants', 'Tenants'], ['resources', 'Resources'], ['tunnel', 'Tunnel', 'network']], tab, select);
+    if (!n.ok) {
+      ctx.fill([...head, nodeTabs, h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(n.error))), tab === 'tunnel' ? tunnelSlot : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This node did not answer'), 'Check that spartan-agent and spartan-tunnel are running, that ADMIN_API_SECRET is set on the node, and that the node hostname is not behind a Cloudflare challenge.'))]);
+      if (tab === 'tunnel') {paintTunnel(); refreshTunnel();}
+      return;
+    }
     const r = n.node.resources;
     const running = n.tenants.filter(t => t.container?.running).length;
     const tenants = n.tenants.map(t => ({...t, region}));
-    const select = key => { tab = key; history.replaceState(null, '', `#/node/${region}${key === 'tenants' ? '' : `?tab=${key}`}`); draw(state.overview); };
     const busiest = Math.max(r.network?.rxBytesPerSecond || 0, r.network?.txBytesPerSecond || 0);
-    const body = tab === 'resources' ? resourcesTab(n, tenants) : [
+    const body = tab === 'tunnel' ? tunnelSlot : tab === 'resources' ? resourcesTab(n, tenants) : [
       h('div', {class: 'cards four'},
         statCard('cpu', 'CPU', pct(r.cpu.usagePercent), `of ${r.cpu.cores} cores`, meter((r.cpu.usagePercent || 0) / 100)),
         statCard('memory', 'Memory used', bytes(r.memory.usedBytes), `of ${bytes(r.memory.totalBytes, 0)}`, meter(r.memory.usedBytes / r.memory.totalBytes)),
@@ -556,11 +575,37 @@ async function nodePage(ctx, region) {
         statCard('docker', 'Tenants', String(n.tenants.length), `${running} running`)),
       h('div', {class: 'section-head'}, h('h2', null, 'Tenants on this node'), h('span', {class: 'note'}, `Updated ${ago(state.overviewAt)}`)),
       tenantTable(tenants, {region: false})];
-    ctx.fill([...head, tabs([['tenants', 'Tenants'], ['resources', 'Resources']], tab, select), body]);
+    ctx.fill([...head, nodeTabs, body]);
+    if (tab === 'tunnel') {paintTunnel(); refreshTunnel();}
     ctx.refreshSidebar();
   };
   draw(await overview());
-  every(10000, async () => { try { draw(await overview(true)); } catch {} });
+  every(10000, async () => { if (tab === 'tunnel') await refreshTunnel(true); try { draw(await overview(true)); } catch {} });
+}
+function tunnelTab(sample, region) {
+  const error = sample?.error;
+  const problem = error ? h('div', {class: 'banner error'}, icon('alert'), error.code === 'not_found' ? 'Tunnel details require updated node agents and dashboard code.' : explain(error), sample.data ? ' Showing the last successful sample.' : '') : null;
+  const data = sample?.data;
+  if (!data) return [problem, error ? h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'Tunnel details unavailable'), 'The dashboard reaches the agent through this tunnel. If it is completely disconnected, inspect the node locally.')) : loading()];
+  const count = value => Number.isFinite(value) ? value.toLocaleString() : '—';
+  const value = item => item === null || item === undefined || item === '' ? '—' : String(item);
+  const ready = item => item === null || item === undefined ? 'Not reported' : item ? 'Yes' : 'No';
+  const table = (columns, rows, empty) => h('div', {class: 'card table-card'}, h('div', {class: 'table-scroll'}, h('table', null, h('thead', null, h('tr', null, columns.map(label => h('th', null, label)))), h('tbody', null, rows.length ? rows : h('tr', null, h('td', {colspan: String(columns.length), class: 'faint'}, empty))))));
+  const connections = (data.connections || []).map(connection => h('tr', null, h('td', null, String(connection.index)), h('td', null, connection.connected ? 'Connected' : 'Disconnected'), h('td', null, connection.protocol.toUpperCase()), h('td', {class: 'mono'}, value(connection.edgeAddress)), h('td', null, value(connection.location))));
+  if (!connections.length) for (const location of data.edgeLocations || []) connections.push(h('tr', null, h('td', null, value(location.connectionId)), h('td', null, 'Current edge'), h('td', null, '—'), h('td', null, '—'), h('td', null, value(location.location))));
+  const routes = (data.configuration?.routes || []).map(route => h('tr', null, h('td', {class: 'mono'}, route.hostname || 'Catch-all'), h('td', {class: 'mono'}, route.path || 'All paths'), h('td', {class: 'mono'}, route.service), h('td', null, Object.entries(route.originRequest || {}).map(([key, setting]) => `${key}: ${setting}`).join(' · ') || 'Defaults')));
+  const availability = Object.entries(data.availability || {}).filter(([, unavailable]) => unavailable);
+  const counters = data.counters || {}, service = data.service;
+  const status = data.status === 'connected' ? {label: 'Connected', tone: 'green'} : data.status === 'disconnected' ? {label: 'Disconnected', tone: 'red'} : {label: 'Unknown', tone: 'amber'};
+  const metricRows = (data.metrics || []).map(metric => h('tr', null, h('td', {class: 'mono'}, metric.name), h('td', {class: 'mono'}, Object.entries(metric.labels).map(([key, setting]) => `${key}=${setting}`).join(', ') || '—'), h('td', {class: 'mono'}, String(metric.value))));
+  return [problem, h('div', {class: 'section-head'}, h('h2', null, 'Cloudflare Tunnel'), h('span', {class: 'note'}, `Sampled ${new Date(data.sampledAt || sample.at).toLocaleTimeString()} · refreshes every 10 seconds`)),
+    data.region !== region ? h('div', {class: 'banner error'}, 'This report came from a different node. Check the configured node origins and tunnel hostname routes.') : null,
+    h('div', {class: 'cards four'}, statCard('network', 'Connection', status.label, data.ready === null ? 'Readiness not reported' : data.ready ? 'Ready to serve traffic' : 'Not ready'), statCard('server', 'Active connections', count(data.activeConnections), [...new Set((data.edgeLocations || []).map(item => item.location).filter(Boolean))].join(' · ') || 'Edge location not reported'), statCard('activity', 'Total requests', count(counters.totalRequests), `${count(counters.requestErrors)} request errors`), statCard('clock', 'Connector uptime', data.processUptimeSeconds === null ? '—' : duration(data.processUptimeSeconds), data.version ? `cloudflared ${data.version}` : 'Version unavailable')),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Identity and service'), badge(status)), h('div', {class: 'card'}, h('dl', {class: 'details'}, detail('Node hostname', value(data.hostname)), detail('Tunnel ID', value(data.tunnelId)), detail('Connector ID', value(data.connectorId)), detail('Cloudflare account', value(data.accountId)), detail('cloudflared version', value(data.version)), detail('Service', service ? `${service.name} · ${service.activeState} / ${service.subState}` : 'Unavailable'), detail('Process ID', value(service?.pid)), detail('Service started', value(service?.startedAt)), detail('Service restarts', count(service?.restarts)), detail('Last process exit code', value(service?.exitCode)), detail('Running tunnel matches token file', ready(data.identityMatchesFile)), detail('Configuration version', value(data.configuration?.version)), detail('Published node route found', ready(data.configuration?.nodeRoutePresent)), detail('Private network routing', data.configuration?.warpRouting === null || !data.configuration ? 'Not reported' : data.configuration.warpRouting ? 'Enabled' : 'Disabled'), detail('Connector memory', bytes(counters.processMemoryBytes)), detail('Connector CPU time', counters.processCpuSeconds === null ? '—' : `${count(counters.processCpuSeconds)} seconds`)))),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Edge connections')), table(['Connection', 'State', 'Protocol', 'Edge address', 'Location'], connections, 'No active connections reported.')),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Published routes')), table(['Hostname', 'Path', 'Origin service', 'Origin options'], routes, data.availability?.configuration ? 'The installed connector did not expose its current configuration.' : 'No routes reported.'), data.configuration && Object.keys(data.configuration.originRequest || {}).length ? h('p', {class: 'muted'}, 'Default origin options: ', Object.entries(data.configuration.originRequest).map(([key, setting]) => `${key}: ${setting}`).join(' · ')) : null),
+    h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Traffic and metrics'), h('span', {class: 'note'}, 'Counters reset when cloudflared restarts.')), h('div', {class: 'card'}, h('dl', {class: 'details'}, detail('Concurrent requests', count(counters.concurrentRequests)), detail('Registration failures', count(counters.registrationFailures)), detail('QUIC bytes received', bytes(counters.receivedBytes)), detail('QUIC bytes sent', bytes(counters.sentBytes)))), metricRows.length ? table(['Metric', 'Labels', 'Value'], metricRows, '') : null),
+    availability.length ? h('div', {class: 'banner info'}, icon('info'), 'Some diagnostics are unavailable: ', availability.map(([name, issue]) => `${name} (${issue.replace(/_/g, ' ')})`).join(' · ')) : null];
 }
 function resourcesTab(n, tenants) {
   const r = n.node.resources;

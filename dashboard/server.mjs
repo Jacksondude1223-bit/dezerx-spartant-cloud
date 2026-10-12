@@ -256,6 +256,11 @@ export function createDashboard(config, {now = Date.now, log = value => console.
       return send(res, 200, {authenticated: false}, {'set-cookie': cookie('', 0)});
     }
     if (url.pathname === '/api/overview' && req.method === 'GET') return send(res, 200, await overview());
+    const tunnelMatch = url.pathname.match(/^\/api\/nodes\/(us|de)\/tunnel$/);
+    if (tunnelMatch) {
+      if (req.method !== 'GET') return send(res, 405, {error: 'method_not_allowed'});
+      try {return send(res, 200, await node(tunnelMatch[1], 'tunnel', {}));} catch (error) {if (error.status === 401) return send(res, 502, {error: 'node_tunnel_unauthorized'}); throw error;}
+    }
     if (url.pathname === '/api/activity' && req.method === 'GET') return send(res, 200, {events: [...activity].reverse()});
     if (url.pathname === '/api/instances' || url.pathname.startsWith('/api/instances/')) return instances(req, res, url, session, ip);
     const lifecycleMatch = url.pathname.match(/^\/api\/tenants\/(t-[a-f0-9]{24})\/lifecycle$/);

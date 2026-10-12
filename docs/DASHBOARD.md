@@ -6,6 +6,16 @@ The dashboard (`dashboard/`) is a private control panel for the people who run t
 
 It talks to the node agents through the **admin API** (`/admin/*`), signed with `ADMIN_API_SECRET`. This can be the same value as `ORIGIN_SECRET` when the deployment uses one shared API key.
 
+## Tunnel monitoring
+
+Each node has a **Tunnel** tab beside **Resources**. It refreshes every ten seconds while open and shows the local cloudflared tunnel ID, connector ID, account ID, readiness, active connections, edge addresses/locations, protocols, service state, version, process uptime, published ingress routes, configuration version and traffic metrics. Missing diagnostics on older cloudflared versions are reported as unavailable.
+
+The dashboard reads `GET /api/nodes/{us|de}/tunnel`, which signs `POST /admin/tunnel` with `ADMIN_API_SECRET`. The agent reads only cloudflared's loopback diagnostics on `127.0.0.1:8789`, tunnel-token identity fields, and selected systemd service properties. No additional Cloudflare API token is required. Tunnel token secrets, CLI configuration flags and origin credentials are excluded. The endpoint cannot restart a tunnel or modify routes.
+
+After deploying the dashboard, run `sudo spartan-node-update apply` on both nodes. New installations include the diagnostics module automatically. The optional node-hosted dashboard also needs its dashboard code updated. Agent diagnostics are cached for five seconds. Counters reset when cloudflared restarts.
+
+Diagnostics describe the connector running on the selected node, rather than all replicas in the Cloudflare account. If the tunnel is fully disconnected, the remote dashboard cannot reach its node agent through that tunnel; inspect the node locally. While open, the tab retains the last successful sample and labels failed refreshes.
+
 ## Security model
 
 - **Signed admin requests.** The admin API accepts `ADMIN_API_SECRET`, which must be explicitly configured on the nodes and dashboard. It may match `ORIGIN_SECRET` and `NODE_CONTROL_SECRET`; a shared key then authorizes both admin and control requests. Missing or invalid admin secrets disable `/admin/*` with 404. Secrets must be at least 32 characters, with no whitespace or placeholders. Tenant traffic and `/control/*` keep working either way.

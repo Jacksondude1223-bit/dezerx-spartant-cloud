@@ -403,6 +403,31 @@ test('firewall management requires dashboard authentication and CSRF and hides p
   } finally {sqlite.close();}
 });
 
+test('node tunnel details require a dashboard session and proxy signed requests to the selected node', async () => {
+  const {db, sqlite} = database(), env = environment(db);
+  let rejected = false;
+  const upstream = remote(env, {reply: async u => u.pathname === '/admin/tunnel' ? rejected ? [401, {error: 'unauthorized'}] : [200, {region: u.host.includes('node-de') ? 'de' : 'us', status: 'connected', activeConnections: 4, connections: [], metrics: []}] : null});
+  const worker = createWorker(upstream.fetch);
+  try {
+    assert.equal((await worker.fetch(new Request('https://dashboard.example.test/api/nodes/us/tunnel'), env)).status, 401);
+    assert.equal(upstream.calls.length, 0);
+    const client = await browser(worker, env);
+    for (const region of ['us', 'de']) {
+      const result = await client.call(`/api/nodes/${region}/tunnel`);
+      assert.equal(result.status, 200);
+      assert.equal((await result.json()).region, region);
+      assert.deepEqual(upstream.calls.at(-1).body, {});
+      assert.equal(upstream.calls.at(-1).host, `node-${region}.example.test`);
+    }
+    assert.equal((await client.call('/api/nodes/us/tunnel', 'POST', {})).status, 405);
+    rejected = true;
+    const failure = await client.call('/api/nodes/us/tunnel');
+    assert.equal(failure.status, 502);
+    assert.equal((await failure.json()).error, 'node_tunnel_unauthorized');
+    assert.equal((await (await client.call('/api/session')).json()).authenticated, true);
+  } finally {sqlite.close();}
+});
+
 test('a database write cannot forge a dashboard session by copying a valid session proof', async () => {
   const {db, sqlite} = database(), env = environment(db), worker = createWorker();
   try {

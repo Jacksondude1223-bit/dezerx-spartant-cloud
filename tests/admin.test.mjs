@@ -321,6 +321,23 @@ test('admin routes stay disabled when the admin secret is missing or invalid', a
   }
 });
 
+test('tunnel diagnostics are read-only and require the signed admin key', async () => {
+  const agent = await startAgent();
+  try {
+    assert.equal((await fetch(agent.origin + '/admin/tunnel')).status, 401);
+    assert.equal((await agent.call('/admin/tunnel', {}, originSecret)).status, 401);
+    const result = await agent.json('/admin/tunnel');
+    assert.equal(result.status, 200, agent.stderr());
+    assert.equal(result.body.region, 'us');
+    assert.ok(Array.isArray(result.body.connections));
+    assert.ok(Array.isArray(result.body.metrics));
+    assert.ok(Object.hasOwn(result.body, 'availability'));
+    assert.equal(JSON.stringify(result.body).includes('topsecret'), false);
+    const state = JSON.parse(await readFile(path.join(agent.dir, 'state.json'), 'utf8'));
+    assert.equal(state.running, true);
+  } finally {await agent.stop();}
+});
+
 test('secondary node forwards to an origin configured with a trailing slash', async t => {
   let certificate;
   const dir = await mkdtemp(path.join(tmpdir(), 'spartan-tls-'));

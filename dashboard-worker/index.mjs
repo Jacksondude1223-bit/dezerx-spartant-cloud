@@ -63,6 +63,11 @@ export function createWorker(fetchImpl = fetch) {
         if (url.pathname === '/api/firewall' || url.pathname.startsWith('/api/firewall/')) return response(await firewallOperation(request, env, db, userSession.username, fetchImpl));
         if (url.pathname === '/api/logout' && request.method === 'POST') {await db.query('DELETE FROM dashboard_sessions WHERE token_hash = ?', userSession.token_hash).run(); return response({authenticated: false}, 200, {'set-cookie': cookie('', 0)});}
         if (url.pathname === '/api/overview' && request.method === 'GET') return response(await client.overview());
+        const tunnel = url.pathname.match(/^\/api\/nodes\/(us|de)\/tunnel$/);
+        if (tunnel) {
+          if (request.method !== 'GET') throw new ApiError(405, 'method_not_allowed');
+          try {return response(await client.node(tunnel[1], 'tunnel'));} catch (error) {if (error.status === 401) throw new ApiError(502, 'node_tunnel_unauthorized'); throw error;}
+        }
         if (url.pathname === '/api/activity' && request.method === 'GET') return response({events: (await db.all('SELECT time, event, details FROM dashboard_activity ORDER BY id DESC LIMIT 300')).map(x => ({time: x.time, event: x.event, ...JSON.parse(x.details)}))});
         if (url.pathname === '/api/instances') {
           if (request.method === 'GET') return response({instances: await presented((await db.list()).filter(x => !x.external), db)});
