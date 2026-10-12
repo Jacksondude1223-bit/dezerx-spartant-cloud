@@ -28,6 +28,12 @@ const api = {
   }
 };
 const MESSAGES = {
+  contabo_configuration_required: 'Configure the Contabo secrets in the dashboard Worker.', contabo_auth_failed: 'Contabo rejected the API credentials. Check the client ID, client secret, API username and separate API-user password.',
+  contabo_permission_denied: 'The Contabo API user does not have permission for this operation.', contabo_addon_required: 'Contabo requires a firewall add-on for this instance. Check its eligibility in Contabo.',
+  contabo_timeout: 'Contabo did not answer in time. Refresh the firewall before retrying; the change may already have applied.', contabo_rate_limited: 'Contabo is limiting requests. Wait before refreshing.',
+  contabo_request_rejected: 'Contabo rejected this configuration. Check the rules and instance eligibility.', contabo_conflict: 'Contabo reported a conflict. Refresh before retrying.',
+  firewall_changed: 'This firewall changed since you opened it. Refresh and review the latest rules.', firewall_busy: 'Another firewall change is running. Refresh shortly.', firewall_has_instances: 'Detach all instances before deleting this firewall.',
+  invalid_firewall_source: 'Enter valid IPv4 or IPv6 addresses/CIDRs, AnyIPv4 or AnyIPv6.', invalid_firewall_ports: 'Ports must be 0–65535 or ascending ranges. ICMP and all-protocol rules have no ports.',
   node_unreachable: 'The node could not be reached.', node_timeout: 'The node took too long to answer.',
   still_running_on_node: 'Still running on the node. Refresh in a minute to see the result.',
   blocked_by_cloudflare: 'Cloudflare blocked the request. Exempt the node hostnames from challenges.',
@@ -326,6 +332,7 @@ function sidebar(current) {
     nodes.map(n => { const tone = nodeTone(state.overview && nodeOf(state.overview, n.region)); return h('a', {class: `nav-item ${current === `node:${n.region}` ? 'active' : ''}`, href: `#/node/${n.region}`}, flag(n.region) || icon('server'), `node-${n.region}`, h('span', {class: `dot ${state.overview ? tone.tone : ''}`, title: tone.label})); }),
     item('#/tenants', 'layers', 'Tenants', current === 'tenants'),
     state.session?.provisioning ? item('#/instances', 'rocket', 'Instances', current === 'instances') : null,
+    state.session?.firewall ? item('#/firewall', 'lock', 'Cloud Firewall', current === 'firewall') : null,
     h('div', {class: 'nav-label'}, 'Monitoring'),
     item('#/activity', 'activity', 'Activity', current === 'activity'),
     h('div', {class: 'nav-spacer'}),
@@ -371,6 +378,7 @@ async function render() {
     if (!parts.length) await homePage(ctx);
     else if (parts[0] === 'tenants') await tenantsPage(ctx);
     else if (parts[0] === 'activity') await activityPage(ctx);
+    else if (parts[0] === 'firewall' && state.session.firewall) await window.spartanFirewallPage({ctx, id: parts[1], h, api, button, icon, crumbs, pageHead, badge, modal, confirmDialog, toast, fail, go, reload: render});
     else if (parts[0] === 'instances' && !parts[1]) await instancesPage(ctx);
     else if (parts[0] === 'instances' && parts[1] === 'new') await newInstancePage(ctx);
     else if (parts[0] === 'instances' && /^t-[a-f0-9]{24}$/.test(parts[1])) await instancePage(ctx, parts[1]);

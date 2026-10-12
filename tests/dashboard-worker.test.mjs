@@ -367,6 +367,42 @@ test('setup identifies invalid secret settings without exposing their values or 
   }
 });
 
+test('firewall management requires dashboard authentication and CSRF and hides provider credentials', async () => {
+  const {db, sqlite} = database(), env = environment(db);
+  const calls = [], id = 'b943b25a-c8b5-4570-9135-4bbaa7615b81';
+  const provider = async (url, options) => {
+    calls.push({url, options});
+    if (url.startsWith('https://auth.contabo.com/')) return Response.json({access_token: 'provider-access-token', expires_in: 300});
+    if (url.includes('/compute/instances')) return Response.json({data: [{instanceId: 100, name: 'node-us', password: 'do-not-return'}]});
+    return Response.json({data: [{firewallId: id, name: 'Spartan nodes', status: 'inactive', rules: {inbound: []}, instances: []}]});
+  };
+  const worker = createWorker(provider);
+  try {
+    assert.equal((await worker.fetch(new Request('https://dashboard.example.test/api/firewall/config'), env)).status, 401);
+    assert.equal(calls.length, 0);
+    const client = await browser(worker, env);
+    assert.equal((await (await client.call('/api/session')).json()).firewall, true);
+    const missing = await (await client.call('/api/firewall/config')).json();
+    assert.equal(missing.configured, false); assert.equal(missing.missingSettings.length, 4);
+    const denied = await worker.fetch(new Request('https://dashboard.example.test/api/firewall/create', {method: 'POST', headers: {cookie: client.cookie, 'content-type': 'application/json'}, body: '{}'}), env);
+    assert.equal(denied.status, 403); assert.equal(calls.length, 0);
+    Object.assign(env, {CONTABO_CLIENT_ID: 'account-client', CONTABO_CLIENT_SECRET: 'provider-client-secret', CONTABO_API_USERNAME: 'operator@example.test', CONTABO_API_PASSWORD: 'provider-api-password'});
+    assert.equal((await (await client.call('/api/firewall/config')).json()).configured, true);
+    const overview = await (await client.call('/api/firewall')).json();
+    assert.equal(overview.firewalls[0].firewallId, id);
+    for (const secret of ['provider-client-secret', 'provider-api-password', 'provider-access-token', 'do-not-return']) assert.equal(JSON.stringify(overview).includes(secret), false);
+    const create = await client.call('/api/firewall/create', 'POST', {name: 'Spartan firewall', confirmed: true});
+    assert.equal(create.status, 200);
+    const creation = calls.find(x => x.url === 'https://api.contabo.com/v1/firewalls' && x.options.method === 'POST');
+    assert.equal(JSON.parse(creation.options.body).status, 'inactive');
+    assert.ok(sqlite.prepare("SELECT event FROM dashboard_activity WHERE event = 'firewall_change_completed'").get());
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM dashboard_locks').get().n, 0);
+    const audit = JSON.stringify(sqlite.prepare('SELECT * FROM dashboard_activity').all());
+    assert.equal(audit.includes(env.CONTABO_CLIENT_SECRET), false);
+    assert.equal(audit.includes(env.CONTABO_API_PASSWORD), false);
+  } finally {sqlite.close();}
+});
+
 test('a database write cannot forge a dashboard session by copying a valid session proof', async () => {
   const {db, sqlite} = database(), env = environment(db), worker = createWorker();
   try {

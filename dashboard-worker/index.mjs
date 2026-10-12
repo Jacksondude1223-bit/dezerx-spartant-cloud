@@ -5,6 +5,7 @@ import {equal, seal} from './crypto.mjs';
 import {createInstance, instanceAction, queueLifecycle} from './instances.mjs';
 import {runJobs} from './jobs.mjs';
 import {credentials, browserSetup} from './browser-setup.mjs';
+import {firewallOperation} from './contabo.mjs';
 export const SECURITY = {'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'};
 export function response(value, status = 200, headers = {}) {return Response.json(value, {status, headers: {...SECURITY, 'cache-control': 'no-store', ...headers}});}
 async function locked(db, id, action) {
@@ -35,7 +36,7 @@ export function createWorker(fetchImpl = fetch) {
           const asset = await env.ASSETS.fetch(request);
           const headers = new Headers(asset.headers);
           for (const [key, value] of Object.entries(SECURITY)) headers.set(key, value);
-          if (['/', '/index.html', '/app.js', '/styles.css', '/setup', '/setup.html', '/setup.js'].includes(url.pathname)) headers.set('cache-control', 'no-store');
+          if (['/', '/index.html', '/app.js', '/styles.css', '/setup', '/setup.html', '/setup.js', '/cloud-firewall.js'].includes(url.pathname)) headers.set('cache-control', 'no-store');
           return new Response(asset.body, {status: asset.status, headers});
         }
         const db = store(env);
@@ -51,7 +52,7 @@ export function createWorker(fetchImpl = fetch) {
         const client = clients(env, fetchImpl), config = client.config;
         const userSession = await session(request, env, db);
         const label = env.DASHBOARD_LABEL || 'Spartan Cloud';
-        if (url.pathname === '/api/session' && request.method === 'GET') return response(userSession ? {authenticated: true, user: userSession.username, csrf: userSession.csrf, label, nodes: Object.keys(REGIONS).map(region => ({region, label: REGIONS[region], host: new URL(config.origins[region]).host})), provisioning: {baseDomain: config.baseDomain, instanceDomain: config.instanceDomain, databaseMode: env.DATABASE_MODE || 'local'}} : {authenticated: false, label, twoFactor: Boolean(env.DASHBOARD_TOTP_SECRET)});
+        if (url.pathname === '/api/session' && request.method === 'GET') return response(userSession ? {authenticated: true, user: userSession.username, csrf: userSession.csrf, label, firewall: true, nodes: Object.keys(REGIONS).map(region => ({region, label: REGIONS[region], host: new URL(config.origins[region]).host})), provisioning: {baseDomain: config.baseDomain, instanceDomain: config.instanceDomain, databaseMode: env.DATABASE_MODE || 'local'}} : {authenticated: false, label, twoFactor: Boolean(env.DASHBOARD_TOTP_SECRET)});
         if (url.pathname === '/api/login' && request.method === 'POST') {
           if (request.headers.get('origin') && request.headers.get('origin') !== url.origin) throw new ApiError(403, 'csrf_failed');
           const result = await login(request, await jsonBody(request, 4096), env, db, config);
@@ -59,6 +60,7 @@ export function createWorker(fetchImpl = fetch) {
         }
         if (!userSession) throw new ApiError(401, 'not_signed_in');
         if (request.method !== 'GET' && (!equal(request.headers.get('x-csrf-token'), userSession.csrf) || (request.headers.get('origin') && request.headers.get('origin') !== url.origin))) throw new ApiError(403, 'csrf_failed');
+        if (url.pathname === '/api/firewall' || url.pathname.startsWith('/api/firewall/')) return response(await firewallOperation(request, env, db, userSession.username, fetchImpl));
         if (url.pathname === '/api/logout' && request.method === 'POST') {await db.query('DELETE FROM dashboard_sessions WHERE token_hash = ?', userSession.token_hash).run(); return response({authenticated: false}, 200, {'set-cookie': cookie('', 0)});}
         if (url.pathname === '/api/overview' && request.method === 'GET') return response(await client.overview());
         if (url.pathname === '/api/activity' && request.method === 'GET') return response({events: (await db.all('SELECT time, event, details FROM dashboard_activity ORDER BY id DESC LIMIT 300')).map(x => ({time: x.time, event: x.event, ...JSON.parse(x.details)}))});
