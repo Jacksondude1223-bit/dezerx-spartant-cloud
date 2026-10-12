@@ -112,6 +112,7 @@ h1 { font-size: 28px; line-height: 1.15; letter-spacing: -.025em; font-weight: 6
 .tunnel-heading { align-items: center; }
 .tunnel-brand { display: flex; align-items: center; gap: 12px; }
 .tunnel-logo { display: block; width: 64px; height: auto; flex: none; }
+.firewall-page-image { display: block; width: 40px; height: 40px; object-fit: contain; flex: none; }
 .section { margin-bottom: 30px; }
 
 /* Tables */
