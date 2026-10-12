@@ -83,6 +83,20 @@ window.spartanFirewallPage = async function ({ctx, id, h, api, button, icon, cru
   }
   drawRules();
   const active = firewall.status === 'active';
+  const assignmentStatus = item => {
+    const value = firewall.instanceStatus.find(x => x.instanceId === item.instanceId)?.status || 'Assigned';
+    if (value.toLowerCase() !== 'processing') return value;
+    const namespace = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(namespace, 'svg');
+    svg.setAttribute('viewBox', '25 25 50 50');
+    svg.setAttribute('aria-hidden', 'true');
+    const circle = document.createElementNS(namespace, 'circle');
+    circle.setAttribute('r', '20');
+    circle.setAttribute('cy', '50');
+    circle.setAttribute('cx', '50');
+    svg.append(circle);
+    return h('span', {class: 'firewall-assignment-loader', role: 'status', 'aria-label': 'Processing', title: 'Processing'}, svg);
+  };
   const update = changes => ({version: firewall.version, name: firewall.name, description: firewall.description, status: firewall.status, ...changes});
   const assigned = new Set(firewall.instances.map(x => x.instanceId));
   const available = data.instances.filter(x => !assigned.has(x.instanceId));
@@ -92,6 +106,6 @@ window.spartanFirewallPage = async function ({ctx, id, h, api, button, icon, cru
     const item = available.find(x => String(x.instanceId) === selected.value);
     change(endpoint + '/attach', {version: firewall.version, instanceId: item.instanceId}, 'Assign this server?', [`Assign ${label(item)} to ${firewall.name}.`, active ? 'This firewall is active. Its inbound rules take effect immediately on the server. Review SSH and WireGuard access first.' : 'This firewall is inactive. Its rules start filtering when you activate it.']);
   }});
-  const assignedRows = firewall.instances.map(item => h('tr', null, h('td', null, label(item), h('div', {class: 'sub mono'}, String(item.instanceId))), h('td', {class: 'mono'}, [item.ipv4, item.ipv6].filter(Boolean).join(' · ')), h('td', null, firewall.instanceStatus.find(x => x.instanceId === item.instanceId)?.status || 'Assigned'), h('td', null, button('Detach', {small: true, onClick: () => change(endpoint + '/detach', {version: firewall.version, instanceId: item.instanceId}, 'Detach this server?', `Remove ${label(item)} from this firewall. These network rules will stop protecting it.`)}))));
+  const assignedRows = firewall.instances.map(item => h('tr', null, h('td', null, label(item), h('div', {class: 'sub mono'}, String(item.instanceId))), h('td', {class: 'mono'}, [item.ipv4, item.ipv6].filter(Boolean).join(' · ')), h('td', null, assignmentStatus(item)), h('td', null, button('Detach', {small: true, onClick: () => change(endpoint + '/detach', {version: firewall.version, instanceId: item.instanceId}, 'Detach this server?', `Remove ${label(item)} from this firewall. These network rules will stop protecting it.`)}))));
   ctx.fill([crumbs([{label: 'Spartan Cloud', href: '#/'}, {label: 'Cloud Firewall', href: '#/firewall'}, {label: firewall.name}]), pageHead({title: firewall.name, pill: {label: active ? 'Active' : 'Inactive', tone: active ? 'green' : 'amber'}, subtitle: firewall.description || firewall.firewallId, actions: [button('Refresh', {icon: 'refresh', onClick: async () => {if (JSON.stringify(draft) === original || await confirmDialog({title: 'Discard unsaved rules?', message: 'Reloading replaces your draft with the current Contabo rules.', confirm: 'Reload'})) reload();}}), button('Rename', {icon: 'edit', onClick: () => nameForm('Rename firewall', firewall.name, firewall.description, (name, description) => change(endpoint + '/update', update({name, description}), 'Update firewall name?', 'Save the firewall name and description.'))}), button(active ? 'Deactivate' : 'Activate', {kind: active ? '' : 'primary', onClick: () => change(endpoint + '/update', update({status: active ? 'inactive' : 'active'}), active ? 'Deactivate firewall?' : 'Activate firewall?', active ? 'Inbound filtering will stop on all assigned servers.' : [`Inbound filtering takes effect on ${firewall.instances.length} assigned server(s). Unmatched inbound traffic is dropped.`, 'Check the saved SSH and UDP 51820 WireGuard rules before activating. Unsaved draft rules will not be applied.'])}), button('Delete', {kind: 'danger', icon: 'trash', disabled: firewall.instances.length > 0, title: firewall.instances.length ? 'Detach every server first.' : '', onClick: () => change(endpoint + '/delete', {version: firewall.version}, 'Delete firewall?', `Permanently delete ${firewall.name} and its saved rules.`, () => go('#/firewall'))})]}), h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Inbound rules'), button('Add rule', {icon: 'plus', onClick: () => editRule()})), rulesPanel, h('div', {class: 'toolbar'}, saved, save, discard)), h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Assigned servers')), table(['Server', 'Addresses', 'Assignment status', ''], assignedRows), h('div', {class: 'toolbar'}, selected, attach))]);
 };

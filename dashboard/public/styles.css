@@ -373,3 +373,33 @@ table.nodes td { padding-top: 14px; padding-bottom: 14px; }
 .editor-card textarea.editor { height: calc(100vh - 250px); min-height: 420px; }
 .editor-status { font-size: 12.5px; color: var(--muted); }
 .editor-status.dirty { color: var(--amber); font-weight: 500; }
+
+.firewall-assignment-loader { display: inline-flex; vertical-align: middle; }
+.firewall-assignment-loader svg {
+  display: block;
+  width: 3.25em;
+  height: 3.25em;
+  transform-origin: center;
+  animation: firewall-assignment-rotate 2s linear infinite;
+}
+.firewall-assignment-loader circle {
+  fill: none;
+  stroke: hsl(214, 97%, 59%);
+  stroke-width: 2;
+  stroke-dasharray: 1, 200;
+  stroke-dashoffset: 0;
+  stroke-linecap: round;
+  animation: firewall-assignment-dash 1.5s ease-in-out infinite;
+}
+@keyframes firewall-assignment-rotate {
+  100% { transform: rotate(360deg); }
+}
+@keyframes firewall-assignment-dash {
+  0% { stroke-dasharray: 1, 200; stroke-dashoffset: 0; }
+  50% { stroke-dasharray: 90, 200; stroke-dashoffset: -35px; }
+  100% { stroke-dashoffset: -125px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .firewall-assignment-loader svg, .firewall-assignment-loader circle { animation: none; }
+  .firewall-assignment-loader circle { stroke-dasharray: 90, 200; }
+}
