@@ -16,7 +16,7 @@ const api = {
     let data = null;
     try { data = await response.json(); } catch {}
     if (response.status === 401 && path !== '/api/login') { state.session = null; render(); throw new ApiError('not_signed_in', 401); }
-    if (!response.ok) { const error = new ApiError((data && data.error) || `http_${response.status}`, response.status); if (data?.upstream) error.detail = ` (${data.upstream} answered HTTP ${data.upstreamStatus}${data.cloudflareError ? `, Cloudflare error ${data.cloudflareError}` : ''})`; throw error; }
+    if (!response.ok) { const error = new ApiError((data && data.error) || `http_${response.status}`, response.status); error.detail = upstreamDescription(data); error.instanceId = data?.instanceId; throw error; }
     return data;
   },
   get(path) { return this.request('GET', path); },
@@ -56,7 +56,8 @@ const MESSAGES = {
   invalid_domain: 'Enter a bare domain such as panel.customer.com.', reserved_hostname: 'That domain belongs to the platform itself. Leave it blank to use the default subdomain.',
   hostname_in_use: 'Another instance already uses that domain.', hostname_conflict: 'That domain is already attached to another tenant.',
   license_key_required: 'Enter the Spartan licence issued for this hostname.', license_locked: 'The licence cannot change after a node holds this tenant.',
-  instance_domain_configuration_required: 'The routing Worker cannot assign hostnames yet. Set CF_INSTANCE_API_TOKEN on it (npm run configure does this).', instance_hostname_setup_failed: 'Cloudflare did not attach the hostname. Try again in a minute.',
+  instance_domain_configuration_required: 'The routing Worker cannot assign hostnames yet. Set CF_INSTANCE_API_TOKEN on it (npm run configure does this).', instance_hostname_setup_failed: 'The routing Worker could not attach the instance hostname.',
+  cloudflare_access_denied: 'Cloudflare rejected CF_INSTANCE_API_TOKEN. Check its Worker editing and dezerx.cloud route permissions, account access and resource scope.', cloudflare_rate_limited: 'Cloudflare is limiting API requests. Wait before retrying.', cloudflare_invalid_response: 'Cloudflare returned an unexpected response. Check the routing Worker logs.', cloudflare_request_rejected: 'Cloudflare rejected the hostname configuration. Check the API code and routing Worker logs.', cloudflare_api_timeout: 'Cloudflare did not answer in time. Retry hostname setup; it keeps the same reserved name.', hostname_database_failed: 'The routing Worker could not save the hostname state. Check its D1 migrations and logs.', invalid_node_response: 'The node returned a non-JSON or invalid response. Check its tunnel route and Cloudflare security rules.',
   initial_admin_failed: 'Automatic administrator creation failed. Retry with Create administrator automatically turned off, then complete Spartan’s signup. If an account already exists, sign in or use Spartan’s password reset.',
   invalid_laravel_env: 'The node rejected its extra Laravel environment file (LARAVEL_ENV_FILE).', node_capacity: 'The node already holds its maximum number of tenants (MAX_TENANTS).',
   stale_operation: 'The node has a newer lifecycle version for this tenant.', service_terminated: 'This tenant was terminated on the node and cannot be provisioned again.',
@@ -75,6 +76,7 @@ const MESSAGES = {
   invalid_cpu_limit: 'Enter a CPU limit between 0.1 and 64, with at most two decimals (for example 2.5).', cpu_limit_exceeds_host: 'The node does not have that many CPUs. Pick a lower limit.',
   symlink_mode: 'Symbolic links have no permissions of their own.', no_space_left: 'The disk is full.', python_unavailable: 'python3 is missing from this container image.'
 };
+const upstreamDescription = data => [data?.reason && MESSAGES[data.reason] ? ' ' + MESSAGES[data.reason] : '', data?.upstream && data?.upstreamStatus ? ` (${data.upstream} answered HTTP ${data.upstreamStatus}${data.cloudflareError ? `, Cloudflare error ${data.cloudflareError}` : ''})` : '', Array.isArray(data?.cloudflareCodes) && data.cloudflareCodes.length ? ` Cloudflare API codes: ${data.cloudflareCodes.filter(Number.isSafeInteger).join(', ')}.` : ''].join('');
 const explain = error => (MESSAGES[error?.code || error?.message] || String(error?.code || error?.message || 'Something went wrong').replace(/_/g, ' ')) + (error?.detail || '');
 
 /* ---------------------------------------------------------------- DOM helpers */
@@ -472,7 +474,7 @@ function nodeTable(nodes) {
     const tone = nodeTone(n);
     const go2 = () => go(`#/node/${n.region}`);
     const name = h('td', null, h('div', {class: 'name-cell'}, flag(n.region), h('div', {class: 'text'}, h('div', {class: 'primary-text'}, `node-${n.region}`), h('div', {class: 'sub'}, n.host))));
-    const status = h('td', null, h('div', {class: 'stack'}, h('span', {class: 'status'}, h('span', {class: `dot ${tone.tone}`}), tone.label), h('span', {class: 'sub'}, n.ok ? [n.latencyMs !== null && n.latencyMs !== undefined ? `${n.latencyMs} ms` : 'latency —', ` · up ${duration(n.node.resources.uptimeSeconds)}`] : explain(new ApiError(n.error)))));
+    const status = h('td', null, h('div', {class: 'stack'}, h('span', {class: 'status'}, h('span', {class: `dot ${tone.tone}`}), tone.label), h('span', {class: 'sub'}, n.ok ? [n.latencyMs !== null && n.latencyMs !== undefined ? `${n.latencyMs} ms` : 'latency —', ` · up ${duration(n.node.resources.uptimeSeconds)}`] : explain(Object.assign(new ApiError(n.error), {detail: upstreamDescription(n)})))));
     if (!n.ok) return h('tr', {class: 'clickable', onclick: go2}, name, status, h('td', {colspan: '5', class: 'faint'}, 'No data'));
     const r = n.node.resources;
     const running = n.tenants.filter(t => t.container?.running).length;
@@ -530,7 +532,7 @@ async function tenantsPage(ctx) {
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Tenants'}]),
     pageHead({title: 'Tenants', subtitle: `${uniqueCount(allTenants(data))} tenant${uniqueCount(allTenants(data)) === 1 ? '' : 's'} across ${data.nodes.length} nodes, each with a standby on the other node`, actions: [button('Refresh', {icon: 'refresh', onClick: async () => { try { draw(await overview(true)); } catch (e) { fail(e); } }}), state.session.provisioning ? h('a', {class: 'btn primary', href: '#/instances/new'}, icon('plus'), 'Create instance') : null]}),
     h('div', {class: 'banner info explainer'}, icon('info'), h('div', null, h('strong', null, 'Why two copies? '), 'Each tenant runs on its ', h('strong', null, 'home'), ' node, which owns its database and serves every visitor. The other node keeps a ', h('strong', null, 'standby'), ' copy for future failover; it holds no data. Expand a row with the arrow to see it.')),
-    unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(new ApiError(n.error))}`)),
+    unreachable.map(n => h('div', {class: 'banner error'}, icon('alert'), `node-${n.region} is unreachable, so its tenants are missing from this list. ${explain(Object.assign(new ApiError(n.error), {detail: upstreamDescription(n)}))}`)),
     h('div', {class: 'section-head'}, h('div', {class: 'group', style: {display: 'flex', gap: '8px', flexWrap: 'wrap'}}, h('div', {class: 'search'}, icon('search'), search), regionSelect), h('span', {class: 'note'}, `Last refresh: ${ago(state.overviewAt)}`)),
     tableSlot]);
   draw(data);
@@ -562,7 +564,7 @@ async function nodePage(ctx, region) {
     const select = key => { tab = key; history.replaceState(null, '', `#/node/${region}${key === 'tenants' ? '' : `?tab=${key}`}`); draw(state.overview); };
     const nodeTabs = tabs([['tenants', 'Tenants'], ['resources', 'Resources'], ['tunnel', 'Tunnel', 'network']], tab, select);
     if (!n.ok) {
-      ctx.fill([...head, nodeTabs, h('div', {class: 'banner error'}, icon('alert'), explain(new ApiError(n.error))), tab === 'tunnel' ? tunnelSlot : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This node did not answer'), 'Check that spartan-agent and spartan-tunnel are running, that ADMIN_API_SECRET is set on the node, and that the node hostname is not behind a Cloudflare challenge.'))]);
+      ctx.fill([...head, nodeTabs, h('div', {class: 'banner error'}, icon('alert'), explain(Object.assign(new ApiError(n.error), {detail: upstreamDescription(n)}))), tab === 'tunnel' ? tunnelSlot : h('div', {class: 'card'}, h('div', {class: 'empty'}, h('strong', null, 'This node did not answer'), 'Check that spartan-agent and spartan-tunnel are running, that ADMIN_API_SECRET is set on the node, and that the node hostname is not behind a Cloudflare challenge.'))]);
       if (tab === 'tunnel') {paintTunnel(); refreshTunnel();}
       return;
     }
@@ -1170,7 +1172,7 @@ async function newInstancePage(ctx) {
     try {
       const item = await api.post('/api/instances', {primary: form.primary, licenseKey: form.domainMode === 'custom' ? license.value.trim() : undefined, domain: form.domainMode === 'custom' ? domain.value.trim() : '', customerId: customer.value.trim() || undefined});
       go(`#/instances/${item.id}`);
-    } catch (error) { if (error.code !== 'not_signed_in') { message.replaceChildren(icon('alert'), explain(error)); message.style.display = ''; } }
+    } catch (error) { if (error.code !== 'not_signed_in') { message.replaceChildren(icon('alert'), explain(error), /^t-[a-f0-9]{24}$/.test(error.instanceId || '') ? h('a', {class: 'btn small', href: `#/instances/${error.instanceId}`}, 'Open saved instance') : null); message.style.display = ''; } }
     finally { submit.disabled = false; }
   });
   ctx.fill([
@@ -1280,6 +1282,7 @@ async function instancePage(ctx, id, polling = false) {
   if (!state.session.provisioning) return disabledNotice(ctx);
   const item = await api.get(`/api/instances/${id}`);
   const status = instanceStatus(item);
+  const hostnamePending = !item.custom && ['failed', 'preparing', 'ready_to_deploy'].includes(item.status) && (!item.hostname || ['instance_hostname_setup_failed', 'instance_domain_configuration_required', 'invalid_assigned_hostname'].includes(item.error));
   const reload = () => { if (ctx.alive()) render(); };
   const discard = async () => {
     if (!await confirmDialog({title: 'Discard this instance?', message: item.status === 'terminated' ? ['Removes this terminated instance from the list. Nothing changes on the nodes.'] : ['The dashboard forgets this draft. Nothing has been deployed for it.', item.custom ? 'The pending domain reservation stays on the routing Worker until it expires or is reused.' : ''].filter(Boolean), confirm: 'Discard', danger: true})) return;
@@ -1287,7 +1290,7 @@ async function instancePage(ctx, id, polling = false) {
   };
   const verify = async event => {
     const btn = event?.currentTarget; if (btn) btn.disabled = true;
-    try { const next = await api.post(`/api/instances/${id}/verify`); toast(next.dns?.readyToProvision ? 'Domain verified. Ready to deploy.' : 'Not verified yet. Records can take a few minutes to propagate.', {error: !next.dns?.readyToProvision}); reload(); }
+    try { const next = await api.post(`/api/instances/${id}/verify`); toast(!item.custom ? 'Hostname attached. Ready to deploy.' : next.dns?.readyToProvision ? 'Domain verified. Ready to deploy.' : 'Not verified yet. Records can take a few minutes to propagate.', {error: item.custom && !next.dns?.readyToProvision}); reload(); }
     catch (error) { fail(error); if (btn) btn.disabled = false; }
   };
   const canDiscard = item.status === 'terminated' || (!['ready', 'deploying', 'queued', 'suspended'].includes(item.status) && item.steps?.primary !== 'done' && item.steps?.secondary !== 'done');
@@ -1297,7 +1300,7 @@ async function instancePage(ctx, id, polling = false) {
     detail('Product', item.product || '—'), detail('Licence', item.licenseHint ? h('span', {class: 'mono'}, item.licenseHint) : h('span', {class: 'faint'}, 'Entered at deploy')),
     detail('Customer reference', item.customerId), detail('Created', `${ago(item.createdAt)} by ${item.createdBy || '—'}`)));
   const body = [];
-  if (item.error) body.push(h('div', {class: 'banner error'}, icon('alert'), h('div', null, h('strong', null, item.status === 'failed' ? 'Deployment stopped: ' : ''), explain(new ApiError(item.error)), item.log?.length ? ' The full sequence is under What happened, below.' : '', item.status === 'failed' ? ' Fix the cause if there is one, then press Retry deployment; it continues where it stopped.' : '')));
+  if (item.error) body.push(h('div', {class: 'banner error'}, icon('alert'), h('div', null, h('strong', null, item.status === 'failed' ? 'Deployment stopped: ' : ''), explain(Object.assign(new ApiError(item.error), {detail: upstreamDescription(item.setupError)})), item.log?.length ? ' The full sequence is under What happened, below.' : '', item.status === 'failed' ? hostnamePending ? ' Fix the cause, then press Retry hostname setup. Your instance ID and reserved name are preserved.' : ' Fix the cause if there is one, then press Retry deployment; it continues where it stopped.' : '')));
   if (item.status === 'awaiting_dns') body.push(
     h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'Domain checks'), h('span', {class: 'note'}, 'Press Verify DNS to re-check')), dnsStages(item)),
     h('div', {class: 'banner info'}, icon('info'), `Add these records at the DNS provider for ${item.hostname}, then verify. Cloudflare may add certificate records after the first check; keep all of them.`),
@@ -1317,12 +1320,13 @@ async function instancePage(ctx, id, polling = false) {
   if (item.status === 'suspended') body.push(h('div', {class: 'banner info'}, icon('lock'), 'Suspended. Visitors see the suspended page; the database and files are kept. Resume to bring it back.'));
   if (item.operation) body.push(h('div', {class: 'banner info'}, icon('info'), `${item.operation} is queued or running. The dashboard runner will finish it automatically.`));
   if (item.status === 'terminated') body.push(h('div', {class: 'banner info'}, icon('info'), 'Terminated. The containers are gone; the database, storage folder and backups remain on the nodes. Discard removes this record from the list.'));
-  if (item.status === 'ready_to_deploy' || item.status === 'failed') body.push(h('div', {class: 'section'}, adminForm(item, reload)));
+  if (!hostnamePending && (item.status === 'ready_to_deploy' || item.status === 'failed')) body.push(h('div', {class: 'section'}, adminForm(item, reload)));
   if (item.custom && item.status === 'ready_to_deploy') body.push(h('div', {class: 'section'}, h('div', {class: 'section-head'}, h('h2', null, 'DNS records')), dnsCard(item)));
   body.push(activityLog(item));
   ctx.fill([
     crumbs([{label: state.session.label, href: '#/'}, {label: 'Instances', href: '#/instances'}, {label: item.hostname}]),
     pageHead({title: item.hostname, lead: h('span', {class: 'app-icon large'}, icon('rocket')), pill: status, subtitle: h('span', {class: 'mono'}, item.id), actions: [
+      hostnamePending ? button('Retry hostname setup', {icon: 'refresh', kind: 'primary', onClick: verify}) : null,
       item.custom && ['awaiting_dns', 'ready_to_deploy', 'failed'].includes(item.status) ? button('Verify DNS', {icon: 'refresh', kind: item.status === 'awaiting_dns' ? 'primary' : '', onClick: verify}) : null,
       item.status === 'queued' ? button('Leave queue', {icon: 'stop', onClick: async () => { try { await api.post(`/api/instances/${id}/cancel`); toast('Removed from the queue'); reload(); } catch (error) { fail(error); } }}) : null,
       canDiscard ? button('Discard', {icon: 'trash', kind: 'danger', onClick: discard}) : null,

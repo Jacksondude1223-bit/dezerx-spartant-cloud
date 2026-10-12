@@ -3,6 +3,7 @@ import {random, digest, base64} from './crypto.mjs';
 import {validLicenseKey} from '../node/license.mjs';
 import {validInitialAdmin} from '../node/admin-validation.mjs';
 import {issueDomainPermit} from '../node/domain-permit.mjs';
+import {upstreamDetails} from './nodes.mjs';
 const products = {SPARTANSTARTER_: 'Starter', SPARTANCLOUD_: 'Cloud', SPARTANCLOUDPLUS_: 'Cloud Plus', SPARTANPROFESSIONAL_: 'Professional', SPARTANULTIMATE_: 'Ultimate', SPARTANDEV_: 'Developer'};
 export const productName = key => products[Object.keys(products).find(x => key?.startsWith(x))] || null;
 export function hostname(value) {
@@ -11,6 +12,12 @@ export function hostname(value) {
 }
 export const onboarding = item => ({id: item.id, serviceId: item.serviceId, customerId: item.customerId, primary: item.primary, hostname: item.hostname});
 export const dnsView = result => ({stage: result.stage, readyToProvision: result.readyToProvision === true, records: result.dnsRecords || [], status: result.status, certificateStatus: result.ssl?.status || result.certificateStatus || null, checkedAt: new Date().toISOString()});
+async function assignHostname(item, client) {
+  await client.routing('instances', {id: item.id, serviceId: item.serviceId, customerId: item.customerId, primary: item.primary, status: 'pending', lifecycleVersion: 0});
+  const assigned = await client.routing(`instances/${item.id}/hostname`);
+  if (!hostname(assigned.hostname)) throw new ApiError(502, 'invalid_assigned_hostname');
+  item.hostname = hostname(assigned.hostname); item.status = 'ready_to_deploy'; item.error = null; item.setupError = null;
+}
 export async function verifyDomain(item, client, db) {
   let result;
   try {result = await client.routing('onboarding/verify', onboarding(item));}
@@ -49,17 +56,17 @@ export async function createInstance(input, user, env, client, db) {
       catch (error) {if (!error.data?.hostname) throw error; result = error.data;}
       item.dns = dnsView(result); item.status = 'awaiting_dns';
     } else {
-      await client.routing('instances', {id, serviceId, customerId, primary, status: 'pending', lifecycleVersion: 0});
-      const assigned = await client.routing(`instances/${id}/hostname`);
-      if (!hostname(assigned.hostname)) throw new ApiError(502, 'invalid_assigned_hostname');
-      item.hostname = hostname(assigned.hostname); item.status = 'ready_to_deploy';
+      await assignHostname(item, client);
     }
     db.note(item, `Created by ${user}. ${domain ? 'Verify the DNS records before deployment.' : 'The routing Worker assigned ' + item.hostname + '.'}`);
     await db.save(item);
     await db.audit('action', {action: 'instance_create', user, id});
     return view(item);
   } catch (error) {
-    item.status = 'failed'; item.error = error.message; await db.save(item); throw error;
+    item.status = 'failed'; item.error = error.message; item.setupError = upstreamDetails(error.data);
+    if (!item.custom && hostname(error.data?.hostname)) item.hostname = hostname(error.data.hostname);
+    db.note(item, `Setup failed: ${item.error}${item.setupError.reason ? ' (' + item.setupError.reason + ')' : ''}.`, 'bad');
+    await db.save(item); error.instanceId = item.id; throw error;
   }
 }
 export async function deployInstance(item, input, user, db) {
@@ -83,6 +90,10 @@ export async function instanceAction(item, action, input, user, env, client, db)
   if (action === 'verify') {
     if (['queued', 'deploying', 'ready', 'suspended', 'terminated'].includes(item.status)) throw new ApiError(409, 'instance_busy');
     if (item.custom) await verifyDomain(item, client, db);
+    else if (!hostname(item.hostname) || ['instance_hostname_setup_failed', 'instance_domain_configuration_required', 'invalid_assigned_hostname'].includes(item.error)) {
+      try {await assignHostname(item, client); db.note(item, 'Hostname attached. Ready to deploy.', 'good'); await db.save(item);}
+      catch (error) {item.status = 'failed'; item.error = error.message; item.setupError = upstreamDetails(error.data); await db.save(item); error.instanceId = item.id; throw error;}
+    }
     return view(item);
   }
   if (action === 'cancel') {

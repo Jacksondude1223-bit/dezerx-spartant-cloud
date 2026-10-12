@@ -1,5 +1,5 @@
 import {store, view, ApiError} from './store.mjs';
-import {clients, REGIONS} from './nodes.mjs';
+import {clients, REGIONS, upstreamDetails} from './nodes.mjs';
 import {session, login, jsonBody, cookie} from './auth.mjs';
 import {equal, seal} from './crypto.mjs';
 import {createInstance, instanceAction, queueLifecycle} from './instances.mjs';
@@ -105,7 +105,7 @@ export function createWorker(fetchImpl = fetch) {
         await db.audit('action', {user: userSession.username, region, id, action: operation, runAs: input.user || 'www-data'});
         const payload = {...input, id};
         return response(await client.node(region, operation, payload, {timeout: ['upgrade', 'fs', 'reload', 'container', 'exec'].includes(operation) ? 90000 : 25000}));
-      } catch (error) {return response({error: error instanceof ApiError ? error.message : 'dashboard_operation_failed', ...(error instanceof ApiError && error.message === 'dashboard_configuration_required' && error.invalidSettings ? {invalidSettings: error.invalidSettings} : {}), ...(error instanceof ApiError && error.data?.upstreamStatus ? {upstream: error.data.upstream, upstreamStatus: error.data.upstreamStatus, cloudflareError: error.data.cloudflareError} : {})}, error instanceof ApiError ? error.status : 503);}
+      } catch (error) {return response({error: error instanceof ApiError ? error.message : 'dashboard_operation_failed', ...(error instanceof ApiError && error.message === 'dashboard_configuration_required' && error.invalidSettings ? {invalidSettings: error.invalidSettings} : {}), ...(error instanceof ApiError ? upstreamDetails(error.data) : {}), ...(error instanceof ApiError && /^t-[a-f0-9]{24}$/.test(error.instanceId || '') ? {instanceId: error.instanceId} : {})}, error instanceof ApiError ? error.status : 503);}
     },
     async scheduled(controller, env, ctx) {
       ctx.waitUntil((async () => {

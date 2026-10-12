@@ -1,6 +1,10 @@
 import {hmac} from './crypto.mjs';
 import {ApiError} from './store.mjs';
 export const REGIONS = {us: 'United States', de: 'Germany'};
+export function upstreamDetails(data) {
+  if (!data || typeof data !== 'object') return {};
+  return {upstream: typeof data.upstream === 'string' && /^[a-z0-9.-]{1,253}$/i.test(data.upstream) ? data.upstream : undefined, upstreamStatus: Number.isInteger(data.upstreamStatus) && data.upstreamStatus >= 100 && data.upstreamStatus <= 599 ? data.upstreamStatus : undefined, cloudflareError: /^\d{3,4}$/.test(String(data.cloudflareError || '')) ? String(data.cloudflareError) : undefined, reason: ['cloudflare_access_denied', 'cloudflare_rate_limited', 'cloudflare_invalid_response', 'cloudflare_request_rejected', 'cloudflare_api_timeout', 'hostname_database_failed'].includes(data.reason) ? data.reason : undefined, phase: ['list', 'attach', 'database'].includes(data.phase) ? data.phase : undefined, cloudflareCodes: Array.isArray(data.cloudflareCodes) ? data.cloudflareCodes.filter(Number.isSafeInteger).slice(0, 5) : undefined};
+}
 export function configurationIssues(env) {
   const issues = [];
   for (const name of ['ADMIN_API_SECRET', 'ORIGIN_SECRET']) {
@@ -42,7 +46,7 @@ export function clients(env, fetchImpl = fetch) {
     if (raw && response.ok) return response;
     const text = await response.text().catch(() => '');
     let data;
-    try {data = JSON.parse(text);} catch {
+    try {data = JSON.parse(text); if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('invalid_json_shape');} catch {
       const error = new ApiError(502, response.status === 403 ? 'blocked_by_cloudflare' : 'invalid_node_response');
       error.data = {upstream: new URL(origin).host, upstreamStatus: response.status, cloudflareError: text.match(/Error (?:code:? )?(\d{3,4})/i)?.[1] || null};
       console.error(JSON.stringify({event: 'invalid_upstream_response', path, ...error.data}));
@@ -65,8 +69,11 @@ export function clients(env, fetchImpl = fetch) {
     try {
       const start = Date.now();
       const [data, ping] = await Promise.all([node(region, 'overview'), node(region, 'ping').then(() => Date.now() - start).catch(() => null)]);
+      if (!data.node || typeof data.node !== 'object' || !data.node.resources || !Array.isArray(data.tenants)) {
+        const error = new ApiError(502, 'invalid_node_response'); error.data = {upstream: host, upstreamStatus: 200}; throw error;
+      }
       return {region, label: REGIONS[region], endpoint: host, host, ok: true, ...data, latencyMs: ping};
-    } catch (error) {return {region, label: REGIONS[region], endpoint: host, host, ok: false, error: error.message};}
+    } catch (error) {return {region, label: REGIONS[region], endpoint: host, host, ok: false, error: error.message, ...upstreamDetails(error.data)};}
   })), sampledAt: new Date().toISOString()});
   return {config, node, control, routing, overview};
 }

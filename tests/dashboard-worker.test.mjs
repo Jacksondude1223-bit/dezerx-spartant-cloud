@@ -11,6 +11,8 @@ import {bindDashboard, ROUTING_DATABASE, setupDatabase} from '../dashboard-worke
 import {deployDashboard, verificationSql, verifySchema, REQUIRED} from '../dashboard-worker/deploy.mjs';
 import {COOKIE} from '../dashboard-worker/auth.mjs';
 import {totpCode} from '../dashboard/server.mjs';
+import routerWorker from '../workers/routing.js';
+import {d1} from './d1.mjs';
 
 function database() {
   const sqlite = new DatabaseSync(':memory:');
@@ -50,6 +52,51 @@ async function browser(worker, env, extra = {}) {
   cookie = login.headers.get('set-cookie').split(';')[0]; csrf = (await login.json()).csrf;
   return {call, cookie, csrf};
 }
+
+test('dashboard retries a real routing hostname failure using the same identity, key and reserved name', async t => {
+  const {db, sqlite} = database(), env = environment(db), routingDb = d1();
+  const routerEnv = {...env, DB: routingDb, SAAS_ZONE_DOMAIN: 'example.test', CF_INSTANCE_API_TOKEN: 'private-token', CLOUDFLARE_ACCOUNT_ID: 'account', CLOUDFLARE_ZONE_ID: 'zone', ROUTING_WORKER_NAME: 'router'};
+  const original = globalThis.fetch; t.after(() => {globalThis.fetch = original;});
+  let denied = true;
+  globalThis.fetch = async (url, options) => denied ? Response.json({success: false, errors: [{code: 10000, message: 'private-token must not leak'}]}, {status: 403}) : Response.json({success: true, result: options.method === 'PUT' ? JSON.parse(options.body) : []});
+  const upstream = remote(env);
+  const worker = createWorker((url, options) => url.startsWith('https://load.example.test/') ? routerWorker.fetch(new Request(url, options), routerEnv) : upstream.fetch(url, options));
+  try {
+    const owner = await browser(worker, env);
+    const failure = await owner.call('/api/instances', 'POST', {primary: 'us'});
+    assert.equal(failure.status, 503);
+    const error = await failure.json();
+    assert.equal(error.reason, 'cloudflare_access_denied'); assert.equal(error.upstreamStatus, 403); assert.deepEqual(error.cloudflareCodes, [10000]);
+    assert.match(error.instanceId, /^t-[a-f0-9]{24}$/);
+    assert.equal(JSON.stringify(error).includes('private-token'), false);
+    const before = await store(env).find(error.instanceId);
+    assert.match(before.hostname, /^instance-\d{4}\.example\.test$/);
+    assert.equal(before.setupError.reason, 'cloudflare_access_denied');
+    denied = false;
+    const recovery = await owner.call(`/api/instances/${before.id}/verify`, 'POST', {});
+    assert.equal(recovery.status, 200, await recovery.clone().text());
+    const result = await recovery.json(); assert.equal(result.status, 'ready_to_deploy'); assert.equal(result.hostname, before.hostname); assert.equal(result.error, null);
+    const after = await store(env).find(before.id); assert.equal(after.appKey, before.appKey); assert.equal(after.fingerprint, before.fingerprint);
+    assert.equal(sqlite.prepare('SELECT COUNT(*) AS n FROM dashboard_instances').get().n, 1);
+    assert.equal(routingDb._db.prepare('SELECT COUNT(*) AS n FROM instance_hostnames').get().n, 1);
+    assert.equal((await owner.call(`/api/instances/${before.id}/deploy`, 'POST', {licenseKey: license})).status, 202);
+    for (let i = 0; i < 3; i++) {sqlite.exec('UPDATE dashboard_jobs SET next_at = 0'); await runJobs(env, (url, options) => url.startsWith('https://load.example.test/') ? routerWorker.fetch(new Request(url, options), routerEnv) : upstream.fetch(url, options));}
+    assert.equal((await store(env).find(before.id)).status, 'ready');
+    assert.deepEqual(upstream.calls.filter(x => x.path === '/control/provision').map(x => x.host), ['node-us.example.test', 'node-de.example.test']);
+  } finally {sqlite.close(); routingDb._db.close();}
+});
+
+test('overview keeps safe node response diagnostics without forwarding HTML or exposing secrets', async () => {
+  const {db, sqlite} = database(), env = environment(db), worker = createWorker(async url => url.includes('/admin/ping') ? Response.json({ok: true}) : url.includes('node-de') ? new Response('<html>Error code: 1033 private upstream message</html>', {status: 530}) : Response.json({unexpected: true}));
+  const errors = [], previous = console.error; console.error = value => errors.push(value);
+  try {
+    const owner = await browser(worker, env);
+    const result = await (await owner.call('/api/overview')).json();
+    assert.equal(result.nodes[0].error, 'invalid_node_response'); assert.equal(result.nodes[0].upstreamStatus, 200);
+    assert.equal(result.nodes[1].error, 'invalid_node_response'); assert.equal(result.nodes[1].upstreamStatus, 530); assert.equal(result.nodes[1].cloudflareError, '1033');
+    assert.equal(JSON.stringify(result).includes('private upstream message'), false);
+  } finally {console.error = previous; sqlite.close();}
+});
 
 test('primary administrator creates encrypted dashboard users with independent logins and protected user management', async () => {
   const {db, sqlite} = database(), env = environment(db), upstream = remote(env), worker = createWorker(upstream.fetch);

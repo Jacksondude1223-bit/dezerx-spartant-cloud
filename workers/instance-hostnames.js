@@ -1,6 +1,19 @@
 import {json} from './shared.js';
 import {readRoute} from './store.js';
 
+async function cloudflareCall(endpoint, headers, phase, body) {
+  let response;
+  try {response = await fetch(endpoint, {method: body ? 'PUT' : 'GET', headers, body: body ? JSON.stringify(body) : undefined, redirect: 'manual', signal: AbortSignal.timeout(8000)});}
+  catch {throw Object.assign(new Error('cloudflare_api_timeout'), {phase, retryable: true});}
+  const data = await response.json().catch(() => null);
+  const cloudflareCodes = (Array.isArray(data?.errors) ? data.errors : []).map(item => item?.code).filter(Number.isSafeInteger).slice(0, 5);
+  if (!response.ok || data?.success !== true) {
+    const reason = [401, 403].includes(response.status) ? 'cloudflare_access_denied' : response.status === 429 ? 'cloudflare_rate_limited' : !data ? 'cloudflare_invalid_response' : 'cloudflare_request_rejected';
+    throw Object.assign(new Error(reason), {phase, upstream: 'api.cloudflare.com', upstreamStatus: response.status, cloudflareCodes, retryable: response.status === 429 || response.status >= 500});
+  }
+  return data.result;
+}
+
 export async function allocateHostname(env, id) {
   const tenant = await readRoute(env, id);
   if (!tenant || tenant.status === 'terminated') return json({error: 'tenant_unavailable'}, 409);
@@ -20,16 +33,22 @@ export async function allocateHostname(env, id) {
     try {
       const endpoint = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/workers/domains`;
       const headers = {authorization: `Bearer ${env.CF_INSTANCE_API_TOKEN}`, 'content-type': 'application/json'};
-      const check = await fetch(`${endpoint}?hostname=${encodeURIComponent(record.hostname)}`, {headers, signal: AbortSignal.timeout(8000)});
-      const existing = await check.json();
-      if (!check.ok || !existing.success || !Array.isArray(existing.result)) throw new Error('cloudflare_failed');
-      if (existing.result.some(item => item.hostname === record.hostname && (item.service !== env.ROUTING_WORKER_NAME || item.zone_id !== env.CLOUDFLARE_ZONE_ID))) return json({error: 'instance_hostname_conflict'}, 409);
-      const response = await fetch(endpoint, {method: 'PUT', headers, body: JSON.stringify({hostname: record.hostname, service: env.ROUTING_WORKER_NAME, zone_id: env.CLOUDFLARE_ZONE_ID}), signal: AbortSignal.timeout(8000)});
-      const result = await response.json();
-      if (!response.ok || !result.success || result.result?.hostname !== record.hostname || result.result?.service !== env.ROUTING_WORKER_NAME) throw new Error('cloudflare_failed');
+      const existing = await cloudflareCall(`${endpoint}?hostname=${encodeURIComponent(record.hostname)}`, headers, 'list');
+      if (!Array.isArray(existing)) throw Object.assign(new Error('cloudflare_invalid_response'), {phase: 'list'});
+      const attached = existing.filter(item => item.hostname === record.hostname);
+      if (attached.some(item => item.service !== env.ROUTING_WORKER_NAME || item.zone_id !== env.CLOUDFLARE_ZONE_ID)) return json({error: 'instance_hostname_conflict', hostname: record.hostname}, 409);
+      if (!attached.some(item => item.enabled !== false)) {
+        const result = await cloudflareCall(endpoint, headers, 'attach', {hostname: record.hostname, service: env.ROUTING_WORKER_NAME, zone_id: env.CLOUDFLARE_ZONE_ID, enabled: true});
+        if (result?.hostname !== record.hostname || result?.service !== env.ROUTING_WORKER_NAME || result?.zone_id !== env.CLOUDFLARE_ZONE_ID || result.enabled === false) throw Object.assign(new Error('cloudflare_invalid_response'), {phase: 'attach'});
+      }
       await env.DB.prepare("UPDATE instance_hostnames SET status = 'active' WHERE tenantId = ?").bind(id).run();
       record.status = 'active';
-    } catch { return json({error: 'instance_hostname_setup_failed', hostname: record.hostname, retryable: true}, 503); }
+    } catch (error) {
+      const reason = ['cloudflare_access_denied', 'cloudflare_rate_limited', 'cloudflare_invalid_response', 'cloudflare_request_rejected', 'cloudflare_api_timeout'].includes(error.message) ? error.message : 'hostname_database_failed';
+      const details = {reason, phase: error.phase || 'database', upstream: error.upstream, upstreamStatus: error.upstreamStatus, cloudflareCodes: error.cloudflareCodes || [], retryable: error.retryable === true};
+      console.warn(JSON.stringify({event: 'instance_hostname_setup_failed', id, hostname: record.hostname, ...details}));
+      return json({error: 'instance_hostname_setup_failed', hostname: record.hostname, ...details}, 503);
+    }
   }
   return json({id, hostname: record.hostname, url: `https://${record.hostname}`, status: record.status, ssl: 'cloudflare_managed', certificateMayBePending: true});
 }

@@ -47,11 +47,49 @@ test('failed setup reserves a stable retryable name without making it routable',
   globalThis.fetch = async () => Response.json({success: false}, {status: 403});
   const first = await (await allocateHostname(env, id)).json();
   assert.equal(first.error, 'instance_hostname_setup_failed');
+  assert.equal(first.reason, 'cloudflare_access_denied');
+  assert.equal(first.upstreamStatus, 403);
+  assert.equal(first.retryable, false);
   const next = await (await allocateHostname(env, id)).json();
   assert.equal(next.hostname, first.hostname);
   assert.equal(await resolveInstanceHostname(env, first.hostname), null);
   delete env.CF_INSTANCE_API_TOKEN;
   assert.equal((await allocateHostname(env, id)).status, 503);
+});
+test('hostname failures expose safe API codes and recover the same reservation after a lost attachment response', async t => {
+  const env = environment(), original = globalThis.fetch;
+  t.after(() => {globalThis.fetch = original;});
+  globalThis.fetch = async (url, options) => {
+    assert.equal(options.redirect, 'manual');
+    return Response.json({success: false, errors: [{code: 10000, message: 'Authentication error private-token'}]}, {status: 403});
+  };
+  const failure = await (await allocateHostname(env, id)).json();
+  assert.deepEqual(failure.cloudflareCodes, [10000]); assert.equal(failure.phase, 'list');
+  assert.equal(JSON.stringify(failure).includes('private-token'), false);
+  const calls = [];
+  globalThis.fetch = async (url, options) => {
+    calls.push(options.method);
+    return Response.json({success: true, result: [{hostname: failure.hostname, service: env.ROUTING_WORKER_NAME, zone_id: env.CLOUDFLARE_ZONE_ID, enabled: true}]});
+  };
+  const success = await (await allocateHostname(env, id)).json();
+  assert.equal(success.hostname, failure.hostname); assert.equal(success.status, 'active');
+  assert.deepEqual(calls, ['GET']); assert.equal(await resolveInstanceHostname(env, success.hostname), id);
+});
+test('disabled bindings are explicitly enabled and invalid attachment responses never become routable', async t => {
+  const env = environment(), original = globalThis.fetch;
+  t.after(() => {globalThis.fetch = original;});
+  let enabled = false;
+  globalThis.fetch = async (url, options) => {
+    if (options.method === 'GET') return Response.json({success: true, result: [{hostname: new URL(url).searchParams.get('hostname'), service: env.ROUTING_WORKER_NAME, zone_id: env.CLOUDFLARE_ZONE_ID, enabled: false}]});
+    const body = JSON.parse(options.body); assert.equal(body.enabled, true);
+    return Response.json({success: true, result: {...body, enabled}});
+  };
+  const failure = await (await allocateHostname(env, id)).json();
+  assert.equal(failure.reason, 'cloudflare_invalid_response'); assert.equal(failure.phase, 'attach');
+  assert.equal(await resolveInstanceHostname(env, failure.hostname), null);
+  enabled = true;
+  const recovered = await (await allocateHostname(env, id)).json();
+  assert.equal(recovered.hostname, failure.hostname); assert.equal(recovered.status, 'active');
 });
 test('hostname allocation requires signed control requests and never overrides another Worker', async t => {
   const env = environment();
