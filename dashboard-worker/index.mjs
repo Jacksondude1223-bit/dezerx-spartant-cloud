@@ -6,7 +6,7 @@ import {createInstance, instanceAction, queueLifecycle} from './instances.mjs';
 import {runJobs} from './jobs.mjs';
 import {credentials, browserSetup} from './browser-setup.mjs';
 import {firewallOperation} from './contabo.mjs';
-export const SECURITY = {'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'};
+export const SECURITY = {'content-security-policy': "default-src 'none'; script-src 'self' https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://cloudflareinsights.com; font-src 'self' data:; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'", 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'no-referrer', 'cross-origin-opener-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()'};
 export function response(value, status = 200, headers = {}) {return Response.json(value, {status, headers: {...SECURITY, 'cache-control': 'no-store', ...headers}});}
 async function locked(db, id, action) {
   const key = 'tenant:' + id, token = await db.lock(key);
