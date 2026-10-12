@@ -16,7 +16,7 @@ const api = {
     let data = null;
     try { data = await response.json(); } catch {}
     if (response.status === 401 && path !== '/api/login') { state.session = null; render(); throw new ApiError('not_signed_in', 401); }
-    if (!response.ok) { const error = new ApiError((data && data.error) || `http_${response.status}`, response.status); if (data?.upstream) error.detail = ` (${data.upstream} answered HTTP ${data.upstreamStatus}${data.cloudflareError ? `, Cloudflare error ${data.cloudflareError}` : ''})`; throw error; }
+    if (!response.ok) { const error = new ApiError((data && data.error) || `http_${response.status}`, response.status); if (data?.cloudflare) error.detail = ` (Cloudflare ${data.stage || ''} HTTP ${data.cloudflare.status}${(data.cloudflare.errors || []).map(e => `; ${e.code}: ${e.message}`).join('')})`; else if (data?.upstream) error.detail = ` (${data.upstream} answered HTTP ${data.upstreamStatus}${data.cloudflareError ? `, Cloudflare error ${data.cloudflareError}` : ''})`; throw error; }
     return data;
   },
   get(path) { return this.request('GET', path); },

@@ -17,19 +17,26 @@ export async function allocateHostname(env, id) {
   }
   if (!record) return json({error: 'instance_hostname_capacity'}, 409);
   if (record.status !== 'active') {
+    let stage = 'lookup', cloudflare = null;
+    const reason = (response, body) => ({status: response.status, errors: (Array.isArray(body?.errors) ? body.errors : []).slice(0, 3).map(e => ({code: e?.code ?? null, message: String(e?.message || '').slice(0, 200)}))});
     try {
       const endpoint = `https://api.cloudflare.com/client/v4/accounts/${env.CLOUDFLARE_ACCOUNT_ID}/workers/domains`;
       const headers = {authorization: `Bearer ${env.CF_INSTANCE_API_TOKEN}`, 'content-type': 'application/json'};
       const check = await fetch(`${endpoint}?hostname=${encodeURIComponent(record.hostname)}`, {headers, signal: AbortSignal.timeout(8000)});
-      const existing = await check.json();
-      if (!check.ok || !existing.success || !Array.isArray(existing.result)) throw new Error('cloudflare_failed');
+      const existing = await check.json().catch(() => null);
+      if (!check.ok || !existing?.success || !Array.isArray(existing.result)) { cloudflare = reason(check, existing); throw new Error('cloudflare_failed'); }
       if (existing.result.some(item => item.hostname === record.hostname && (item.service !== env.ROUTING_WORKER_NAME || item.zone_id !== env.CLOUDFLARE_ZONE_ID))) return json({error: 'instance_hostname_conflict'}, 409);
+      stage = 'attach';
       const response = await fetch(endpoint, {method: 'PUT', headers, body: JSON.stringify({hostname: record.hostname, service: env.ROUTING_WORKER_NAME, zone_id: env.CLOUDFLARE_ZONE_ID}), signal: AbortSignal.timeout(8000)});
-      const result = await response.json();
+      const result = await response.json().catch(() => null);
+      if (!response.ok || !result?.success) cloudflare = reason(response, result);
       if (!response.ok || !result.success || result.result?.hostname !== record.hostname || result.result?.service !== env.ROUTING_WORKER_NAME) throw new Error('cloudflare_failed');
       await env.DB.prepare("UPDATE instance_hostnames SET status = 'active' WHERE tenantId = ?").bind(id).run();
       record.status = 'active';
-    } catch { return json({error: 'instance_hostname_setup_failed', hostname: record.hostname, retryable: true}, 503); }
+    } catch {
+      console.error(JSON.stringify({event: 'instance_hostname_setup_failed', hostname: record.hostname, stage, cloudflare}));
+      return json({error: 'instance_hostname_setup_failed', hostname: record.hostname, retryable: true, stage, cloudflare}, 503);
+    }
   }
   return json({id, hostname: record.hostname, url: `https://${record.hostname}`, status: record.status, ssl: 'cloudflare_managed', certificateMayBePending: true});
 }
